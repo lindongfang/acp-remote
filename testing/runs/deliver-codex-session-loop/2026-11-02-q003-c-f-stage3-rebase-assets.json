@@ -1,0 +1,23 @@
+{
+  "kind": "Independent unexecuted assets receipt",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-configuration-independent-assets-v2",
+  "freeze": "55f4ebb4a4fc6be8d91c3c6b623e5a37646165892aa7ae1fe2bdbe178ae70ac7",
+  "membersVerified": 2431,
+  "minimal": {
+    "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-configuration-independent-assets-v2/rebased-f-stage3",
+    "freeze": "08aee6e58687406d6bec910ade6f2c4408631db5adac7271ebf63f0f51604289",
+    "membersVerified": 803,
+    "patch": "0062ddf80751a43995d88ab1a2a881df365528f3826dd823ce9388ad1fe5864b",
+    "entryFunctions": 3
+  },
+  "extended": {
+    "entryFunctions": 17,
+    "additionalFunctions": 14,
+    "patch": "94f4e3a97a4b6284f0d2968366a994f45e5ab63a784b0545735ce06ebe31aa1e",
+    "paths": 18
+  },
+  "typecheckExecuted": false,
+  "formal46Executed": 0,
+  "review": "pending",
+  "schema9ProductionGap": true
+}

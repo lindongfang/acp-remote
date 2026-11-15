@@ -1,0 +1,47 @@
+﻿[
+    {
+        "name":  "acceptance-final",
+        "command":  "cargo test --offline --locked --test raw_json_acceptance -- --test-threads=1",
+        "cwd":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-tester\\workspace\\app",
+        "started":  "2026-10-31T10:07:22.5024790Z",
+        "ended":  "2026-10-31T10:07:26.7873233Z",
+        "exit":  0,
+        "target":  "D:/Project/acp-remote/.tmp/q3-raw-tester-target"
+    },
+    {
+        "name":  "public-regression",
+        "command":  "cargo test --offline --locked --test jws_vectors --test acp_message_id_acceptance --test acp_tool_projection_acceptance --test acp_view_observations_acceptance",
+        "cwd":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-tester\\workspace\\app",
+        "started":  "2026-10-31T10:07:26.9478119Z",
+        "ended":  "2026-10-31T10:07:34.2951031Z",
+        "exit":  0,
+        "target":  "D:/Project/acp-remote/.tmp/q3-raw-tester-target"
+    },
+    {
+        "name":  "management-regression",
+        "command":  "cargo test --offline --locked --lib strict_json::tests",
+        "cwd":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-tester\\workspace\\app",
+        "started":  "2026-10-31T10:07:34.3029506Z",
+        "ended":  "2026-10-31T10:07:55.8772614Z",
+        "exit":  0,
+        "target":  "D:/Project/acp-remote/.tmp/q3-raw-tester-target"
+    },
+    {
+        "name":  "clippy-final",
+        "command":  "cargo clippy --offline --locked --all-targets -- -W clippy::all -W clippy::pedantic -W clippy::nursery -D warnings",
+        "cwd":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-tester\\workspace\\app",
+        "started":  "2026-10-31T10:07:55.8787272Z",
+        "ended":  "2026-10-31T10:07:57.3481275Z",
+        "exit":  0,
+        "target":  "D:/Project/acp-remote/.tmp/q3-raw-tester-target"
+    },
+    {
+        "name":  "fmt-final",
+        "command":  "cargo fmt --all -- --check",
+        "cwd":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-tester\\workspace\\app",
+        "started":  "2026-10-31T10:07:57.3501407Z",
+        "ended":  "2026-10-31T10:07:58.1265583Z",
+        "exit":  0,
+        "target":  "D:/Project/acp-remote/.tmp/q3-raw-tester-target"
+    }
+]

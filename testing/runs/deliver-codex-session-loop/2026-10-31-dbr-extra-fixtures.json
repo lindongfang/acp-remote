@@ -1,0 +1,12 @@
+﻿[
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-request-tester/dbr-copy/clients/web/dist/index.html",
+        "sha256":  "f78542774591434f9fb57821c64c9ba68066a5c9090f09914b862826c43fa0ac",
+        "bytes":  213
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-request-tester/dbr-copy/app/tests/acceptance/domain_borrow_extremes.rs",
+        "sha256":  "0c8a9c31bbf8a469e7cd2a41be50904cecfeb0e224017d5ca59cf68a3c27204b",
+        "bytes":  12032
+    }
+]

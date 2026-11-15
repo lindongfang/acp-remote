@@ -24,9 +24,95 @@ import {
   randomNonce,
   verifyChallenge,
 } from "./protocol";
+import {
+  decodeSessionServerBinary,
+  parseApprovalDecisionResult,
+  parseApprovalListResult,
+  parseApprovalRegistration,
+  parseApprovalResult,
+  parseApprovalStatusResult,
+  parseCatalogFactMetadata,
+  parseCatalogInventory,
+  parseCatalogReceiptMetadata,
+  parseCatalogRegistration,
+  parseCatalogUploadBeginResult,
+  parseCatalogUploadFinishResult,
+  parseCatalogUploadReleaseResult,
+  parseCatalogUploadStatus,
+  parseInputUploadBeginResult,
+  parseInputUploadFinishResult,
+  parseInputUploadReleaseResult,
+  parseInputUploadStatus,
+  parseNativeReleaseRegisterResult,
+  parseNativeReleaseStatusResult,
+  parseProductTargetRecord,
+  parseSessionCommand,
+  parseSessionConsumeResult,
+  parseSessionQueue,
+  parseSessionRegistration,
+  parseSessionQueuedBodyDescriptor,
+  parseSessionViewClosed,
+  parseSessionViewOpened,
+  parseSourceSessionFact,
+  parseSourceSessionRegistration,
+  parseSourceSessionResultDescriptor,
+  parseSourceSessionResultReleaseResult,
+  parseWorkspaceRecord,
+  requireSessionId,
+  requireSessionU64,
+  type ApprovalDecisionResult,
+  type ApprovalListResult,
+  type ApprovalRegistration,
+  type ApprovalStatus,
+  type ApprovalView,
+  type CatalogFactMetadata,
+  type CatalogInventory,
+  type CatalogReceiptMetadata,
+  type CatalogRegistration,
+  type CatalogUploadBeginResult,
+  type CatalogUploadFinishResult,
+  type CatalogUploadReleaseResult,
+  type CatalogUploadStatus,
+  type InputUploadBeginResult,
+  type InputUploadFinishResult,
+  type InputUploadReleaseResult,
+  type InputUploadStatus,
+  type NativeReleaseRegistered,
+  type NativeReleaseStatus,
+  type ProductTargetRecord,
+  type QueueMutationDto,
+  type SessionConsumeResult,
+  type SessionQueuedBodyDescriptor,
+  type SessionQueueSnapshot,
+  type SessionRegistration,
+  type SessionResumeResult,
+  type SessionServerBinary,
+  type SessionViewOpened,
+  type SessionViewClosed,
+  type SourceLaunchSelectionInput,
+  type SourceOperationInput,
+  type SourceSessionFact,
+  type SourceSessionRegistration,
+  type SourceSessionResultDescriptor,
+  type SourceSessionResultReleaseResult,
+  type WorkspaceRecord,
+} from "./session-protocol";
+import {
+  INPUT_CHUNK_BYTES,
+  encodeInputData,
+  type InputAcknowledgement,
+} from "./input-transfer";
+import {
+  encodeViewCredit,
+  encodeViewDetach,
+  type ViewDataFrame,
+} from "../views/binary";
 
 const AUTHENTICATION_TIMEOUT_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const CATALOG_PREPARATION_TIMEOUT_MS = 30_000;
+const CATALOG_PREPARATION_POLL_MS = 250;
+const CATALOG_ENCODER = new TextEncoder();
 const NORMAL_CLOSURE = 1000;
 const PROTOCOL_CLOSURE = 4400;
 const SOCKET_OPEN = 1;
@@ -65,6 +151,145 @@ export class ManagementRequestError extends Error {
   }
 }
 
+export class SessionConsumeOutcomeError extends Error {
+  readonly code: "consume_pending" | "consume_refused";
+  readonly detail: string;
+
+  constructor(code: "consume_pending" | "consume_refused", detail: string) {
+    super(detail);
+    this.name = "SessionConsumeOutcomeError";
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+export class CatalogActionError extends Error {
+  readonly code: "upload_failed" | "preparation_timeout" | "request_rejected";
+  readonly detail: string | null;
+
+  constructor(
+    code: "upload_failed" | "preparation_timeout" | "request_rejected",
+    detail: string | null = null,
+  ) {
+    super(detail === null ? code : `${code}: ${detail}`);
+    this.name = "CatalogActionError";
+    this.code = code;
+    this.detail = detail;
+  }
+}
+
+export interface CatalogLaunchEnvInput {
+  readonly name: string;
+  readonly value: string;
+}
+
+export interface CatalogAdditionalDirectoryInput {
+  readonly workspaceId: string;
+  readonly path: string;
+}
+
+export interface CatalogProfileRecipeInput {
+  readonly wire: 1 | 2;
+  readonly mcpServers?: readonly JsonValue[];
+  readonly additionalDirectories?: readonly CatalogAdditionalDirectoryInput[];
+  readonly extra?: Record<string, JsonValue>;
+}
+
+export interface InstallHarnessDocumentInput {
+  readonly name: string;
+  readonly source:
+    | { readonly kind: "new"; readonly name: string }
+    | { readonly kind: "existing"; readonly sourceId: string };
+  readonly executable: string;
+  readonly args?: readonly string[];
+  readonly environment?: readonly CatalogLaunchEnvInput[];
+  readonly recipes?: readonly CatalogProfileRecipeInput[];
+}
+
+export interface BindTargetInitialDocumentInput {
+  readonly targetId: string;
+  readonly sourceId: string;
+  readonly harnessId: string;
+  readonly profileId: string;
+  readonly profileRevision: string;
+  readonly workspaceId: string;
+  readonly launchPath: string;
+}
+
+export function utf16leBase64(value: string): string {
+  const bytes = new Uint8Array(value.length * 2);
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    bytes[i * 2] = code & 0xff;
+    bytes[i * 2 + 1] = code >>> 8;
+  }
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return globalThis.btoa(binary);
+}
+
+export function buildInstallHarnessDocument(
+  input: InstallHarnessDocumentInput,
+): Record<string, unknown> {
+  const recipesInput: readonly CatalogProfileRecipeInput[] =
+    input.recipes !== undefined && input.recipes.length > 0
+      ? input.recipes
+      : [{ wire: 2 }];
+  return {
+    kind: "install_harness",
+    name: input.name,
+    source:
+      input.source.kind === "existing"
+        ? {
+            kind: "existing",
+            sourceId: requireSessionId(input.source.sourceId),
+          }
+        : {
+            kind: "new",
+            name: input.source.name,
+          },
+    profile: {
+      format: 1,
+      launch: {
+        executable_utf16le_base64: utf16leBase64(input.executable),
+        arguments_utf16le_base64: (input.args ?? []).map(utf16leBase64),
+        environment: (input.environment ?? []).map((entry) => ({
+          name_utf16le_base64: utf16leBase64(entry.name),
+          value_utf16le_base64: utf16leBase64(entry.value),
+        })),
+      },
+      recipes: recipesInput.map((recipe) => ({
+        wire: recipe.wire,
+        mcp_servers: recipe.mcpServers ?? [],
+        additional_directories: (recipe.additionalDirectories ?? []).map(
+          (dir) => ({
+            workspace_id: requireSessionId(dir.workspaceId),
+            path: dir.path,
+          }),
+        ),
+        extra: recipe.extra ?? {},
+      })),
+    },
+  };
+}
+
+export function buildBindTargetInitialDocument(
+  input: BindTargetInitialDocumentInput,
+): Record<string, unknown> {
+  return {
+    kind: "bind_target_initial",
+    targetId: requireSessionId(input.targetId),
+    sourceId: requireSessionId(input.sourceId),
+    harnessId: requireSessionId(input.harnessId),
+    profileId: requireSessionId(input.profileId),
+    profileRevision: requireSessionU64(input.profileRevision),
+    workspaceId: requireSessionId(input.workspaceId),
+    launchPath: input.launchPath,
+  };
+}
+
 export interface ManagementClose {
   readonly code: number;
   readonly reason: string;
@@ -74,6 +299,7 @@ export interface ManagementClose {
 
 export interface ManagementConnectionCallbacks {
   readonly onDevicesChanged?: (revision: number) => void;
+  readonly onViewData?: (frame: ViewDataFrame) => void;
   readonly onClose?: (close: ManagementClose) => void;
 }
 
@@ -103,6 +329,14 @@ interface PendingRequest {
   readonly timeout: number;
 }
 
+interface PendingInputAcknowledgement {
+  readonly uploadId: string;
+  readonly expectedNextOffset: bigint;
+  readonly resolve: (acknowledgement: InputAcknowledgement) => void;
+  readonly reject: (error: Error) => void;
+  readonly timeout: number;
+}
+
 export class ManagementConnection {
   readonly #origin: string;
   readonly #identity: ExpectedIdentity;
@@ -113,6 +347,8 @@ export class ManagementConnection {
   ) => WebSocket;
   readonly #callbacks: ManagementConnectionCallbacks;
   readonly #pending = new Map<string, PendingRequest>();
+  #inbound: Promise<void> = Promise.resolve();
+  #pendingInputAcknowledgement: PendingInputAcknowledgement | null = null;
   #state: ConnectionState = "idle";
   #socket: WebSocket | null = null;
   #hello: HelloFrame | null = null;
@@ -155,6 +391,7 @@ export class ManagementConnection {
       throw new ManagementConnectionError("connection_closed");
     }
     this.#socket = socket;
+    socket.binaryType = "arraybuffer";
     this.#state = "opening";
 
     const connected = new Promise<AuthenticatedFrame>((resolve, reject) => {
@@ -162,7 +399,7 @@ export class ManagementConnection {
       this.#connectReject = reject;
     });
     socket.addEventListener("open", () => this.#onOpen());
-    socket.addEventListener("message", (event) => this.#onMessage(event));
+    socket.addEventListener("message", (event) => this.#enqueueMessage(event.data));
     socket.addEventListener("error", () => this.#onTransportError());
     socket.addEventListener("close", (event) => this.#onClose(event));
     this.#authenticationTimer = globalThis.setTimeout(
@@ -203,6 +440,817 @@ export class ManagementConnection {
     }, parseSubscribeResult);
   }
 
+  async inspectSessionQueue(targetId: string): Promise<SessionQueueSnapshot> {
+    return await this.#command(
+      "input.queue",
+      { targetId: requireSessionId(targetId) },
+      parseSessionQueue,
+    );
+  }
+
+  async registerSessionResume(
+    targetId: string,
+    requestId: string,
+  ): Promise<SessionRegistration> {
+    const parsed = await this.#commandWithId(
+      "input.register",
+      {
+        targetId: requireSessionId(targetId),
+        operation: { kind: "resume" },
+      },
+      requireSessionId(requestId),
+      parseSessionRegistration,
+    );
+    if (parsed.registrationId !== requestId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async consumeSessionResume(
+    targetId: string,
+    registrationId: string,
+    requestId: string,
+  ): Promise<SessionResumeResult> {
+    const canonicalRegistrationId = requireSessionId(registrationId);
+    const parsed = await this.#commandWithId(
+      "input.consume",
+      {
+        targetId: requireSessionId(targetId),
+        registrationId: canonicalRegistrationId,
+        bodyId: null,
+      },
+      requireSessionId(requestId),
+      parseSessionConsumeResult,
+    );
+    switch (parsed.kind) {
+      case "resolved": {
+        const fact = parsed.request;
+        if (fact.registrationId !== canonicalRegistrationId) {
+          throw new ManagementProtocolError("invalid_response");
+        }
+        if (fact.state === "settled" && fact.outcome.kind === "resumed") {
+          return Object.freeze({
+            registrationId: fact.registrationId,
+            restored: fact.outcome.restored,
+            returned: parsed.returned,
+          });
+        }
+        if (fact.state === "settled" && fact.outcome.kind === "rejected") {
+          throw new SessionConsumeOutcomeError("consume_refused", fact.outcome.reason);
+        }
+        throw new ManagementProtocolError("invalid_response");
+      }
+      case "observed": {
+        const fact = parsed.fact;
+        if (fact.registrationId !== canonicalRegistrationId) {
+          throw new ManagementProtocolError("invalid_response");
+        }
+        if (fact.state === "settled" && fact.outcome.kind === "resumed") {
+          return Object.freeze({
+            registrationId: fact.registrationId,
+            restored: fact.outcome.restored,
+            returned: false,
+          });
+        }
+        if (fact.state === "registered" || fact.state === "applying") {
+          throw new SessionConsumeOutcomeError("consume_pending", fact.registrationId);
+        }
+        if (fact.state === "settled" && fact.outcome.kind === "rejected") {
+          throw new SessionConsumeOutcomeError("consume_refused", fact.outcome.reason);
+        }
+        if (fact.state === "interrupted" || fact.state === "retired") {
+          throw new SessionConsumeOutcomeError("consume_refused", fact.state);
+        }
+        throw new ManagementProtocolError("invalid_response");
+      }
+      case "pending":
+        if (parsed.registrationId !== canonicalRegistrationId) {
+          throw new ManagementProtocolError("invalid_response");
+        }
+        throw new SessionConsumeOutcomeError("consume_pending", parsed.registrationId);
+      case "refused":
+        throw new SessionConsumeOutcomeError("consume_refused", parsed.reason);
+    }
+  }
+
+  async beginInputUpload(
+    targetId: string,
+    purpose: "submit" | "edit",
+  ): Promise<InputUploadBeginResult> {
+    return await this.#command(
+      "input.upload.begin",
+      {
+        targetId: requireSessionId(targetId),
+        purpose,
+      },
+      parseInputUploadBeginResult,
+    );
+  }
+
+  async sendInputData(
+    uploadId: string,
+    offset: bigint,
+    bytes: Uint8Array,
+  ): Promise<{ readonly uploadId: string; readonly nextOffset: bigint }> {
+    if (this.#state !== "authenticated") {
+      throw new ManagementConnectionError("not_connected");
+    }
+    if (this.#pendingInputAcknowledgement !== null) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    const canonicalUploadId = requireSessionId(uploadId);
+    const wire = encodeInputData(canonicalUploadId, offset, bytes);
+    const expectedNextOffset = offset + BigInt(bytes.length);
+    requireSessionU64(expectedNextOffset.toString());
+    return await new Promise((resolve, reject) => {
+      const timeout = globalThis.setTimeout(() => {
+        this.#rejectInputAcknowledgement(
+          new ManagementConnectionError("request_timeout"),
+        );
+        this.#failProtocol(
+          new ManagementConnectionError("request_timeout"),
+          "input acknowledgement timeout",
+        );
+      }, REQUEST_TIMEOUT_MS);
+      this.#pendingInputAcknowledgement = {
+        uploadId: canonicalUploadId,
+        expectedNextOffset,
+        resolve: (acknowledgement) =>
+          resolve({
+            uploadId: acknowledgement.uploadId,
+            nextOffset: acknowledgement.nextOffset,
+          }),
+        reject,
+        timeout,
+      };
+      try {
+        this.#sendBinary(wire);
+      } catch {
+        this.#rejectInputAcknowledgement(
+          new ManagementConnectionError("connection_closed"),
+        );
+        this.#failProtocol(
+          new ManagementConnectionError("connection_closed"),
+          "input send failed",
+        );
+      }
+    });
+  }
+
+  async inputUploadStatus(uploadId: string): Promise<InputUploadStatus> {
+    const canonicalUploadId = requireSessionId(uploadId);
+    const parsed = await this.#command(
+      "input.upload.status",
+      { uploadId: canonicalUploadId },
+      parseInputUploadStatus,
+    );
+    if (parsed.uploadId !== canonicalUploadId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async finishInputUpload(
+    uploadId: string,
+    totalBytes: bigint,
+  ): Promise<InputUploadFinishResult> {
+    const canonicalUploadId = requireSessionId(uploadId);
+    const parsed = await this.#command(
+      "input.upload.finish",
+      {
+        uploadId: canonicalUploadId,
+        totalBytes: requireSessionU64(totalBytes.toString()),
+      },
+      parseInputUploadFinishResult,
+    );
+    if (parsed.uploadId !== canonicalUploadId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async releaseInputUpload(
+    uploadId: string,
+  ): Promise<InputUploadReleaseResult> {
+    const canonicalUploadId = requireSessionId(uploadId);
+    return await this.#command(
+      "input.upload.release",
+      { uploadId: canonicalUploadId },
+      parseInputUploadReleaseResult,
+    );
+  }
+
+  async beginCatalogUpload(): Promise<CatalogUploadBeginResult> {
+    return await this.#command(
+      "catalog.upload.begin",
+      {},
+      parseCatalogUploadBeginResult,
+    );
+  }
+
+  async finishCatalogUpload(
+    uploadId: string,
+    totalBytes: bigint,
+  ): Promise<CatalogUploadFinishResult> {
+    const canonicalUploadId = requireSessionId(uploadId);
+    const parsed = await this.#command(
+      "catalog.upload.finish",
+      {
+        uploadId: canonicalUploadId,
+        totalBytes: requireSessionU64(totalBytes.toString()),
+      },
+      parseCatalogUploadFinishResult,
+    );
+    if (parsed.uploadId !== canonicalUploadId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async catalogUploadStatus(uploadId: string): Promise<CatalogUploadStatus> {
+    const canonicalUploadId = requireSessionId(uploadId);
+    const parsed = await this.#command(
+      "catalog.upload.status",
+      { uploadId: canonicalUploadId },
+      parseCatalogUploadStatus,
+    );
+    if (parsed.uploadId !== canonicalUploadId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async releaseCatalogUpload(
+    uploadId: string,
+  ): Promise<CatalogUploadReleaseResult> {
+    const canonicalUploadId = requireSessionId(uploadId);
+    return await this.#command(
+      "catalog.upload.release",
+      { uploadId: canonicalUploadId },
+      parseCatalogUploadReleaseResult,
+    );
+  }
+
+  async registerCatalogDocument(
+    documentUploadId: string,
+  ): Promise<CatalogRegistration> {
+    const canonicalUploadId = requireSessionId(documentUploadId);
+    return await this.#command(
+      "catalog.register",
+      { documentUploadId: canonicalUploadId },
+      parseCatalogRegistration,
+    );
+  }
+
+  async applyCatalogRequest(
+    catalogRequestId: string,
+  ): Promise<CatalogReceiptMetadata> {
+    const canonicalRequestId = requireSessionId(catalogRequestId);
+    const parsed = await this.#command(
+      "catalog.apply",
+      { catalogRequestId: canonicalRequestId },
+      parseCatalogReceiptMetadata,
+    );
+    if (parsed.fact.catalogRequestId !== canonicalRequestId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async inspectCatalogRequest(
+    catalogRequestId: string,
+  ): Promise<CatalogFactMetadata> {
+    const canonicalRequestId = requireSessionId(catalogRequestId);
+    const parsed = await this.#command(
+      "catalog.request",
+      { catalogRequestId: canonicalRequestId },
+      parseCatalogFactMetadata,
+    );
+    if (parsed.catalogRequestId !== canonicalRequestId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async executeCatalogDocument(
+    document: Record<string, unknown>,
+  ): Promise<CatalogReceiptMetadata> {
+    const bytes = CATALOG_ENCODER.encode(JSON.stringify(document));
+    const { uploadId } = await this.beginCatalogUpload();
+    let registration: CatalogRegistration;
+    try {
+      let offset = 0n;
+      while (offset < BigInt(bytes.length)) {
+        const start = Number(offset);
+        const chunk = bytes.subarray(
+          start,
+          Math.min(start + INPUT_CHUNK_BYTES, bytes.length),
+        );
+        const ack = await this.sendInputData(uploadId, offset, chunk);
+        if (ack.uploadId !== uploadId || ack.nextOffset <= offset) {
+          throw new CatalogActionError("upload_failed");
+        }
+        offset = ack.nextOffset;
+      }
+      if (offset !== BigInt(bytes.length)) {
+        throw new CatalogActionError("upload_failed");
+      }
+      await this.finishCatalogUpload(uploadId, offset);
+      const deadline = Date.now() + CATALOG_PREPARATION_TIMEOUT_MS;
+      for (;;) {
+        const status = await this.catalogUploadStatus(uploadId);
+        if (status.uploadId !== uploadId) {
+          throw new CatalogActionError("upload_failed");
+        }
+        if (status.phase === "ready") {
+          break;
+        }
+        if (status.phase === "failed") {
+          throw new CatalogActionError("upload_failed", status.error);
+        }
+        if (Date.now() >= deadline) {
+          throw new CatalogActionError("preparation_timeout");
+        }
+        await new Promise<void>((resolve) => {
+          globalThis.setTimeout(resolve, CATALOG_PREPARATION_POLL_MS);
+        });
+      }
+      registration = await this.registerCatalogDocument(uploadId);
+    } catch (error) {
+      try {
+        await this.releaseCatalogUpload(uploadId);
+      } catch {
+        // Upload buffer may already be released or connection closed.
+      }
+      throw error;
+    }
+    const receipt = await this.applyCatalogRequest(registration.catalogRequestId);
+    if (receipt.fact.state !== "committed") {
+      throw new CatalogActionError("request_rejected", receipt.fact.state);
+    }
+    return receipt;
+  }
+
+  async registerWorkspace(path: string): Promise<WorkspaceRecord> {
+    const command = parseSessionCommand(
+      JSON.stringify({
+        v: 1,
+        type: "command",
+        requestId: randomId128(),
+        action: "workspace.register",
+        payload: { path },
+      }),
+    );
+    if (command.action !== "workspace.register") {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return await this.#commandWithId(
+      command.action,
+      command.payload,
+      command.requestId,
+      parseWorkspaceRecord,
+    );
+  }
+
+  async registerTarget(
+    sourceId: string,
+    nativeSessionId: string,
+    workspaceId: string,
+  ): Promise<ProductTargetRecord> {
+    const command = parseSessionCommand(
+      JSON.stringify({
+        v: 1,
+        type: "command",
+        requestId: randomId128(),
+        action: "target.register",
+        payload: {
+          sourceId: requireSessionId(sourceId),
+          nativeSessionId,
+          workspaceId: requireSessionId(workspaceId),
+        },
+      }),
+    );
+    if (command.action !== "target.register") {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return await this.#commandWithId(
+      command.action,
+      command.payload,
+      command.requestId,
+      parseProductTargetRecord,
+    );
+  }
+
+  async inspectCatalogInventory(): Promise<CatalogInventory> {
+    return await this.#command(
+      "catalog.inventory",
+      {},
+      parseCatalogInventory,
+    );
+  }
+
+  async registerSessionInput(
+    targetId: string,
+    mutation: QueueMutationDto,
+    requestId: string,
+  ): Promise<SessionRegistration> {
+    const canonicalRequestId = requireSessionId(requestId);
+    const command = parseSessionCommand(JSON.stringify({
+      v: 1,
+      type: "command",
+      requestId: canonicalRequestId,
+      action: "input.register",
+      payload: {
+        targetId: requireSessionId(targetId),
+        operation: mutation,
+      },
+    }));
+    if (command.action !== "input.register") {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    const parsed = await this.#commandWithId(
+      command.action,
+      command.payload,
+      command.requestId,
+      parseSessionRegistration,
+    );
+    if (parsed.registrationId !== canonicalRequestId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async consumeSessionInput(
+    targetId: string,
+    registrationId: string,
+    bodyId: string | null,
+  ): Promise<SessionConsumeResult> {
+    const canonicalRegistrationId = requireSessionId(registrationId);
+    const parsed = await this.#command(
+      "input.consume",
+      {
+        targetId: requireSessionId(targetId),
+        registrationId: canonicalRegistrationId,
+        bodyId: bodyId === null ? null : requireSessionId(bodyId),
+      },
+      parseSessionConsumeResult,
+    );
+    if (
+      (parsed.kind === "resolved" && parsed.request.registrationId !== canonicalRegistrationId) ||
+      (parsed.kind === "observed" && parsed.fact.registrationId !== canonicalRegistrationId) ||
+      (parsed.kind === "pending" && parsed.registrationId !== canonicalRegistrationId)
+    ) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async openSessionBody(
+    targetId: string,
+    itemId: string,
+    expectedRevision: string,
+  ): Promise<SessionQueuedBodyDescriptor> {
+    const canonicalTargetId = requireSessionId(targetId);
+    const descriptor = await this.#command(
+      "input.body.open",
+      {
+        targetId: canonicalTargetId,
+        itemId: requireSessionId(itemId),
+        expectedRevision: requireSessionU64(expectedRevision),
+      },
+      parseSessionQueuedBodyDescriptor,
+    );
+    if (descriptor.targetId !== canonicalTargetId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return descriptor;
+  }
+
+  async openSessionView(
+    targetId: string,
+    reason:
+      | "first_open"
+      | "explicit_refresh"
+      | "reopen"
+      | "reconnect"
+      | "reacquire",
+  ): Promise<SessionViewOpened> {
+    return await this.#command(
+      "view.open",
+      {
+        targetId: requireSessionId(targetId),
+        reason,
+      },
+      parseSessionViewOpened,
+    );
+  }
+
+  async openSourceSessionView(
+    selection: SourceLaunchSelectionInput,
+    nativeSessionId: string,
+    reason:
+      | "first_open"
+      | "explicit_refresh"
+      | "reopen"
+      | "reconnect"
+      | "reacquire",
+  ): Promise<SessionViewOpened> {
+    const command = parseSessionCommand(JSON.stringify({
+      v: 1,
+      type: "command",
+      requestId: randomId128(),
+      action: "view.open_source",
+      payload: {
+        selection,
+        nativeSessionId,
+        reason,
+      },
+    }));
+    if (command.action !== "view.open_source") {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return await this.#commandWithId(
+      command.action,
+      command.payload,
+      command.requestId,
+      parseSessionViewOpened,
+    );
+  }
+
+  async rebindSessionView(streamId: string): Promise<SessionViewOpened> {
+    const canonicalStreamId = requireSessionId(streamId);
+    return await this.#command(
+      "view.rebind",
+      { streamId: canonicalStreamId },
+      parseSessionViewOpened,
+    );
+  }
+
+  async closeSessionView(streamId: string): Promise<SessionViewClosed> {
+    const canonicalStreamId = requireSessionId(streamId);
+    const parsed = await this.#command(
+      "view.close",
+      { streamId: canonicalStreamId },
+      parseSessionViewClosed,
+    );
+    if (parsed.streamId !== canonicalStreamId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async listApprovals(): Promise<ApprovalListResult> {
+    const parsed = await this.#command(
+      "approval.list",
+      {},
+      parseApprovalListResult,
+    );
+    for (const approval of parsed.items) {
+      if (approval.approvalId !== approval.status.approvalId) {
+        throw new ManagementProtocolError("invalid_response");
+      }
+    }
+    return parsed;
+  }
+
+  async readApproval(approvalId: string): Promise<ApprovalView> {
+    const canonicalApprovalId = requireSessionId(approvalId);
+    const parsed = await this.#command(
+      "approval.read",
+      { approvalId: canonicalApprovalId },
+      parseApprovalResult,
+    );
+    if (
+      parsed.approvalId !== canonicalApprovalId ||
+      parsed.status.approvalId !== canonicalApprovalId
+    ) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async registerApproval(
+    approvalId: string,
+    choiceId: string,
+  ): Promise<ApprovalRegistration> {
+    const canonicalApprovalId = requireSessionId(approvalId);
+    const canonicalChoiceId = requireSessionId(choiceId);
+    const parsed = await this.#command(
+      "approval.register",
+      {
+        approvalId: canonicalApprovalId,
+        choiceId: canonicalChoiceId,
+      },
+      parseApprovalRegistration,
+    );
+    if (
+      parsed.approvalId !== canonicalApprovalId ||
+      parsed.choiceId !== canonicalChoiceId
+    ) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async decideApproval(
+    approvalId: string,
+    approvalRegistrationId: string,
+  ): Promise<ApprovalDecisionResult> {
+    const canonicalApprovalId = requireSessionId(approvalId);
+    const canonicalRegistrationId =
+      requireSessionId(approvalRegistrationId);
+    const parsed = await this.#command(
+      "approval.decide",
+      { approvalRegistrationId: canonicalRegistrationId },
+      parseApprovalDecisionResult,
+    );
+    if (
+      parsed.approvalId !== canonicalApprovalId ||
+      parsed.approvalRegistrationId !== canonicalRegistrationId
+    ) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async inspectApprovalStatus(approvalId: string): Promise<ApprovalStatus> {
+    const canonicalApprovalId = requireSessionId(approvalId);
+    const parsed = await this.#command(
+      "approval.status",
+      { approvalId: canonicalApprovalId },
+      parseApprovalStatusResult,
+    );
+    if (parsed.approvalId !== canonicalApprovalId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async registerNativeRelease(
+    targetId: string,
+  ): Promise<NativeReleaseRegistered> {
+    const canonicalTargetId = requireSessionId(targetId);
+    const parsed = await this.#command(
+      "native.release.register",
+      { targetId: canonicalTargetId },
+      parseNativeReleaseRegisterResult,
+    );
+    if (parsed.targetId !== canonicalTargetId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async releaseNativeSession(
+    releaseOperationId: string,
+  ): Promise<NativeReleaseStatus> {
+    const canonicalOperationId = requireSessionId(releaseOperationId);
+    const parsed = await this.#command(
+      "native.release",
+      { releaseOperationId: canonicalOperationId },
+      parseNativeReleaseStatusResult,
+    );
+    if (parsed.releaseOperationId !== canonicalOperationId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async inspectNativeReleaseStatus(
+    releaseOperationId: string,
+  ): Promise<NativeReleaseStatus> {
+    const canonicalOperationId = requireSessionId(releaseOperationId);
+    const parsed = await this.#command(
+      "native.release.status",
+      { releaseOperationId: canonicalOperationId },
+      parseNativeReleaseStatusResult,
+    );
+    if (parsed.releaseOperationId !== canonicalOperationId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async registerSourceSession(
+    selection: SourceLaunchSelectionInput,
+    operation: SourceOperationInput,
+    requestId = randomId128(),
+  ): Promise<SourceSessionRegistration> {
+    const canonicalRequestId = requireSessionId(requestId);
+    const command = parseSessionCommand(JSON.stringify({
+      v: 1,
+      type: "command",
+      requestId: canonicalRequestId,
+      action: "source.session.register",
+      payload: {
+        selection,
+        operation,
+      },
+    }));
+    if (command.action !== "source.session.register") {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    const parsed = await this.#commandWithId(
+      command.action,
+      command.payload,
+      command.requestId,
+      parseSourceSessionRegistration,
+    );
+    if (
+      parsed.action !== operation.kind ||
+      parsed.sourceId !== command.payload.selection.sourceId ||
+      parsed.harnessId !== command.payload.selection.harnessId ||
+      parsed.profileId !== command.payload.selection.profileId ||
+      parsed.profileRevision !== command.payload.selection.profileRevision ||
+      parsed.workspaceId !== command.payload.selection.workspaceId
+    ) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async executeSourceSession(
+    sourceOperationId: string,
+  ): Promise<SourceSessionFact> {
+    const canonicalOperationId = requireSessionId(sourceOperationId);
+    const parsed = await this.#command(
+      "source.session.execute",
+      { sourceOperationId: canonicalOperationId },
+      parseSourceSessionFact,
+    );
+    if (parsed.registration.sourceOperationId !== canonicalOperationId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async inspectSourceSessionStatus(
+    sourceOperationId: string,
+  ): Promise<SourceSessionFact> {
+    const canonicalOperationId = requireSessionId(sourceOperationId);
+    const parsed = await this.#command(
+      "source.session.status",
+      { sourceOperationId: canonicalOperationId },
+      parseSourceSessionFact,
+    );
+    if (parsed.registration.sourceOperationId !== canonicalOperationId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async reconcileSourceSession(
+    sourceOperationId: string,
+  ): Promise<SourceSessionFact> {
+    const canonicalOperationId = requireSessionId(sourceOperationId);
+    const parsed = await this.#command(
+      "source.session.reconcile",
+      { sourceOperationId: canonicalOperationId },
+      parseSourceSessionFact,
+    );
+    if (parsed.registration.sourceOperationId !== canonicalOperationId) {
+      throw new ManagementProtocolError("invalid_response");
+    }
+    return parsed;
+  }
+
+  async openSourceSessionResult(
+    sourceOperationId: string,
+  ): Promise<SourceSessionResultDescriptor> {
+    const canonicalOperationId = requireSessionId(sourceOperationId);
+    return await this.#command(
+      "source.session.result.open",
+      { sourceOperationId: canonicalOperationId },
+      parseSourceSessionResultDescriptor,
+    );
+  }
+
+  async releaseSourceSessionResult(
+    sourceOperationId: string,
+  ): Promise<SourceSessionResultReleaseResult> {
+    const canonicalOperationId = requireSessionId(sourceOperationId);
+    return await this.#command(
+      "source.session.result.release",
+      { sourceOperationId: canonicalOperationId },
+      parseSourceSessionResultReleaseResult,
+    );
+  }
+
+  sendSessionViewCredit(streamId: string, packetSequence: bigint): void {
+    if (this.#state !== "authenticated") {
+      throw new ManagementConnectionError("not_connected");
+    }
+    this.#sendBinary(encodeViewCredit(streamId, packetSequence));
+  }
+
+  detachSessionStream(streamId: string): void {
+    if (this.#state !== "authenticated") {
+      throw new ManagementConnectionError("not_connected");
+    }
+    this.#sendBinary(encodeViewDetach(streamId));
+  }
+
   disconnect(): void {
     if (this.#state === "closed" || this.#state === "closing") {
       return;
@@ -237,8 +1285,26 @@ export class ManagementConnection {
     }
   }
 
-  #onMessage(event: MessageEvent<unknown>): void {
-    if (typeof event.data !== "string") {
+  #enqueueMessage(data: unknown): void {
+    this.#inbound = this.#inbound
+      .then(() => this.#processMessage(data))
+      .catch(() => {
+        // #processMessage records protocol failures on the connection.
+      });
+  }
+
+  #processMessage(data: unknown): void {
+    if (typeof data !== "string") {
+      if (data instanceof ArrayBuffer) {
+        this.#handleBinary(new Uint8Array(data));
+        return;
+      }
+      if (ArrayBuffer.isView(data)) {
+        this.#handleBinary(
+          new Uint8Array(data.buffer, data.byteOffset, data.byteLength),
+        );
+        return;
+      }
       this.#failProtocol(
         new ManagementProtocolError("invalid_frame"),
         "binary frame",
@@ -247,7 +1313,7 @@ export class ManagementConnection {
     }
     let frame: ManagementFrame;
     try {
-      frame = parseManagementFrame(event.data);
+      frame = parseManagementFrame(data);
     } catch {
       this.#failProtocol(
         new ManagementProtocolError("invalid_frame"),
@@ -301,6 +1367,54 @@ export class ManagementConnection {
       new ManagementProtocolError("invalid_frame"),
       "unexpected frame",
     );
+  }
+
+  #handleBinary(wire: Uint8Array): void {
+    if (this.#state !== "authenticated") {
+      this.#failProtocol(
+        new ManagementProtocolError("invalid_frame"),
+        "binary before authentication",
+      );
+      return;
+    }
+    let frame: SessionServerBinary;
+    try {
+      frame = decodeSessionServerBinary(wire, "authenticated");
+    } catch {
+      this.#failProtocol(
+        new ManagementProtocolError("invalid_frame"),
+        "invalid binary frame",
+      );
+      return;
+    }
+    if (frame.kind === "view_data") {
+      this.#callbacks.onViewData?.(frame.frame);
+      return;
+    }
+    const pending = this.#pendingInputAcknowledgement;
+    if (pending === null) {
+      this.#failProtocol(
+        new ManagementProtocolError("invalid_response"),
+        "unexpected input acknowledgement",
+      );
+      return;
+    }
+    if (
+      frame.acknowledgement.uploadId !== pending.uploadId ||
+      frame.acknowledgement.nextOffset !== pending.expectedNextOffset
+    ) {
+      this.#rejectInputAcknowledgement(
+        new ManagementProtocolError("invalid_response"),
+      );
+      this.#failProtocol(
+        new ManagementProtocolError("invalid_response"),
+        "input acknowledgement mismatch",
+      );
+      return;
+    }
+    this.#pendingInputAcknowledgement = null;
+    globalThis.clearTimeout(pending.timeout);
+    pending.resolve(frame.acknowledgement);
   }
 
   async #answerChallenge(challenge: ChallengeFrame): Promise<void> {
@@ -372,10 +1486,19 @@ export class ManagementConnection {
     payload: Record<string, unknown>,
     parse: (value: JsonValue) => T | Promise<T>,
   ): Promise<T> {
+    return await this.#commandWithId(action, payload, randomId128(), parse);
+  }
+
+  async #commandWithId<T>(
+    action: string,
+    payload: Record<string, unknown>,
+    requestId: string,
+    parse: (value: JsonValue) => T | Promise<T>,
+  ): Promise<T> {
     return await this.#request({
       v: 1,
       type: "command",
-      requestId: randomId128(),
+      requestId,
       action,
       payload,
     }, parse);
@@ -466,6 +1589,7 @@ export class ManagementConnection {
     const error = new ManagementConnectionError("connection_closed");
     this.#rejectConnection(error);
     this.#rejectPending(error);
+    this.#rejectInputAcknowledgement(error);
   }
 
   #onClose(event: CloseEvent): void {
@@ -487,6 +1611,7 @@ export class ManagementConnection {
     this.#clearAuthenticationTimer();
     this.#rejectConnection(error);
     this.#rejectPending(error);
+    this.#rejectInputAcknowledgement(error);
     if (!this.#closeNotified) {
       this.#closeNotified = true;
       this.#callbacks.onClose?.(close);
@@ -501,6 +1626,16 @@ export class ManagementConnection {
     socket.send(JSON.stringify(value));
   }
 
+  #sendBinary(value: Uint8Array): void {
+    const socket = this.#socket;
+    if (socket === null || socket.readyState !== SOCKET_OPEN) {
+      throw new ManagementConnectionError("connection_closed");
+    }
+    const copy = new Uint8Array(value.length);
+    copy.set(value);
+    socket.send(copy);
+  }
+
   #failProtocol(error: Error, reason: string): void {
     if (this.#state === "closed") {
       return;
@@ -508,6 +1643,7 @@ export class ManagementConnection {
     this.#failure ??= error;
     this.#rejectConnection(error);
     this.#rejectPending(error);
+    this.#rejectInputAcknowledgement(error);
     this.#state = "closing";
     this.#clearAuthenticationTimer();
     try {
@@ -530,6 +1666,16 @@ export class ManagementConnection {
       globalThis.clearTimeout(pending.timeout);
       pending.reject(error);
     }
+  }
+
+  #rejectInputAcknowledgement(error: Error): void {
+    const pending = this.#pendingInputAcknowledgement;
+    if (pending === null) {
+      return;
+    }
+    this.#pendingInputAcknowledgement = null;
+    globalThis.clearTimeout(pending.timeout);
+    pending.reject(error);
   }
 
   #clearAuthenticationTimer(): void {

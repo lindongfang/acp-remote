@@ -1,0 +1,12 @@
+﻿[
+    {
+        "path":  "app/tests/acceptance/domain_borrow_extremes.rs",
+        "sha256":  "0c8a9c31bbf8a469e7cd2a41be50904cecfeb0e224017d5ca59cf68a3c27204b",
+        "purpose":  "original 8 private cases unchanged"
+    },
+    {
+        "path":  "clients/web/dist/index.html",
+        "sha256":  "466ccd6a5b9e39646ac79cee4a860ade63ff0c2f5647a3603a256b8c43c80260",
+        "purpose":  "synthetic compile-only; no Web validation"
+    }
+]

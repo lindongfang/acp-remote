@@ -1,0 +1,19 @@
+{
+  "scope": "Test asset integration only; original model acceptance remains L3",
+  "modelsUnchanged": true,
+  "files": [
+    {
+      "path": "D:/Project/acp-remote/app/tests/acceptance/activity_model.rs",
+      "sha256": "df529b00c092e53916782bbda9029cbc36478a04fb17a3fc1fb8f1d84300a9b3"
+    },
+    {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/activity-probe/src/lib.rs",
+      "sha256": "0d38365d38124f7dc67afdabc8156f41993456999570ec51aca58dd6df2e95f8"
+    },
+    {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/activity-probe/test.log",
+      "sha256": "bcf2d680c948d0683a35139502833468963a2f25aa43e7a9e82b5f62f44ec0b2"
+    }
+  ],
+  "repositoryEntryStatus": "Parent-owned adapter and run pending"
+}

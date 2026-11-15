@@ -1,0 +1,77 @@
+{
+  "date": "2026-11-03",
+  "rootSourceCount": 789,
+  "rootManifestSHA256": "9d7afb680899bd1f38740fe87d0f0dc8d18785cf48aab4f450dc697c45bd2478",
+  "rootMismatches": [],
+  "indexSHA256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+  "indexUnchanged": true,
+  "candidate": {
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-schema9-f05-cleanup-v2-composition-v1",
+    "manifestSHA256": "5890797ece115f8a2dd02f76b8ac010dd89c17cd7d20052150e9c87092d77412",
+    "sourceCount": 810,
+    "sourceMismatches": [],
+    "modified": [
+      "app/src/adapters/acp/mod.rs",
+      "app/src/application/mod.rs",
+      "app/src/domain/mod.rs",
+      "app/src/node.rs",
+      "app/src/session_storage/mod.rs",
+      "app/src/session_storage/registry_connection_owner.rs",
+      "app/src/session_storage/request_registry.rs",
+      "app/src/session_storage/schema.rs",
+      "app/src/storage.rs",
+      "app/src/storage/pool_close_tests.rs",
+      "app/src/trust.rs",
+      "app/src/trust/tests/revoke_upgrade_tests.rs",
+      "openspec/changes/deliver-codex-session-loop/design.md"
+    ],
+    "added": [
+      "app/src/adapters/acp/node_configuration_profile.rs",
+      "app/src/adapters/acp/node_configuration_profile/tests.rs",
+      "app/src/application/native_catalog.rs",
+      "app/src/domain/native_catalog.rs",
+      "app/src/node/catalog.rs",
+      "app/src/node/catalog/development_tests.rs",
+      "app/src/session_storage/catalog_sql.rs",
+      "app/src/session_storage/catalog_sql/tests.rs",
+      "app/src/session_storage/node_catalog_schema.rs",
+      "app/src/session_storage/node_catalog_schema/tests.rs",
+      "app/src/session_storage/node_configuration.rs",
+      "app/src/session_storage/node_configuration/intent.rs",
+      "app/src/session_storage/node_configuration/intent/tests.rs",
+      "app/src/session_storage/node_configuration/management.rs",
+      "app/src/session_storage/node_configuration/management/tests.rs",
+      "app/src/session_storage/node_configuration/tests.rs",
+      "app/src/session_storage/registry_connection_owner/acquire_observation.rs",
+      "app/src/session_storage/schema9_namespace_test_hook.rs",
+      "app/src/session_storage/schema9_namespace_test_hook/tests.rs",
+      "app/src/storage/pool_close_tests/owned_acquire_tests.rs",
+      "app/src/storage/pool_close_tests/trust_retention_tests.rs"
+    ],
+    "removed": [],
+    "preserved": 776
+  },
+  "checks": {
+    "diffCheck": {
+      "exitCode": 0,
+      "notes": "Git emitted line-ending warnings; no whitespace errors"
+    },
+    "openspecStrict": {
+      "exitCode": 0,
+      "result": "deliver-codex-session-loop valid"
+    }
+  },
+  "limitations": [
+    "Candidate is an integration inventory only; no Root product sources installed",
+    "Authority oracle maintenance, seven success-head test leaves, history001–006 and CLDB acceptance are not included",
+    "Strict Rust checks remain failed at their previously recorded baselines",
+    "Tracked tasks remain 6/25; substantial implementation still pending"
+  ],
+  "unperformed": [
+    "npm audit",
+    "git commit",
+    "git push",
+    "openspec archive",
+    "index writes"
+  ]
+}

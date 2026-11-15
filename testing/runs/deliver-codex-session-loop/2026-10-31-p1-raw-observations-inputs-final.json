@@ -1,0 +1,82 @@
+﻿{
+    "utc":  "2026-10-31T00:53:53.2595871Z",
+    "kind":  "final independent P1 planning inputs",
+    "contract":  "a071335b22ed7b028323f1e629d9df3460e858b1434b0adf43aa76d3659f1f3a",
+    "initialInputManifestSha":  "52d812490b8278516fa87467ace35203c7e564410b3908618ea79d6d3871fcf5",
+    "initialDefinitionSha":  "20f4a6e1c46d30076d6212b39a25e31d84f049c18551d7f83e36fe24b860a36e",
+    "definitionSha":  "8f8e7d49b518e31e55fe3ef8b9bfec323c43fd1950ec49b677189a061840dd2e",
+    "definitionGaps":  "P1-TG01/TG02/TG03 closed-definition only",
+    "tests":  "R1-R8 not-run; no new execution",
+    "inputs":  [
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/p1-raw-observations-contract.md",
+                       "sha256":  "a071335b22ed7b028323f1e629d9df3460e858b1434b0adf43aa76d3659f1f3a",
+                       "bytes":  8157
+                   },
+                   {
+                       "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-view-adapter-revision3/p1-raw-observations-contract.md",
+                       "sha256":  "8e2413b6f43c781cfee2afb33239ec0a7cfdcf2a46db469a133c6fc165b1c3b3",
+                       "bytes":  6043
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+                       "sha256":  "608002676e126e7c1711f1deff4087800fbf84f51194b6a5e0ed570a5e138fe4",
+                       "bytes":  11464
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/implementation-contract.md",
+                       "sha256":  "bc7888b887fc42d981cb55b4067605d1971a9a35adeb208c2cd804b5798b2536",
+                       "bytes":  30587
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/view-window-contract.md",
+                       "sha256":  "2d8b7362a3e1c8869bbe8d8da1808b611c1a512a351aab504ae1c6b3f6f00de8",
+                       "bytes":  7198
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/view-budget-port-contract.md",
+                       "sha256":  "d6ee1d36b701912feca8c7fc1d1c345bc24beb0e99bb618c2ecaaf347a631098",
+                       "bytes":  16188
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/domain/native.rs",
+                       "sha256":  "8d01cef25c7ba12ffd2aff94cc78fc8bfbe41d604feaf2312f13fe47cadf9abd",
+                       "bytes":  2190
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/domain/views.rs",
+                       "sha256":  "a22bb6e5e9a0e7fdca3b66e9e3dc18025a37ab57832ea95b44e509d189255f26",
+                       "bytes":  23237
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/domain/views/staging.rs",
+                       "sha256":  "d2a2a6ec3756777a5758d05ffd51e7a78f9f62fb5158283545854c77b00b0f09",
+                       "bytes":  17010
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/model.rs",
+                       "sha256":  "a14f33cf708aa1a93b8291fbf0e5d55f18627190d54f086505f4f1c883bb2b60",
+                       "bytes":  8627
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/strategy.rs",
+                       "sha256":  "72ad187e25cf6ba4c530be4fb8eaa6c482fcca9bab32c3a3220b4fdd42842e4c",
+                       "bytes":  21873
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/transport.rs",
+                       "sha256":  "93bd37e419387eefbb5f5a8819bbbf9c678f44a0baccec89b9edfc61d34f535b",
+                       "bytes":  20278
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v1/schema.json",
+                       "sha256":  "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5",
+                       "bytes":  256449
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v2/schema.json",
+                       "sha256":  "28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d",
+                       "bytes":  328217
+                   }
+               ]
+}

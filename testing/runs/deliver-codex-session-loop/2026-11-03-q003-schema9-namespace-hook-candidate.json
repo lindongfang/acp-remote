@@ -1,0 +1,36 @@
+{
+  "kind": "Actual test-only original transaction namespace hook implementation",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-schema9-production-namespace-hooks-v2",
+  "freeze": "ecb9ee67b00d0e455ecd6f981332205885ef59d927db20124e7a1af764b6152c",
+  "members": 893,
+  "sourceCount": 807,
+  "modified": 3,
+  "added": 2,
+  "preserved": 802,
+  "paths": [
+    "app/src/session_storage/mod.rs",
+    "app/src/session_storage/schema.rs",
+    "app/src/session_storage/schema9_namespace_test_hook.rs",
+    "app/src/session_storage/schema9_namespace_test_hook/tests.rs",
+    "app/src/storage.rs"
+  ],
+  "patch": "520d11bca7ebd7145a2a676392066bf2265187793480fd473d7874a99b85742a",
+  "sourceManifest": "3b8aa66ddff31595d2e4754026a3226768291152245ef6d5df7445efc274733c",
+  "developerFunctionsPassed": 10,
+  "namespaceScriptsActuallyRun": 68,
+  "storageFailureCloseDeveloperTestPassed": true,
+  "checkExit": 0,
+  "fmtExit": 0,
+  "applyCheckExit": 0,
+  "strict": {
+    "exit": 101,
+    "before": 683,
+    "after": 683,
+    "added": 0,
+    "removed": 0
+  },
+  "formal007Executed": false,
+  "history1to8Executed": false,
+  "runtimeF05FixIncluded": false,
+  "rootInstalled": false
+}

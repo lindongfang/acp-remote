@@ -1,0 +1,64 @@
+{
+  "scope": "Exact approved Closed test leaf and normal source shutdown only",
+  "date": "2026-11-02",
+  "issue": "APO003-CLOSED-ORACLE001",
+  "status": "Closed-by-independent-tester-and-reviewer",
+  "differentFunctions": 1,
+  "invocations": 2,
+  "firstDpapiPreBusinessFailureRetained": true,
+  "finalPassed": 1,
+  "p2FullIssue": "Open",
+  "otherSixRerun": false,
+  "full48Signed": false,
+  "rootProductIntegrated": false,
+  "verified": [
+    {
+      "name": "tester",
+      "sha256": "4b0bfa3383b6faa1fdfe836607ecb767bf9d231c8c4634ec2ad24fdc704ddda2",
+      "count": 821
+    },
+    {
+      "name": "reviewer",
+      "sha256": "b6004851a676d148ae8e717e4709022ddbedd64a1458bcfee4638bfd13f293cc",
+      "count": 27
+    }
+  ],
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/tester/freeze.json",
+      "sha256": "4b0bfa3383b6faa1fdfe836607ecb767bf9d231c8c4634ec2ad24fdc704ddda2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/tester/report.md",
+      "sha256": "c21468b1119f659db33441aef3be2b978d9470af9df68e7c275edc40db7b1c34"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/tester/result.json",
+      "sha256": "021f391de6120d935fdc313207949460597e98ce7c3843d86402e88aece5e24e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/tester/preparation.json",
+      "sha256": "999130cf87fe6907eba6e65c6bd5898aec8e09b094a2ab3dc02796b574dc31b2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/tester/process-final.json",
+      "sha256": "2e8ab074c0f6152f1a61fb50f0effd6dbeed21a26cff0a0c88283bfdd3d2179c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/reviewer/freeze.json",
+      "sha256": "b6004851a676d148ae8e717e4709022ddbedd64a1458bcfee4638bfd13f293cc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/reviewer/report.md",
+      "sha256": "84da887309442998eb66f3fcec43401b03a5ae112bc802a65bba72a6c0ca4037"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/reviewer/disposition.json",
+      "sha256": "6c3a9e8d5df629a7de73d8306c83b309e221db81128f2882c2f1140745f24326"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-approval-closed-v3-final/reviewer/verification.json",
+      "sha256": "c5bed6b2d38fdc1e46b7e7e7176add62e2651c9731bd9fb1c6b4e09645dac768"
+    }
+  ]
+}

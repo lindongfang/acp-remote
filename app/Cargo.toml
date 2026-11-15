@@ -32,7 +32,7 @@ rust-embed = { version = "8.13.0", features = ["debug-embed"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pki-types = "1.15.1"
 serde = { version = "1.0.229", features = ["derive"] }
-serde_json = "1.0.154"
+serde_json = { version = "1.0.154", features = ["raw_value"] }
 sha2 = "0.10.9"
 sqlx = { version = "0.8.6", default-features = false, features = ["runtime-tokio", "sqlite"] }
 subtle = "2.6.1"
@@ -78,3 +78,157 @@ nursery = "warn"
 strip = "symbols"
 lto = "thin"
 codegen-units = 1
+
+[features]
+shared-view-acceptance-fixtures = []
+registration-acceptance-fixtures = []
+acp-runtime-acceptance-fixtures = []
+native-dispatch-dev-fixtures = []
+approval-owner-dev-fixtures = ["native-dispatch-dev-fixtures"]
+approval-owner-acceptance-fixtures = []
+
+[[bin]]
+name = "native_dispatch_dev_child"
+path = "dev-fixtures/native_dispatch_dev_child.rs"
+required-features = ["native-dispatch-dev-fixtures"]
+test = false
+bench = false
+
+[[bin]]
+name = "registration_crash_probe"
+path = "tests/registration_acceptance/p/crash_probe.rs"
+required-features = ["registration-acceptance-fixtures"]
+test = false
+bench = false
+
+[[bin]]
+name = "acp_runtime_protocol_child"
+path = "tests/acp_runtime_acceptance/protocol_child.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+test = false
+bench = false
+
+[[bin]]
+name = "approval_owner_dev_child"
+path = "dev-fixtures/approval_owner_dev_child.rs"
+required-features = ["approval-owner-dev-fixtures"]
+test = false
+bench = false
+
+[[test]]
+name = "registration_factory_waiter"
+path = "tests/registration_factory_waiter.rs"
+required-features = ["registration-acceptance-fixtures"]
+
+[[test]]
+name = "registration_owner_acceptance"
+path = "tests/registration_owner_acceptance.rs"
+required-features = ["registration-acceptance-fixtures"]
+
+[[test]]
+name = "registration_reconcile_ownership"
+path = "tests/registration_reconcile_ownership.rs"
+required-features = ["registration-acceptance-fixtures"]
+
+[[test]]
+name = "registration_restart"
+path = "tests/registration_restart.rs"
+required-features = ["registration-acceptance-fixtures"]
+
+[[test]]
+name = "registration_shutdown_ownership"
+path = "tests/registration_shutdown_ownership.rs"
+required-features = ["registration-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_capabilities_config_wire"
+path = "tests/acp_runtime_capabilities_config_wire.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_closing_seen"
+path = "tests/acp_runtime_closing_seen.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_cross_runtime_shutdown"
+path = "tests/acp_runtime_cross_runtime_shutdown.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_debug_matrix"
+path = "tests/acp_runtime_debug_matrix.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_fences_receipts_deadlines"
+path = "tests/acp_runtime_fences_receipts_deadlines.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_large_stream"
+path = "tests/acp_runtime_large_stream.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_lifecycle_framing"
+path = "tests/acp_runtime_lifecycle_framing.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_owned_pipe"
+path = "tests/acp_runtime_owned_pipe.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_ownership_io"
+path = "tests/acp_runtime_ownership_io.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_raw_config"
+path = "tests/acp_runtime_raw_config.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_reader_terminal"
+path = "tests/acp_runtime_reader_terminal.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_receipt_races"
+path = "tests/acp_runtime_receipt_races.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_rejected_fifo"
+path = "tests/acp_runtime_rejected_fifo.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_remaining_public_paths"
+path = "tests/acp_runtime_remaining_public_paths.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_remote_error_debug"
+path = "tests/acp_runtime_remote_error_debug.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_replies_privacy"
+path = "tests/acp_runtime_replies_privacy.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_resource_shapes"
+path = "tests/acp_runtime_resource_shapes.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[[test]]
+name = "acp_runtime_write_deadline_regression"
+path = "tests/acp_runtime_write_deadline_regression.rs"
+required-features = ["acp-runtime-acceptance-fixtures"]
+
+[patch.crates-io]
+sqlx-sqlite = { path = "vendor/sqlx-sqlite" }

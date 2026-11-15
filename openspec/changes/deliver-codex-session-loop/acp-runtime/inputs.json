@@ -1,0 +1,96 @@
+﻿{
+    "scope":  "public ACP runtime engineering contract design only; no product code or SQL source changes",
+    "root":  "D:/Project/acp-remote",
+    "rawContract":  "9f2b236f325a0cceed3c1c34274d73ca953d9c7dfec571d22745b2b7ef70cce6",
+    "rawSourceManifest":  "7b1a6d69f0c931adf5d3e3bf1010f5fe85bd5877dfac0d374e67d80a30e65287",
+    "entries":  [
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/design.md",
+                        "sha256":  "b645f9bccbf07244c0db6ae769ca68a15fe5abbd13bf12c7257266f4c2561590"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/implementation-contract.md",
+                        "sha256":  "1d87f7849c03a99207a24c1210612faee1a6d480c736399fefc5c389e5578c13"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/acp-raw-json-contract.md",
+                        "sha256":  "9f2b236f325a0cceed3c1c34274d73ca953d9c7dfec571d22745b2b7ef70cce6"
+                    },
+                    {
+                        "path":  "testing/runs/deliver-codex-session-loop/2026-10-31-q3-wp3-configuration-inventory.md",
+                        "sha256":  "1f1db024faa1eb8b5ae0a8d5397c8b447686310e1efc50e8b49787945e0a4b71"
+                    },
+                    {
+                        "path":  "testing/runs/deliver-codex-session-loop/2026-10-31-q3-wp3-json-feasibility.md",
+                        "sha256":  "4f5de6981b4f6e15562ba94cf658003155f8318774c0503badc229eb93382050"
+                    },
+                    {
+                        "path":  "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/package.json",
+                        "sha256":  "6c74af591623a1c362d9b1073cb43268f6e4e532fafa419f73465225628bb12c"
+                    },
+                    {
+                        "path":  "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v1/schema.json",
+                        "sha256":  "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5"
+                    },
+                    {
+                        "path":  "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v2/schema.json",
+                        "sha256":  "28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d"
+                    },
+                    {
+                        "path":  "app/src/adapters/acp/model.rs",
+                        "sha256":  "a14f33cf708aa1a93b8291fbf0e5d55f18627190d54f086505f4f1c883bb2b60"
+                    },
+                    {
+                        "path":  "app/src/adapters/acp/strategy.rs",
+                        "sha256":  "72ad187e25cf6ba4c530be4fb8eaa6c482fcca9bab32c3a3220b4fdd42842e4c"
+                    },
+                    {
+                        "path":  "app/src/adapters/acp/transport.rs",
+                        "sha256":  "66f92868d13b556f502cb5a5992177c96440eac1f609da629397ba5cecc42a76"
+                    },
+                    {
+                        "path":  "app/src/adapters/acp/view_observations.rs",
+                        "sha256":  "0164d462fa3bd16740a664a02407fc67a13176ddfb2b1f73dfba8e4381ee225a"
+                    },
+                    {
+                        "path":  "app/src/adapters/acp/tool_projection.rs",
+                        "sha256":  "4cf2b6d36a8a3095bed73de496d926cec871e97bc0addf431256be5a8d54b503"
+                    },
+                    {
+                        "path":  "app/src/adapters/acp/raw_json.rs",
+                        "sha256":  "76e45ec68ebaa35b3a7d46a9f41b810c852996e3d2fc22ad15eee500d54d2bd6"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md",
+                        "sha256":  "ba9b7d791efaa7a6e061060ecf67cda75f963225ca98318a9f092207e6a6cbe1"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/harness-management/spec.md",
+                        "sha256":  "42af8e99948e990af1713712d67b7b19dacdb56a2d043847f7a22e4db9027cb5"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/management-audit/spec.md",
+                        "sha256":  "270faa951f5e83637bbf23713d7a27e0dd73ae938c204b2867a214bc879a439a"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/native-session-recovery/spec.md",
+                        "sha256":  "c013e151444238361d96802e0e7519d8cc31fa42f6b788fe4413805cac79cb29"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/permission-approvals/spec.md",
+                        "sha256":  "935bd6039aa07fc33e3706ba50d20766cbd58022ac8dc57450547bec2854ea3b"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/session-execution/spec.md",
+                        "sha256":  "051f1609527ee13e79c8e0e235a19b7085499c77fde164028cbd9b1cf7b7694d"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+                        "sha256":  "bfcd46d1735773b920f7400524dacb1fedf218452ecfdc1fa00842d8525ab13a"
+                    },
+                    {
+                        "path":  "openspec/changes/deliver-codex-session-loop/specs/workspace-registration/spec.md",
+                        "sha256":  "4cf4e9e297efeb4a5c56fc89b706b3fd46fd866849708fe032efbcd78c1e9de9"
+                    }
+                ]
+}

@@ -1,0 +1,157 @@
+{
+  "scope": "Actual static infrastructure build succeeded with 48 original inputs unchanged; owned browser space2 missing before first page acquisition. Fresh slice/DOM/visual not executed. Original phase2 86 members verified externally; only members selected in static-blocked package copied. No additional browser permission or user0 action.",
+  "verified": {
+    "staticMembers": 35,
+    "previousPhase2Members": 86
+  },
+  "entries": [
+    {
+      "path": "static-transport-proposal/freeze.json",
+      "sha256": "3e9f5feb7af1a8b2366043bdc6d681729dc944ae11ad3d93c4ab135706bdd984"
+    },
+    {
+      "path": "static-transport-proposal/build-static-fixture.mjs",
+      "sha256": "421b522fda779cc43d5abd0b30a9023372740f62eb6d4aedcc6e4dd23732f7f0"
+    },
+    {
+      "path": "static-transport-proposal/owned-static-server.mjs",
+      "sha256": "fc6b7185fcf1a4873b0a73f61e38f2d36f262e0b8875273521b6bbfa448c1905"
+    },
+    {
+      "path": "static-transport-proposal/browser-round-common-static.mjs",
+      "sha256": "aaf2492d486bf9c8e60bcaf8a82745b727462bbb99cd1c844235fe426ef9eedb"
+    },
+    {
+      "path": "static-transport-proposal/SCOPE.md",
+      "sha256": "ede72d9829c5bf079a5b3b729e8561744bc9b81f65dd2701f6c9bd95aa7e6830"
+    },
+    {
+      "path": "static-transport-proposal/network-basis.json",
+      "sha256": "ca30c0e1fe34589dbc7c29bd86e5f257ad5c1aa48c4b30189709257d20382900"
+    },
+    {
+      "path": "phase2-before-static-freeze.json",
+      "sha256": "3f5d402ad84923efa65ae40ba36887cb95f2e35c785f0b2548e6413a72c2e50f"
+    },
+    {
+      "path": "phase2-before-static.json",
+      "sha256": "2c4562fd5c19dd7f49221a960d6bc5fe3bc6cb9cf7ec7eb4c998b636ef25f6cc"
+    },
+    {
+      "path": "checkpoint-before-static.mjs",
+      "sha256": "9a3c8597489ba5bd8c8035e86a3f3a627dfcde488d96fd02302e58f2f4a17388"
+    },
+    {
+      "path": "run-static-build.cjs",
+      "sha256": "6fe300763970c7e4ec8a2d25621802c61eb7127ca6cbc16057dd875623472f1e"
+    },
+    {
+      "path": "static-bundle-manifest-v1.json",
+      "sha256": "ff6414ecfeca31c8ec097d84414d529fa7b6c17977457fed9f2ffab26783757d"
+    },
+    {
+      "path": "static-blocked-source-after-v1.json",
+      "sha256": "be2e127290d72751767e9853703d0f89b3bbb058527bb7ceec608f6b6c343679"
+    },
+    {
+      "path": "round-19-static-load.mjs",
+      "sha256": "49df9990356f4005eaadb15094757bfae0bfe6a359e754c5be34c6d28676be3e"
+    },
+    {
+      "path": "round-20-static-basic.mjs",
+      "sha256": "971e5139b04b118c586613ff6f385699d8e496b294de294d2f58020f6fe82c7b"
+    },
+    {
+      "path": "round-21-space-inventory.mjs",
+      "sha256": "0386e8caa8b2a0ea00a7e370600176e4be6dbbdc9a644f3c03e595c66f728417"
+    },
+    {
+      "path": "inventory-publication-redaction-v1.json",
+      "sha256": "1f5ca29c6277ebbebf50f716e47ed4b96fc78530d842fc62e6fade25ad1947e0"
+    },
+    {
+      "path": "STATIC-BLOCKED-v1.md",
+      "sha256": "9b3a98076032fc9ff4cdc0a2637f361838567f12db041c1647914f5b9324ff71"
+    },
+    {
+      "path": "freeze-static-blocked-v1.mjs",
+      "sha256": "9acbdd13d4125ae9646c8fdcada287c948303931889b10c13997edcafcb2decb"
+    },
+    {
+      "path": "logs/static-build-v1.txt",
+      "sha256": "f7e04876a9a57c46f7834555163b8b8d6c714a3c9304b37212b496a0ab9b7b1a"
+    },
+    {
+      "path": "logs/static-build-v1.json",
+      "sha256": "4f81f018426c91e1f4dc363b7fa4e846cfc4932a5d87f3d5c0fede7882bdf7df"
+    },
+    {
+      "path": "logs/round-19-static-load.txt",
+      "sha256": "9f20dae7025808a24e743e20eab0954ffa8a335027e0d06b5b722f1d87605f7f"
+    },
+    {
+      "path": "logs/round-19-static-load.json",
+      "sha256": "f2452b99f82701de114c3d2df9945bc9a2f013642dd2967c76f2dd0d913f9a34"
+    },
+    {
+      "path": "logs/round-21-space-inventory.txt",
+      "sha256": "f938c30d5414cf4fc5063c815fa43bbc2df6a23cb9e11d165859108d1a0c66d6"
+    },
+    {
+      "path": "logs/round-21-space-inventory.json",
+      "sha256": "189ab8cfa6316242d97294531ebf14b32125bd84ce8a3eb541b3c7b0822d5387"
+    },
+    {
+      "path": "logs/space-inventory-after-owned2-missing.json",
+      "sha256": "f938c30d5414cf4fc5063c815fa43bbc2df6a23cb9e11d165859108d1a0c66d6"
+    },
+    {
+      "path": "logs/owned-static-server-v1.json",
+      "sha256": "99f37b6f51750c5c0ec64897966b7bdec8d6f8135e2556fad51eae1fc501f01f"
+    },
+    {
+      "path": "logs/static-server-post-close-v1.json",
+      "sha256": "556f60be566f94542847a8f70f3d9b61bb28675605125f01d0079083ee7d648d"
+    },
+    {
+      "path": "browser-authorization.json",
+      "sha256": "9c1cd6910c49feca1f93aa2df77529710cc884b458b6909c3592725c6396faf3"
+    },
+    {
+      "path": "space.json",
+      "sha256": "bab725fba929ca535caf700612a5c8f1923a49eaeac09ae966f0878791465fd8"
+    },
+    {
+      "path": "logs/round-04-create-authorized.txt",
+      "sha256": "a3042451493f2c55fe41980271fb7d236fb809c32fb2c48367adfe3a5649cd3d"
+    },
+    {
+      "path": "logs/round-04-create-authorized.json",
+      "sha256": "83c1c127c20b4715fb6c15122c2cb2f661acdb97fca9ed8324482b87d9ea6109"
+    },
+    {
+      "path": "logs/browser-source-and-blank-1.json",
+      "sha256": "8a7440529d890a0b4775f828391ed446a141d7dd18fde48487f331c18117fe5a"
+    },
+    {
+      "path": "static-fixture-dist-v1/assets/inspector-independent-BKr2wPJ4.js",
+      "sha256": "bf4e3aede1e6f768560d0376f7edf24484f21944a3bd5e34fab622d8c92fb754"
+    },
+    {
+      "path": "static-fixture-dist-v1/assets/inspector-independent-fZvjn71C.css",
+      "sha256": "00bbe005d4082319764491ee61c99e5fead37714b0eb91862937b7294f4704ac"
+    },
+    {
+      "path": "static-fixture-dist-v1/tests/browser/inspector-independent.html",
+      "sha256": "9da7e06bbc224c68ca3569e7cf1151514c0f2b59a977fc8d533401e2460129aa"
+    },
+    {
+      "path": "static-blocked-v1-freeze.json",
+      "sha256": "5fcea1cc002a506ca7d1c5dc1dbae6ff0ffb5deda21c040605007bdb6431d3aa"
+    },
+    {
+      "path": "reviews/static-infrastructure-gate.md",
+      "sha256": "8379b6f1de12cfe4d0c9343b91a79031c818f2b79c2c21617a1002b959e1ebfa"
+    }
+  ]
+}

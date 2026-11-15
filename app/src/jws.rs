@@ -19,6 +19,7 @@ pub enum JwsType {
     HostStatus,
     AuthClient,
     AuthHost,
+    ProductRequest,
 }
 
 impl JwsType {
@@ -31,6 +32,7 @@ impl JwsType {
             Self::HostStatus => "acpr-host-status+jwt",
             Self::AuthClient => "acpr-auth-client+jwt",
             Self::AuthHost => "acpr-auth-host+jwt",
+            Self::ProductRequest => "acpr-product-request+jwt",
         }
     }
 
@@ -42,6 +44,7 @@ impl JwsType {
             "acpr-host-status+jwt" => Some(Self::HostStatus),
             "acpr-auth-client+jwt" => Some(Self::AuthClient),
             "acpr-auth-host+jwt" => Some(Self::AuthHost),
+            "acpr-product-request+jwt" => Some(Self::ProductRequest),
             _ => None,
         }
     }

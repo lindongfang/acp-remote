@@ -1,0 +1,46 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "aFormalGate": {
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-cldb-stage-a-independent-fixed-program-formal-execution-gate-2026-11-03",
+    "freezeSHA256": "8268cadb40ccdc5a7b8354a0f70d0d45030afe70b0357624f014886adf984f38",
+    "rootVerifiedMembers": 3,
+    "decision": "Pass-limited for fixed original stage0..22; compile/list/first exact run only; first failure stops, zero retries",
+    "executionHandedToOriginalTester": true,
+    "executionResultsNotYetReceived": true
+  },
+  "rawReferenceErratum": {
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-raw-reference-erratum-limited-closure-2026-11-03",
+    "freezeSHA256": "2bae1be0718e33e0185842c5652744b713b8314d70c56d359bc12a360b37dc29",
+    "rootVerifiedMembers": 3,
+    "issue": "WSS-RAW-REF001",
+    "decision": "Closed-limited; original frozen package preserved"
+  },
+  "rawIndependentDefinitions": {
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-independent-definitions-v1",
+    "freezeSHA256": "e7e91aff5fe0248b738c4a8d4fe507e37ec2c23f6575f3cde4cc2b0296713b7b",
+    "rootVerifiedMembers": 136,
+    "definedVectors": 1588,
+    "executedVectors": 0,
+    "codingGatePending": true,
+    "questions": [
+      "RAW-DEF001 original profile/intent closed boundary",
+      "RAW-DEF002 exact fallible signatures and private test wiring",
+      "RAW-DEF003 real Allocation failure not simulated"
+    ]
+  },
+  "rawEngineeringSupplement": {
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-reader-crosswalk-v1",
+    "freezeSHA256": "925b6b8655f7147d4d7ca88f9e2787ad844bfc7734f95ab2612e2e6ebbcf90c8",
+    "rootVerifiedMembers": 5,
+    "baselineVerifiedFiles": 886,
+    "directLexicalCandidateFiles": 49,
+    "fullReaderClosureProven": false,
+    "productEdits": 0
+  },
+  "rootInstalled": false,
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  }
+}

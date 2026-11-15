@@ -1,0 +1,12 @@
+{
+  "kind": "Independent exact installation review receipt",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-root639-native789-exact-installation-gate-2026-11-02",
+  "freeze": "3e2191cafad2292ef045d0e91c647a74494dfb5acf698fddb0ec1268cd1c77b8",
+  "membersVerified": 4,
+  "issue": "ROOT789-INSTALL-REV001",
+  "state": "Open",
+  "scope": "47 modifications +150 additions; seven current-head test expectations conflict with schema8",
+  "rootInstalled": false,
+  "otherProductHunks": "No loss of Root obligations or source overreach found",
+  "fixRequired": "seven test leaves current successful open/migration expected head=8 only; preserve historical fixtures and rollback oracles"
+}

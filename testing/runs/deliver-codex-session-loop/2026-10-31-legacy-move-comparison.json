@@ -1,0 +1,188 @@
+[
+  {
+    "name": "application-mod",
+    "pass": true,
+    "actualSha256": "f1195315ac8f74506cdb9c0cea8fde22f7dd9e98d66766842b1770b49fbdcfc1",
+    "expectedSha256": "f1195315ac8f74506cdb9c0cea8fde22f7dd9e98d66766842b1770b49fbdcfc1"
+  },
+  {
+    "name": "legacy-body",
+    "pass": true,
+    "actualSha256": "3eb10d4981ea4d99e9829d96e277b25d17bc29005f0aa1a85e30c51ee86d9588",
+    "expectedSha256": "3eb10d4981ea4d99e9829d96e277b25d17bc29005f0aa1a85e30c51ee86d9588"
+  },
+  {
+    "name": "legacy-prefix",
+    "pass": true,
+    "actualSha256": "de91d20fe6599f3b2ff4d6d40bf256b247de20f7e87e7dca36cdd131580aa55b",
+    "expectedSha256": "de91d20fe6599f3b2ff4d6d40bf256b247de20f7e87e7dca36cdd131580aa55b"
+  },
+  {
+    "name": "session-mod",
+    "pass": true,
+    "actualSha256": "64ba9532623abd0654831f53bb0d9796e97b778756b24cf9c501c2a56483f014",
+    "expectedSha256": "64ba9532623abd0654831f53bb0d9796e97b778756b24cf9c501c2a56483f014"
+  },
+  {
+    "name": "storage-factories",
+    "pass": true,
+    "actualSha256": "779d90160c3c77c5634251ee2b9ea8e66904930aaa4424aefee2a0cb76707501",
+    "expectedSha256": "779d90160c3c77c5634251ee2b9ea8e66904930aaa4424aefee2a0cb76707501"
+  },
+  {
+    "name": "sql-history",
+    "pass": true,
+    "actualSha256": "cae2932915944cf57eeecebf1759b7ab3f680e0ac90186d4a7fb9470a7e9bf42",
+    "expectedSha256": "cae2932915944cf57eeecebf1759b7ab3f680e0ac90186d4a7fb9470a7e9bf42"
+  },
+  {
+    "name": "sql-approvals",
+    "pass": true,
+    "actualSha256": "0596d97c20c0b9bbd7d1c0f8942134755aabcb6d812dac438610e364850339aa",
+    "expectedSha256": "0596d97c20c0b9bbd7d1c0f8942134755aabcb6d812dac438610e364850339aa"
+  },
+  {
+    "name": "history-child-filter",
+    "pass": true,
+    "actualSha256": "dba91167488a438d8b67cb236fbd946adbc9db7bd2880d33e89ce8fba4a2b403",
+    "expectedSha256": "dba91167488a438d8b67cb236fbd946adbc9db7bd2880d33e89ce8fba4a2b403"
+  },
+  {
+    "name": "domain-mod",
+    "pass": true,
+    "actualSha256": "6700252330bbeddf02f40375c05e5de419bafa20fbbb17e3e94656cc28b24b96",
+    "expectedSha256": "6700252330bbeddf02f40375c05e5de419bafa20fbbb17e3e94656cc28b24b96"
+  },
+  {
+    "name": "app/src/application/history.rs",
+    "pass": true,
+    "actualSha256": "21e8730d2ff28608f7ed04478571255eb31611f59257560a76dec40866ffa88f",
+    "expectedSha256": "21e8730d2ff28608f7ed04478571255eb31611f59257560a76dec40866ffa88f"
+  },
+  {
+    "name": "app/src/application/approvals.rs",
+    "pass": true,
+    "actualSha256": "d275786bb45330e6a2c554218c41c85b0fe85641232ed725e4bc8b3cc1fcf3f8",
+    "expectedSha256": "d275786bb45330e6a2c554218c41c85b0fe85641232ed725e4bc8b3cc1fcf3f8"
+  },
+  {
+    "name": "app/src/application/history/tests.rs",
+    "pass": true,
+    "actualSha256": "7031d8bfe132f87cad1f6bf24afd433df2e82d1c35df14c32acfadce7a14f52b",
+    "expectedSha256": "7031d8bfe132f87cad1f6bf24afd433df2e82d1c35df14c32acfadce7a14f52b"
+  },
+  {
+    "name": "app/src/session_storage/tests.rs",
+    "pass": true,
+    "actualSha256": "33d93429ce518775e9e62ea3bae337116d0cd79d21fc81cd7bbf84bca98d2855",
+    "expectedSha256": "33d93429ce518775e9e62ea3bae337116d0cd79d21fc81cd7bbf84bca98d2855"
+  },
+  {
+    "name": "app/src/session_storage/approvals/tests.rs",
+    "pass": true,
+    "actualSha256": "ef972fb0270a0175c012a2b7d364fffde6ecca8939660e5aebfcf82d092d6254",
+    "expectedSha256": "ef972fb0270a0175c012a2b7d364fffde6ecca8939660e5aebfcf82d092d6254"
+  },
+  {
+    "name": "app/src/lib.rs",
+    "pass": true,
+    "actualSha256": "f13a23576f46c510e60644c7de56ba6fa865738f1d1ce0f64fc01aff6cb2069f",
+    "expectedSha256": "f13a23576f46c510e60644c7de56ba6fa865738f1d1ce0f64fc01aff6cb2069f"
+  },
+  {
+    "name": "app/src/session_storage/schema.rs",
+    "pass": true,
+    "actualSha256": "fcec6f7e929056bdf7809534c7f9566c7bbe77f5ebb0c2a47be1a00e06564d18",
+    "expectedSha256": "fcec6f7e929056bdf7809534c7f9566c7bbe77f5ebb0c2a47be1a00e06564d18"
+  },
+  {
+    "name": "app/src/session_storage/product_schema.rs",
+    "pass": true,
+    "actualSha256": "e3d2d32c0e3ec32f1c6ef4ed4a971f31c4f203bd8ca6d67063f81b4f14aa6c00",
+    "expectedSha256": "e3d2d32c0e3ec32f1c6ef4ed4a971f31c4f203bd8ca6d67063f81b4f14aa6c00"
+  },
+  {
+    "name": "app/src/application/product_commands.rs",
+    "pass": true,
+    "actualSha256": "b6f65ccb84a191f3dd96a74a4fb3dcf32144a054d6756576dc89e4d9574fe068",
+    "expectedSha256": "b6f65ccb84a191f3dd96a74a4fb3dcf32144a054d6756576dc89e4d9574fe068"
+  },
+  {
+    "name": "app/src/session_storage/product_commands.rs",
+    "pass": false,
+    "actualSha256": "e4d1f446e7e3f1ac4f2496f0b2d7511298a57d29b5d2cb087e742900c8c27333",
+    "expectedSha256": "491e9651fa88b9c14ae71cf58861eb2a8d20b5e04ce708d30e0f037b51fe4aca"
+  },
+  {
+    "name": "app/src/adapters/product_requests.rs",
+    "pass": true,
+    "actualSha256": "93d71b80a060745a93536c908544a1266980a2dbe32fe3918aa5e2772687d248",
+    "expectedSha256": "93d71b80a060745a93536c908544a1266980a2dbe32fe3918aa5e2772687d248"
+  },
+  {
+    "name": "app/src/domain/native.rs",
+    "pass": true,
+    "actualSha256": "8d01cef25c7ba12ffd2aff94cc78fc8bfbe41d604feaf2312f13fe47cadf9abd",
+    "expectedSha256": "8d01cef25c7ba12ffd2aff94cc78fc8bfbe41d604feaf2312f13fe47cadf9abd"
+  },
+  {
+    "name": "app/src/domain/activity.rs",
+    "pass": true,
+    "actualSha256": "4ce09688e51216fb9bd6f1ebac7f43e67152bb569240c4bdf66669f15d9d8b32",
+    "expectedSha256": "4ce09688e51216fb9bd6f1ebac7f43e67152bb569240c4bdf66669f15d9d8b32"
+  },
+  {
+    "name": "app/src/domain/requests.rs",
+    "pass": true,
+    "actualSha256": "3be577a58c9065856c408f1be64ea06b915222795e046d906ef20f1676f1836b",
+    "expectedSha256": "3be577a58c9065856c408f1be64ea06b915222795e046d906ef20f1676f1836b"
+  },
+  {
+    "name": "app/src/domain/views.rs",
+    "pass": true,
+    "actualSha256": "ee531f845af4050809721d88e41fbce0f0bff16235cfdb763715a5dc845ca612",
+    "expectedSha256": "ee531f845af4050809721d88e41fbce0f0bff16235cfdb763715a5dc845ca612"
+  },
+  {
+    "name": "app/src/domain/product_commands.rs",
+    "pass": true,
+    "actualSha256": "e92b5ef511e4303c57e528bbb9c8395364edd856877eae36f657ab0a434fcac8",
+    "expectedSha256": "e92b5ef511e4303c57e528bbb9c8395364edd856877eae36f657ab0a434fcac8"
+  },
+  {
+    "name": "app/Cargo.toml",
+    "pass": true,
+    "actualSha256": "c48046e404e8d10b036eec48163295a1386aa2cbe4baeafbe479fe823638045d",
+    "expectedSha256": "c48046e404e8d10b036eec48163295a1386aa2cbe4baeafbe479fe823638045d"
+  },
+  {
+    "name": "app/Cargo.lock",
+    "pass": true,
+    "actualSha256": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+    "expectedSha256": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+  },
+  {
+    "name": "app/tests/acceptance/schema3_migration.rs",
+    "pass": true,
+    "actualSha256": "501c45a597b8a423ab4936e4dc4271e508eeb8c8e79d8fa1a02ead3908e173a5",
+    "expectedSha256": "501c45a597b8a423ab4936e4dc4271e508eeb8c8e79d8fa1a02ead3908e173a5"
+  },
+  {
+    "name": "app/tests/acceptance/schema4_migration.rs",
+    "pass": true,
+    "actualSha256": "9c82a6e1964d0648d93ec0cdbc6397eacb915fe8fd0a0af9ee598a561078a56c",
+    "expectedSha256": "9c82a6e1964d0648d93ec0cdbc6397eacb915fe8fd0a0af9ee598a561078a56c"
+  },
+  {
+    "name": "app/tests/acceptance/management_independent.rs",
+    "pass": false,
+    "actualSha256": "f93596287f840e5352499ce4b47a0d26c9bed49cec6802d076cdca15166d0261",
+    "expectedSha256": "72315f4caf1ea2c2a1cabb4673019ff4bfc1abaaab1031a89f9db5d0e2432f76"
+  },
+  {
+    "name": "app/tests/acceptance/management_deadline_semantics.rs",
+    "pass": true,
+    "actualSha256": "124890c8423b9537d6927ce3622c26d5b99bdf892bd98170b9f66d263f0ed4aa",
+    "expectedSha256": "124890c8423b9537d6927ce3622c26d5b99bdf892bd98170b9f66d263f0ed4aa"
+  }
+]

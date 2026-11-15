@@ -1,0 +1,124 @@
+{
+  "schema": "deliver-codex-session-loop-wp1-1.3-evidence-result-v1",
+  "date": "2026-11-08",
+  "task": "1.3",
+  "decision": "complete within planning/evidence-baseline scope",
+  "scope": "Fixed public ACP dual-version procedure/schema summary and same-version public-client discovery/replay protocol evidence. Does not certify complete CL scenarios, Node/SQL/Web, real Harness, or L5/L6.",
+  "reviewer": {
+    "path": "independent-review-not-yet-persisted",
+    "decision": "PASS for planning/evidence traceability only",
+    "scope": "CL-005, CL-032–041, CL-047–060; verified map-v2 identities/titles and existing evidence boundaries"
+  },
+  "evidence": {
+    "definition": "testing/runs/deliver-codex-session-loop/2026-10-31-acp-discovery-replay-definition.md",
+    "planningReview": "testing/runs/deliver-codex-session-loop/2026-10-31-acp-discovery-replay-planning-review.md",
+    "acceptance": "testing/runs/deliver-codex-session-loop/2026-10-31-acp-discovery-replay-acceptance.md",
+    "priorRawOutput": "testing/runs/deliver-codex-session-loop/2026-10-31-acp-discovery-replay-tests.txt",
+    "scenarioMap": "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.3-scenario-evidence-map-v2.json",
+    "scenarioMapReview": "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.3-scenario-evidence-map-v2-review.md",
+    "officialSources": "Official v1/v2 session-setup URLs reviewed in planning review; SDK stable v1/v2 schema identities cross-checked locally and against ACP README."
+  },
+  "schemaIdentity": [
+    {
+      "version": "v1",
+      "path": ".tmp/cl-wp1-probe/node_modules/@agentclientprotocol/sdk/schema/v1/schema.json",
+      "sha256": "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5"
+    },
+    {
+      "version": "v2",
+      "path": ".tmp/cl-wp1-probe/node_modules/@agentclientprotocol/sdk/schema/v2/schema.json",
+      "sha256": "28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d"
+    }
+  ],
+  "currentRerun": {
+    "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --test session_loop_acceptance acp_discovery_replay -- --nocapture",
+    "toolchain": "Rust 1.98.1",
+    "cargoTarget": ".tmp/q3-wp1-13-rerun-20261108",
+    "exitCode": 0,
+    "passed": 17,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 40,
+    "log": "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.3-rerun.stdout.txt",
+    "warnings": "278 existing library warnings; targeted test passed"
+  },
+  "currentSource": [
+    {
+      "path": "app/src/adapters/acp/mod.rs",
+      "sha256": "0d8929260eccb4be8574506dbbde6d00afaa3052e9ceac5edaa287b925e7db80",
+      "bytes": 1089
+    },
+    {
+      "path": "app/src/adapters/acp/model.rs",
+      "sha256": "2d397f9e0fcb113d762a16357593b5765dc8b9f49f3aa431fa151eaa3c30d3c6",
+      "bytes": 11806
+    },
+    {
+      "path": "app/src/adapters/acp/strategy.rs",
+      "sha256": "5b3ac99f696c289a90850610d0fdf1514b18414c90ee308a96ee2a6a109ae2b6",
+      "bytes": 25545
+    },
+    {
+      "path": "app/src/adapters/acp/transport.rs",
+      "sha256": "fe056d12ada9583e0cf7bcb4a60cab752319e6bf5cbb604e5a294d127b144c12",
+      "bytes": 20807
+    },
+    {
+      "path": "app/src/adapters/acp/tests.rs",
+      "sha256": "51a38519b3e661e853ce138744909847c8e8e22d5543089d66d224c9ff2604ad",
+      "bytes": 35479
+    },
+    {
+      "path": "app/src/adapters/acp/tests/discovery.rs",
+      "sha256": "87aec5171af61716ccd721b949eca01489a50c57aba09a624969b6e1fe5c1941",
+      "bytes": 16717
+    },
+    {
+      "path": "app/src/adapters/acp/README.md",
+      "sha256": "d881dc6291bd6d5a09737c6f37a22ffedda751a34e6ab6c160e0f05c58ddc6f4",
+      "bytes": 3289
+    },
+    {
+      "path": "app/tests/acceptance/acp_discovery_replay.rs",
+      "sha256": "a5ecb1a55ad8415b6b662107e7f216bb9b18ef96cf6ba6e9a0a1fa39a48bca0c",
+      "bytes": 38685
+    },
+    {
+      "path": "app/tests/session_loop_acceptance.rs",
+      "sha256": "b51d4033113a6198527c5064e61577b29747467e3cd5f320ffd7ba323b01d085",
+      "bytes": 443
+    },
+    {
+      "path": "app/Cargo.lock",
+      "sha256": "d111eb5e9310ba392cbd6dfe800a12f30bd4180bc6617171724ee01302f1af22",
+      "bytes": 63001
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/implementation-contract.md",
+      "sha256": "f7329a9c668f07c72a65089a61f75498771b965c92a083816db0d2c43acd6e66",
+      "bytes": 8399
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/tests.md",
+      "sha256": "a5e288d7225907983905d0b70b4142835dcc24f6892cbd62d524dc26f4855d65",
+      "bytes": 96814
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/harness-management/spec.md",
+      "sha256": "96b3335ffe5268972633ab5f7db001372d53b669fe0c231e0053d55e9b231989",
+      "bytes": 15492
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md",
+      "sha256": "250238dc3a0e938f24fb999366f7e8ac218e41869f207e71671573b827a2d123",
+      "bytes": 8174
+    }
+  ],
+  "limits": [
+    "Synthetic peer/public-client L3/L4 only; not full CL-005/032–041/047–060 acceptance.",
+    "No authenticated Node, SQL, WSS, Web, process-tree, or real Harness matrix.",
+    "17 prior acceptance plus current 17-case rerun do not close complete product tasks 3.1/3.2 or 5.x.",
+    "npm audit remains not run at user instruction; no registry metadata egress."
+  ],
+  "tasksCheckbox": "1.3 may be marked complete only for this bounded planning/evidence baseline; other task checkboxes remain governed by their own acceptance criteria."
+}

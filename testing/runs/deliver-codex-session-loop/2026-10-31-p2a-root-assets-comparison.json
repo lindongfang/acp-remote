@@ -1,0 +1,10 @@
+﻿{
+    "main_sha256":  "a4a85b41a00a4b7a046ac7a0006504d9ee3b79e74b993e4e3a47da9f3ddc1382",
+    "prepared_byte_text_equal":  true,
+    "removing_single_attribute_exact_original":  true,
+    "support_root_sha256":  "e733dbcbb617189e698ce757685d9375ed0479b721a0966a6f339139cd8484bf",
+    "support_original_sha256":  "e733dbcbb617189e698ce757685d9375ed0479b721a0966a6f339139cd8484bf",
+    "support_byte_equal":  true,
+    "product_lock_sha256":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+    "root_execution_not_production_change":  true
+}

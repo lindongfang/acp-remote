@@ -1,0 +1,109 @@
+{
+  "date": "2026-11-03",
+  "kind": "Root read-only verification of actual independent seven original modules",
+  "package": {
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-schema9-current-head-independent-oracle810-execution-v1",
+    "freezeSHA256": "2be2516fb3199453ef1bb56fc661b8715c754c68d70a1187eb8f60a2d611d350",
+    "all900MembersVerified": true,
+    "sourceManifestSHA256": "5522c0f82affcd016e37820ff171e002bf3d7d979013ba955c3bd06af2ebc769",
+    "sourceCount": 810,
+    "comparisonWithReviewedOracle810": {
+      "changed": [
+        "app/src/session_storage/approval_owner_schema/tests.rs",
+        "app/src/session_storage/approval_owner/test_control/tests.rs",
+        "app/src/session_storage/native_dispatch_schema/tests.rs",
+        "app/src/storage/pool_close_tests/independent_size_fence_tests.rs",
+        "app/src/storage/pool_close_tests/size_fence_tests.rs",
+        "app/tests/registration_acceptance/c/schema4_migration.rs",
+        "app/tests/registration_acceptance/m/schema5_registration_acceptance.rs"
+      ],
+      "added": [],
+      "removed": [],
+      "preserved": 803,
+      "sourceMismatches": []
+    }
+  },
+  "results": {
+    "kind": "actual first-run independent seven original modules on oracle810",
+    "pass": 37,
+    "fail": 2,
+    "retries": 0,
+    "modules": [
+      {
+        "module": "schema4_migration_acceptance::",
+        "pass": 11,
+        "fail": 0,
+        "exit": 0
+      },
+      {
+        "module": "session_storage::schema::independent_schema5::",
+        "pass": 7,
+        "fail": 0,
+        "exit": 0
+      },
+      {
+        "module": "storage::pool_close_tests::size_fence_tests::",
+        "pass": 3,
+        "fail": 0,
+        "exit": 0
+      },
+      {
+        "module": "storage::pool_close_tests::independent_size_fence_tests::",
+        "pass": 6,
+        "fail": 0,
+        "exit": 0
+      },
+      {
+        "module": "session_storage::approval_owner_schema::tests::",
+        "pass": 5,
+        "fail": 2,
+        "exit": 101
+      },
+      {
+        "module": "session_storage::native_dispatch_schema::tests::",
+        "pass": 2,
+        "fail": 0,
+        "exit": 0
+      },
+      {
+        "module": "session_storage::approval_owner::test_control::tests::",
+        "pass": 3,
+        "fail": 0,
+        "exit": 0
+      }
+    ],
+    "source_count": 810,
+    "unchanged_other_leaves": 803,
+    "cargo_lock_unchanged": true,
+    "root_installed": false,
+    "failed_cases": [
+      "session_storage::approval_owner_schema::tests::approval_schema8_invalid_ordinal_has_no_effect_and_future_version_is_not_repaired",
+      "session_storage::approval_owner_schema::tests::approval_schema8_upgrades_exact_seven_without_rewriting_old_definitions_or_values"
+    ],
+    "formal_001_006_run": false,
+    "formal_007_moved_to_combination": false,
+    "cldb_closed": false
+  },
+  "sourceConclusion": "The original failures and logs are preserved. Locations suggest old test assumptions; independent reviewer classification and a precise revised asset gate remain pending.",
+  "rootProtection": {
+    "sourceCount": 789,
+    "manifestSHA256": "9d7afb680899bd1f38740fe87d0f0dc8d18785cf48aab4f450dc697c45bd2478",
+    "sourceMismatches": [],
+    "indexSHA256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+  },
+  "limitations": [
+    "No Root product source installation",
+    "37/2 is not seven modules all passing",
+    "No formal WP4C001–006 execution",
+    "No transfer of formal WP4C007 evidence to this combined source",
+    "No CLDB, CLEANUP001 or STARTUP001 closure",
+    "Tracked tasks remain 6/25; ordinary Node factory, body owner, WSS, product page and real Harness work remain"
+  ],
+  "unperformed": [
+    "npm audit",
+    "git commit",
+    "git push",
+    "openspec archive",
+    "index writes"
+  ]
+}

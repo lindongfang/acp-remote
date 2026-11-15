@@ -1,0 +1,52 @@
+{
+  "schema": "deliver-codex-session-loop-wp1-1.4-pool-close-owner-followup-v1",
+  "date": "2026-11-08",
+  "scope": "Owner-runner lifecycle follow-up after the clean-target pool-close review",
+  "toolchain": {
+    "cargo": "1.98.1",
+    "rustc": "1.98.1",
+    "locked": true,
+    "offline": true,
+    "targetDir": ".tmp/q3-wp1-14-clean-20261108b"
+  },
+  "ownerRunner": "testing/ci/windows-owner.ps1",
+  "results": [
+    {
+      "test": "storage::pool_close_tests::owned_acquire_tests::trust_retention_tests::storage_drop_seals_and_drains_retained_owner_cycle",
+      "exitCode": 0,
+      "passed": 1,
+      "failed": 0,
+      "log": "2026-11-08-wp1-1.4-storage-drop-retention-exact-owner.stdout.txt",
+      "note": "The retained trust connection reached the real close handoff and registry close task joined under the authorized owner runner."
+    },
+    {
+      "testFilter": "storage::pool_close_tests::",
+      "exitCode": 101,
+      "passed": 23,
+      "failed": 6,
+      "log": "2026-11-08-wp1-1.4-pool-close-group-owner.stdout.txt",
+      "stderr": "2026-11-08-wp1-1.4-pool-close-group-owner.stdout.txt.stderr",
+      "note": "The six failures were the independent RPC probes because RPC_FIXTURE_ROOT was not provided; the remaining 23 pool-close tests passed. This run is configuration-invalid for the RPC subset and is not a product pass."
+    },
+    {
+      "testFilter": "storage::pool_close_tests::independent_size_fence_tests::",
+      "fixtureRoot": ".tmp/q3-wp1-14-owned-fixtures-20261108",
+      "finished": false,
+      "watchdogSeconds": 60,
+      "log": "2026-11-08-wp1-1.4-rpc-group-owner.stdout.txt",
+      "stderr": "2026-11-08-wp1-1.4-rpc-group-owner.stdout.txt.stderr",
+      "note": "With the fixture root supplied, the first two RPC probes still timed out with pool_closed=true, pool_size=0 and registry_status=Pending; the process produced no final harness summary within the process gate. The owned fixture directories and failure output were retained."
+    }
+  ],
+  "interpretation": [
+    "The trust-retention close lifecycle is not reproduced as a product failure under the authorized Windows owner runner.",
+    "The RPC held-return probes retain a contract mismatch with SQLx 0.8.6: PoolConnection::return_to_pool() publishes the connection while constructing the future, so an unpolled future cannot be used to require Pool::size()==1.",
+    "No production code, timeout, or assertion was weakened."
+  ],
+  "preservedFailures": [
+    "WP1.4 still lacks a valid complete Rust library result; the prior serial run terminated with STATUS_INVALID_HANDLE.",
+    "The full strict Clippy gate remains blocked by the existing repository diagnostics.",
+    "npm audit was not run because the user declined registry metadata egress."
+  ],
+  "taskStatus": "WP1 task 1.4 remains open."
+}

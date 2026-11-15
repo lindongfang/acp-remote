@@ -1,0 +1,105 @@
+﻿{
+    "utc":  "2026-10-31T02:03:26.4142954Z",
+    "kind":  "Final independent planning only; A-H not-run; TG01 closed-definition only",
+    "contractSha256":  "81d0b6ef3d80dcb295f3231f8f66cc2474ed5b0adf43030f3a4b902806c6b3f7",
+    "definitionSha256":  "faa72a83e9a168059a5662eefe9ff54a076bee10a0ea76c16226d670e08e259a",
+    "original790DefinitionSha256":  "763dcbec01c17660a5ed4a401a24a92922ca9454154770250a3affa7b719cb7c",
+    "groupCount":  8,
+    "groups":  [
+                   "A",
+                   "B",
+                   "C",
+                   "D",
+                   "E",
+                   "F",
+                   "G",
+                   "H"
+               ],
+    "inputs":  [
+                   {
+                       "path":  "D:/Project/acp-remote/AGENTS.md",
+                       "sha256":  "1019d8854aca68d2519e599d0f3a1484e49667273708a49ac03818834aa38be3",
+                       "bytes":  4485
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/config.yaml",
+                       "sha256":  "31401fb44cffde8da354d18138addf206ab047d5953249883411af81b4c17779",
+                       "bytes":  11417
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/role/tester.md",
+                       "sha256":  "55811d6dde7b6dc50df076037fff12df93fc941e61d3f42ba3ae4024f32d5e14",
+                       "bytes":  3538
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/p2a-tool-anchor-contract.md",
+                       "sha256":  "81d0b6ef3d80dcb295f3231f8f66cc2474ed5b0adf43030f3a4b902806c6b3f7",
+                       "bytes":  17192
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+                       "sha256":  "608002676e126e7c1711f1deff4087800fbf84f51194b6a5e0ed570a5e138fe4",
+                       "bytes":  11464
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/p1-raw-observations-contract.md",
+                       "sha256":  "a071335b22ed7b028323f1e629d9df3460e858b1434b0adf43aa76d3659f1f3a",
+                       "bytes":  8157
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/view-window-contract.md",
+                       "sha256":  "2d8b7362a3e1c8869bbe8d8da1808b611c1a512a351aab504ae1c6b3f6f00de8",
+                       "bytes":  7198
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/view-budget-port-contract.md",
+                       "sha256":  "d6ee1d36b701912feca8c7fc1d1c345bc24beb0e99bb618c2ecaaf347a631098",
+                       "bytes":  16188
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/view_observations.rs",
+                       "sha256":  "0164d462fa3bd16740a664a02407fc67a13176ddfb2b1f73dfba8e4381ee225a",
+                       "bytes":  11833
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/strategy.rs",
+                       "sha256":  "72ad187e25cf6ba4c530be4fb8eaa6c482fcca9bab32c3a3220b4fdd42842e4c",
+                       "bytes":  21873
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/model.rs",
+                       "sha256":  "a14f33cf708aa1a93b8291fbf0e5d55f18627190d54f086505f4f1c883bb2b60",
+                       "bytes":  8627
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/transport.rs",
+                       "sha256":  "93bd37e419387eefbb5f5a8819bbbf9c678f44a0baccec89b9edfc61d34f535b",
+                       "bytes":  20278
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/domain/views.rs",
+                       "sha256":  "a22bb6e5e9a0e7fdca3b66e9e3dc18025a37ab57832ea95b44e509d189255f26",
+                       "bytes":  23237
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/domain/views/staging.rs",
+                       "sha256":  "d2a2a6ec3756777a5758d05ffd51e7a78f9f62fb5158283545854c77b00b0f09",
+                       "bytes":  17010
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/Cargo.lock",
+                       "sha256":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324",
+                       "bytes":  65680
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v1/schema.json",
+                       "sha256":  "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5",
+                       "bytes":  256449
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v2/schema.json",
+                       "sha256":  "28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d",
+                       "bytes":  328217
+                   }
+               ]
+}

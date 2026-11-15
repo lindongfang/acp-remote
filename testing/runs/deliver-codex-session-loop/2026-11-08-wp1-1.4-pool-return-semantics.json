@@ -1,0 +1,25 @@
+{
+  "schema": "deliver-codex-session-loop-wp1-1.4-pool-return-semantics",
+  "date": "2026-11-08",
+  "toolchain": {
+    "sqlx": "0.8.6",
+    "source": "D:/Application/Rust/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sqlx-core-0.8.6/src/pool/connection.rs"
+  },
+  "finding": {
+    "api": "PoolConnection::return_to_pool",
+    "behavior": "The method synchronously takes the live connection and floats it into the pool while constructing the returned future. Polling the future performs the release ping and final return/close maintenance.",
+    "impact": "An unpolled return_to_pool future does not keep pool.size() at the checked-out count. Pool::close may observe the floating connection, close it, and reach size 0 before the future is polled.",
+    "affected_probe": "pool_close_tests::independent_size_fence_tests::rpc001_002_original_floating_blocks_until_normal_ack_first_tail",
+    "observed": {
+      "pool_closed": true,
+      "pool_size": 0,
+      "registry_status": "Pending",
+      "watchdog": "20s"
+    },
+    "classification": "验收前置条件与当前 SQLx API 语义不相容；保留失败，不修改生产关闭逻辑、不放宽门、不将其记为通过。"
+  },
+  "evidencePreserved": [
+    "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.4-rust-lib-serial.stdout.txt",
+    "testing/runs/deliver-codex-session-loop/2026-11-08-wp1-1.4-focused-followup-v2.json"
+  ]
+}

@@ -1,0 +1,115 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "status": "Mixed; no Root installation",
+  "execution": {
+    "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-default-historical-fixture-combined-execution-v1",
+    "freezeSHA256": "9ae0f8c18620611b3cbaff216ece4445f66fd70e24768829985443bd49384576",
+    "members": 870,
+    "allRootVerified": true,
+    "sourceCount": 821,
+    "sourceManifestSHA256": "05ae55040079909d46f0213c8f1096261fa799aaa4c2f3437f4a22b3ada033fa",
+    "changedLeaves": 2,
+    "addedFixtures": 2,
+    "productionChanges": 0,
+    "compileExit": 0,
+    "exactLists": [
+      1,
+      1
+    ],
+    "firstRunResults": [
+      {
+        "test": "schema3_migration_acceptance::cl004_real_engine_commit_failure_is_not_a_precommit_hook",
+        "passed": 1,
+        "failed": 0,
+        "scope": "schema1 and2, actual SQLite COMMIT787, rollback and normal reopen controls"
+      },
+      {
+        "test": "session_storage::management_audit::dev_tests::audit_dev_real_storage_schema6_upgrade_and_fault_rollback",
+        "passed": 0,
+        "failed": 1,
+        "exitCode": 101
+      }
+    ],
+    "retryCount": 0,
+    "sourceLockBinaryUnchanged": true
+  },
+  "failure": {
+    "issue": "Q3-HIST-AUDIT-PHYSICAL001",
+    "priority": "P2",
+    "state": "Open",
+    "file": "app/src/session_storage/management_audit/dev_tests.rs",
+    "line": 208,
+    "operation": "Original Fixture.finish(false), first synchronous share_mode(0) database open",
+    "windowsError": 32,
+    "precedingObservedAssertions": [
+      "storage.close returned",
+      "registry close status Complete"
+    ],
+    "controlFlowReached": [
+      "seven migration faults",
+      "successful9/9 migration",
+      "typed historical preservation",
+      "twelve added table check",
+      "audit append"
+    ],
+    "perFaultDynamicTrace": false,
+    "causeKnown": false,
+    "physicalCloseConfirmed": false,
+    "cleanupReached": false,
+    "preservedArea": "D:/Project/acp-remote/.tmp/q3hist1/tmp/acp-remote-audit-dev-41116-1793655510800991100-historical6",
+    "followupProbeOrSQLiteOpen": false,
+    "removedOrACLChanged": false
+  },
+  "reviews": [
+    {
+      "kind": "afterimage static",
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-historical-audit-and-independent-afterimage-static-2026-11-03",
+      "freezeSHA256": "c7a746acd1675b255ffa202823e451bcdbe18d412d372962eb66cc3731950d3f",
+      "members": 2,
+      "rootVerified": true
+    },
+    {
+      "kind": "execution limited Mixed",
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-historical-fixture-first-execution-and-audit-close-red-2026-11-03",
+      "freezeSHA256": "aea12b542199b02ef218160627e807d17c3a8c963018cb94443ef335857fd224",
+      "members": 2,
+      "rootVerified": true
+    }
+  ],
+  "wss": {
+    "designPath": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-wss-product-assembly-design-v1",
+    "designFreeze": "974c0eee567028369bb9e4be655e86cc76ef408de3ede31f706a05de2ffaafa3",
+    "members": 82,
+    "rootVerified": true,
+    "implemented": false,
+    "reviewPending": true,
+    "productionGaps": [
+      "ordinary Node owner factory",
+      "body production cfg exposure",
+      "real socket authority and flush",
+      "queue/native/approval routes",
+      "Web main entry"
+    ]
+  },
+  "next": "Investigate real worker ownership and closure with a precise design; no weakening physical assertion or rerun to erase first failure",
+  "stillOpen": [
+    "Q3-CBT-DEFAULT-FIXTURE001",
+    "Q3-CBT-DEFAULT-CONTEXT001",
+    "CLDB",
+    "strict",
+    "complete C/D",
+    "Root installation"
+  ],
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "unperformed": [
+    "npm audit",
+    "git commit",
+    "git push",
+    "openspec archive",
+    "index writes"
+  ]
+}

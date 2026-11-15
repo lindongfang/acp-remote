@@ -1,0 +1,249 @@
+{
+  "scope": "A prompt data component accepted independently for later combination; no Root installation",
+  "candidateFreeze": "cbc8120e4a0386f55a78852668c3b2cc3cfd8b3a3d432d958c5fad2a72878c14",
+  "independentFreeze": "a82645b739315441953c4eb57ccb5571c882ed5321b26b879ec7e645df3dffba",
+  "candidateSources": 450,
+  "independentSources": 452,
+  "independentMembersVerified": 648,
+  "groups": "PA01-08 limited pass",
+  "publicFunctions": 7,
+  "privateFunctions": 5,
+  "differential": {
+    "old": 70,
+    "candidate": 70,
+    "wirePerLibrary": 8,
+    "expectedErrorsPerLibrary": 62,
+    "byteEqual": true,
+    "tokio": "1.54.1",
+    "sharedLockedPackagesEqual": 237
+  },
+  "typeNegativeCases": 7,
+  "typePositiveRuns": 3,
+  "fmt": 0,
+  "defaultAllTargetCheck": 0,
+  "allFeatureAllTargetCheck": 0,
+  "defaultAllTargetStrict": 0,
+  "allFeatureAllTargetStrict": 0,
+  "resourceScope": "queue/IO joined and Storage.close awaited; synthetic DB retained, no independent first-share-zero proof",
+  "combinationPrerequisite": "Rebase A2 private fixture factory call without reopening production audit injection, rerun private PA05-07 and close tails on actual combined source",
+  "allowedProductPatch": "7d4602ea271080e7de7c8c686ef28f79fcb179086b15496a052fd94ec4727900",
+  "rootUnchanged": 636,
+  "rootSourceManifest": "e127897fb5e244f8b380496fedee41d5487488974ef11f21851b48b51f5f7939",
+  "nodeWssHarness": false,
+  "uploadOriginVerified": false,
+  "parentTasksSigned": false,
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/REPORT.md",
+      "sha256": "a569583ea6a179e0928dc503a80ca1f2b00460f93f969b96b49300ed1e445481"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/DELIVERY.json",
+      "sha256": "fe21c5d3019249151309db89e1dc32fdefe58cd422e0a4f3357c1df8c88bd52e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/summary.json",
+      "sha256": "d965f0fe5ae98154a2475a73a4ed6f14ee4ed83ca69cbd6729cbc6eee5c1ab53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/freeze.json",
+      "sha256": "a82645b739315441953c4eb57ccb5571c882ed5321b26b879ec7e645df3dffba"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/effective-source-before.json",
+      "sha256": "a0f00713a0abc7dd715f7441c2d6434b406a253011409bb0fbf20d5ae5dab4ba"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/source-after-verified.json",
+      "sha256": "f560a00535dbd7134d2948bfb878f935df05aacd8530b3a08f0339259b835ee8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/delta-from-first.json",
+      "sha256": "27ecbe13e36da7a28a62a6e27d636c25d0afb76365b586e05b7941a5c9a6c90b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/environment.json",
+      "sha256": "ba9bd0912d17df61e77311b9c96c6df69fdc15a936d91976b20c63b2d03140d5"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/probe-lock-classification.json",
+      "sha256": "e4f1cb16f955d383987ae07b5569f6d78d04c4231b392d7de5d46e9d2b9f001f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/cleanup-owner-scope.json",
+      "sha256": "80b2eb0071524dec5cdf279d1dbe68a141682b387354352a747981b478774602"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/cleanup-sandbox-correction.json",
+      "sha256": "12bcb6618d9bb4a412200e84bdc00b77f4e62b8e0f4ec46109258aa5e61266dc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/workspace/app/src/lib.rs",
+      "sha256": "edf312134c8961ddd3b3238faa3f435a8e91a3e179369b1f71ccac0e9391f1f0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/workspace/app/tests/prompt_document_acceptance.rs",
+      "sha256": "a40379915fae73fba1befdb7cb552bae9608968a35cbc2121d6f5bd9226da97f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/workspace/app/tests/acceptance/prompt_document_private.rs",
+      "sha256": "6b97755e3803db52e36fa043060f19d61dc2bdd73707cdba7c00edf5673c0aff"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/commands.json",
+      "sha256": "a24882253d244d21f0750a8c94196ba3e519b59abda66bf44934cf8b68385a0d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/differential.json",
+      "sha256": "8171f95db1af82f85cca4c13fc9f418f01daaeea8a28bea3a8fdde31766947cc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-new-metadata.stderr.log",
+      "sha256": "eb4f2b7acd9c7ee86346789bad0ba11312414b3da9bf6aa44819860f0b3b22bd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-new-metadata.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-new.json",
+      "sha256": "ba7b745df745f4d2eea91c9073dac07d7bfb24c48bd47dd73b495d73eb235b38"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-new.stderr.log",
+      "sha256": "e6b6b55479724d361c2ecdcae954f82bd433600de0aa9d168b3deb179a312e3e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-new.stdout.log",
+      "sha256": "c46a3bd6ee9a4f405fa097444cbbf854294412b32d5f41685ab678eae2543f37"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-old-metadata.stderr.log",
+      "sha256": "2f038c086e6913a3d9e2697daf37c9cb35d17242ff9299d12192a7f742492d7d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-old-metadata.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-old.json",
+      "sha256": "ba7b745df745f4d2eea91c9073dac07d7bfb24c48bd47dd73b495d73eb235b38"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-old.stderr.log",
+      "sha256": "d819ac9ece71817895d5b1d9b974a46c4dfddef30f6f78d23d6f254ec6f0e7f5"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/fixed2-sequence-old.stdout.log",
+      "sha256": "c46a3bd6ee9a4f405fa097444cbbf854294412b32d5f41685ab678eae2543f37"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution-fixed-lock-2/lock-classification-before-run.json",
+      "sha256": "aff2a9646b97ce300a0d42c22293f78f2a4fe79bc5f1094d3c36d3c113f65f38"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/check-all-features.stderr.log",
+      "sha256": "3f6f87fa4e1081df003f369ad06d87e7d66c635232f5be9f2e0bd655c1cf0f0d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/check-all-features.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/check-default.stderr.log",
+      "sha256": "23adeaae19ef0d755601557714412d5b5a8f025480998ddadc9871aac55f2ea8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/check-default.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/commands.json",
+      "sha256": "9f978fca5edab30e0a04cd14a4d67a97ab1b77310d7282a3e49ad7a808ad92ab"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/differential.json",
+      "sha256": "559e88c12c5560702dc8c7e6edcc85c31417f9e7d19f4d38b37d1bbfe2d04c96"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/fmt.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/fmt.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/private-five.stderr.log",
+      "sha256": "6e629d27598d4e6f4ace5aee40856ce415e232855fc2252d4eb3c324b2220dcc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/private-five.stdout.log",
+      "sha256": "ff5bc94e400c899ea2ce9b70329785f250b1842740cbcb542834643d235bf3da"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/scope.json",
+      "sha256": "fa9bc9da723cd7142f502183db0893c44b8e58cc025a64a468a2699e1fd9dee6"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/sequence-new.json",
+      "sha256": "ba7b745df745f4d2eea91c9073dac07d7bfb24c48bd47dd73b495d73eb235b38"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/sequence-new.stderr.log",
+      "sha256": "f6074b4df087615f19be7f35735670116067e8ba83489c85d21be2d01beddf98"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/sequence-new.stdout.log",
+      "sha256": "c46a3bd6ee9a4f405fa097444cbbf854294412b32d5f41685ab678eae2543f37"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/sequence-old.json",
+      "sha256": "ba7b745df745f4d2eea91c9073dac07d7bfb24c48bd47dd73b495d73eb235b38"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/sequence-old.stderr.log",
+      "sha256": "46319cbcc560eeb0920a2e3e168848208cca83d30a8eb990f9fc23ec672aed54"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/sequence-old.stdout.log",
+      "sha256": "c46a3bd6ee9a4f405fa097444cbbf854294412b32d5f41685ab678eae2543f37"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/strict-all-features.stderr.log",
+      "sha256": "bb29d0b3473c24968754811c90ac1edcee80e2e100359677ea494328aaae596b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/strict-all-features.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/strict-default.stderr.log",
+      "sha256": "59b0a63e426a327e3840b60dc098cc630f809c057ace96ad7b03972af6824d0e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/execution/strict-default.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/first-phase/ordinary-type-probe/negative-results.json",
+      "sha256": "c661376ce0c1e575555cd64e0e215d85e597fdde465801f13aca5111cf18ca83"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/first-phase/ordinary-type-probe/isolated-constructor-results.json",
+      "sha256": "6974b3a41a866a588206e9eb49ef11e549ce81902e69574b135c835cd9631ff3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/review/final-limited-review.md",
+      "sha256": "b452988bdafba4121fe4c7c5c7bb71170e078d6f2fd531e4b31c10240f236466"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/review/final-verification.json",
+      "sha256": "3a190e1e4aede1238eaf7c26965347b463cae26f5107d5a2df1ce37fda886d0b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-final/review/precision2-gate.md",
+      "sha256": "4faf99e39aed2711962151d3ac3b605c1ecc38056fa35b2972ea3f4283aa5311"
+    }
+  ]
+}

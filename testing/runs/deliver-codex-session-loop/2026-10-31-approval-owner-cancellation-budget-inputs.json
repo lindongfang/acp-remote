@@ -1,0 +1,71 @@
+﻿{
+    "utc":  "2026-10-30T21:23:50.7149181Z",
+    "kind":  "read-only planning inputs; no tests executed",
+    "inputs":  [
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/approval-owner-contract.md",
+                       "sha256":  "6cd3167b648ae98a110140af8ddd1493092ea990e53eb5b4dcf1f084971ad591",
+                       "bytes":  22193
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/specs/permission-approvals/spec.md",
+                       "sha256":  "58cf6faacddce9c774eb6344d34f7a7b5b4e21e045f8589a965069a4658636c6",
+                       "bytes":  7131
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/implementation-contract.md",
+                       "sha256":  "bc7888b887fc42d981cb55b4067605d1971a9a35adeb208c2cd804b5798b2536",
+                       "bytes":  30587
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/plan.md",
+                       "sha256":  "37ed7d796a2e4caaa8d2554003bb52fe970bec09dcf8c38a8043fa46ec9520da",
+                       "bytes":  21660
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/openspec/changes/deliver-codex-session-loop/tasks.md",
+                       "sha256":  "0949356efb13bb8438d477b594e237d32f628475d260d50303e20cf017c64a49",
+                       "bytes":  3753
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/package.json",
+                       "sha256":  "6c74af591623a1c362d9b1073cb43268f6e4e532fafa419f73465225628bb12c",
+                       "bytes":  5700
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v1/schema.json",
+                       "sha256":  "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5",
+                       "bytes":  256449
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v2/schema.json",
+                       "sha256":  "28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d",
+                       "bytes":  328217
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/model.rs",
+                       "sha256":  "a14f33cf708aa1a93b8291fbf0e5d55f18627190d54f086505f4f1c883bb2b60",
+                       "bytes":  8627
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/strategy.rs",
+                       "sha256":  "cb91ed1d4395ac70af35fb422a8c97e1b2edf93f76feb39b10f638f3cf43debf",
+                       "bytes":  21723
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/app/src/adapters/acp/transport.rs",
+                       "sha256":  "93bd37e419387eefbb5f5a8819bbbf9c678f44a0baccec89b9edfc61d34f535b",
+                       "bytes":  20278
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/runs/deliver-codex-session-loop/2026-10-31-approval-owner-definition.md",
+                       "sha256":  "f59e1bb256cfd797b17705222a0817f16ac20473cd37ca9c6554142871b868dc",
+                       "bytes":  18860
+                   },
+                   {
+                       "path":  "D:/Project/acp-remote/testing/runs/deliver-codex-session-loop/2026-10-31-approval-owner-gaps.md",
+                       "sha256":  "e3564a43fe3a88c45d9f57a75204a4ee28274c9f5230640057304fb0744709f1",
+                       "bytes":  4950
+                   }
+               ]
+}

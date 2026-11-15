@@ -1,0 +1,63 @@
+{
+  "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-schema9-runtime-f05-composition-v3",
+  "freeze": "acc71fec9d0d7506e510e2abf64076af97e0c60cd56a31f0222575418ede2aa6",
+  "members": 854,
+  "baseline": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-schema9-production-namespace-hooks-v2",
+  "sourceCount": 807,
+  "modified": 2,
+  "added": 0,
+  "preserved": 805,
+  "paths": [
+    "app/src/node/catalog/development_tests.rs",
+    "app/src/session_storage/catalog_sql.rs"
+  ],
+  "patch": "5e43247f75bf0b6f654240392cea6875cbb952dcd1f28550735dc032ccab05c0",
+  "sourceManifest": "3f9697f9c9f4aee971f00d83c4593dc1b66560afeec38807889fcd1432d11f1d",
+  "runs": {
+    "configuration-before-maintenance": {
+      "code": 101,
+      "sourceUnchanged": true,
+      "tests": "test result: FAILED. 21 passed; 1 failed; 0 ignored; 0 measured; 686 filtered out; finished in 0.14s"
+    },
+    "configuration-after-maintenance": {
+      "code": 0,
+      "sourceUnchanged": true,
+      "tests": "test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 686 filtered out; finished in 0.16s"
+    },
+    "composition-migration": {
+      "code": 0,
+      "sourceUnchanged": true,
+      "tests": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 700 filtered out; finished in 1.04s"
+    },
+    "composition-namespace-hooks": {
+      "code": 0,
+      "sourceUnchanged": true,
+      "tests": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 706 filtered out; finished in 6.22s"
+    },
+    "composition-check": {
+      "code": 0,
+      "sourceUnchanged": true,
+      "tests": null
+    },
+    "composition-fmt": {
+      "code": 0,
+      "sourceUnchanged": true,
+      "tests": null
+    },
+    "composition-strict": {
+      "code": 101,
+      "sourceUnchanged": true,
+      "tests": null
+    }
+  },
+  "strict": {
+    "exit": 101,
+    "before": 683,
+    "after": 683,
+    "added": 0,
+    "removed": 0
+  },
+  "rootInstalled": false,
+  "cleanupIncluded": false,
+  "formalAcceptanceExecuted": false
+}

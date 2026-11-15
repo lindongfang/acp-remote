@@ -1,54 +1,350 @@
-use super::model::{field, object};
+#![allow(
+    clippy::significant_drop_tightening,
+    reason = "Explicit protocol lock scopes define poll/receipt/Stop linearization; no guard spans async waiting"
+)]
+//! Public ownership handles. State, reader, writer and lifecycle live in separate modules.
 use super::{
-    AcpError, PermissionRequest, PromptResult, RawMessage, Request, RequestKind, RpcId,
-    SessionEvent, SessionId, Strategy, Version,
+    AcpError, ConfigSourceStamp, ExtensionFields, OptionId, PermissionRequest, PromptResult,
+    RawMessage, Request, RequestKind, RpcId, SessionEvent, SessionId, SessionListing, Strategy,
+    UnsupportedRequest, Version, raw_json::OwnedRawValue, raw_model as raw,
 };
-use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::{
-    collections::{HashMap, HashSet},
+    fmt,
     sync::Arc,
+    task::{Context, Poll},
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
-    time::{Instant, timeout_at},
+    io::{AsyncRead, AsyncWrite},
+    time::Instant,
 };
-const MAX_FRAME: usize = 32 * 1024 * 1024;
-const MAX_PENDING: usize = 64;
-const MAX_SERVER_IDS: usize = 4096;
+mod lifecycle;
+mod observed;
+pub use observed::*;
+mod reader;
+mod state;
+mod writer;
+use state::{Core, WriteCell};
+#[derive(Clone)]
+pub struct ConnectionScope(Arc<()>);
+impl PartialEq for ConnectionScope {
+    fn eq(&self, o: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &o.0)
+    }
+}
+impl Eq for ConnectionScope {}
+impl fmt::Debug for ConnectionScope {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ConnectionScope(..)")
+    }
+}
+#[derive(Clone)]
+pub struct Connection {
+    core: Arc<Core>,
+}
+pub struct EventReceiver {
+    core: Arc<Core>,
+    ended: bool,
+}
+pub struct IoOwner {
+    core: Arc<Core>,
+}
+#[derive(Clone, Copy, Debug)]
+pub enum ResponseDeadline {
+    At(Instant),
+    Unbounded,
+}
+#[derive(Clone, Debug)]
+pub enum OutboundKind {
+    Request(RequestKind),
+    Cancel(SessionId),
+    PermissionReply { session: SessionId, id: RpcId },
+    UnsupportedReply(RpcId),
+}
+#[derive(Clone)]
+pub struct WriteIdentity {
+    scope: ConnectionScope,
+    id: Option<RpcId>,
+    kind: OutboundKind,
+    stamp: Option<ConfigSourceStamp>,
+}
+impl WriteIdentity {
+    #[must_use]
+    pub fn scope(&self) -> ConnectionScope {
+        self.scope.clone()
+    }
+    #[must_use]
+    pub const fn id(&self) -> Option<&RpcId> {
+        self.id.as_ref()
+    }
+    #[must_use]
+    pub const fn kind(&self) -> &OutboundKind {
+        &self.kind
+    }
+    #[must_use]
+    pub const fn setup_stamp(&self) -> Option<&ConfigSourceStamp> {
+        self.stamp.as_ref()
+    }
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Phase {
-    Fresh,
-    Initializing,
-    Ready,
-    Closed,
+pub enum WriteStep {
+    Chunk { offset: usize, total: usize },
+    Flush { total: usize },
 }
-struct Pending {
-    kind: RequestKind,
-    deadline: Instant,
-    snapshot: bool,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum IoProgress {
+    Accepted(usize),
+    Flushed,
 }
-/// One transport owner, one writer, no detached tasks or unbounded output queues.
-/// Dropping it closes its I/O halves; the separate process owner must still reclaim its Job.
-pub struct Connection<R, W> {
-    owner_tag: Arc<()>,
-    reader: BufReader<R>,
-    writer: W,
-    input: Vec<u8>,
-    pending: HashMap<RpcId, Pending>,
-    server_pending: HashMap<RpcId, ([u8; 32], bool)>,
-    server_seen: HashSet<RpcId>,
-    next_id: i64,
-    phase: Phase,
-    strategy: Option<Strategy>,
-    rejected: Option<RawMessage>,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FenceRejection {
+    Stopped,
+    Cancelled,
+    StaleTarget,
+    RevisionChanged,
+    NotReady,
+    RequiredStateUnavailable,
+}
+pub trait PollIo {
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<IoProgress, AcpError>>;
+    /// Retains this same attempt without polling the provider; its owner must register a wake source.
+    /// # Errors
+    /// Rejects parking after this proxy has already attempted IO or recorded a park outcome.
+    fn park(&mut self) -> Result<(), AcpError>;
+}
+pub trait WriteFence: Send + Sync {
+    /// # Errors
+    /// Rejects before polling when the private application fence is no longer valid.
+    fn check_and_poll(
+        &self,
+        identity: &WriteIdentity,
+        step: WriteStep,
+        cx: &mut Context<'_>,
+        io: &mut dyn PollIo,
+    ) -> Result<(), FenceRejection>;
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ZeroReason {
+    Cancelled,
+    Deadline,
+    FenceRejected,
+    ConnectionClosed,
+    Abandoned,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WriteFailure {
+    Io,
+    Deadline,
+    Cancelled,
+    FenceRejected,
+    InvalidFence,
+    ConnectionLost,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WriteReport {
+    Zero {
+        reason: ZeroReason,
+    },
+    Written,
+    Unknown {
+        accepted: usize,
+        cause: WriteFailure,
+    },
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WriteProgress {
+    Reserved,
+    Queued,
+    Writing { accepted: usize, total: usize },
+    Flushing { total: usize },
+    Finished(WriteReport),
+}
+#[derive(Clone)]
+pub struct WriteProbe {
+    cell: Arc<WriteCell>,
+}
+impl WriteProbe {
+    #[must_use]
+    pub fn scope(&self) -> ConnectionScope {
+        self.cell.identity.scope()
+    }
+    #[must_use]
+    pub fn id(&self) -> Option<&RpcId> {
+        self.cell.identity.id()
+    }
+    #[must_use]
+    pub fn progress(&self) -> WriteProgress {
+        self.cell.lock().progress
+    }
+}
+pub struct Reservation {
+    core: Arc<Core>,
+    cell: Arc<WriteCell>,
+    payload: state::Payload,
+    armed: bool,
+}
+impl Reservation {
+    pub(crate) fn view_cell_key(&self) -> u64 {
+        self.cell.key
+    }
+    #[must_use]
+    pub fn scope(&self) -> ConnectionScope {
+        self.cell.identity.scope()
+    }
+    #[must_use]
+    pub fn id(&self) -> Option<&RpcId> {
+        self.cell.identity.id()
+    }
+    #[must_use]
+    pub fn kind(&self) -> &OutboundKind {
+        self.cell.identity.kind()
+    }
+    #[must_use]
+    pub fn setup_stamp(&self) -> Option<&ConfigSourceStamp> {
+        self.cell.identity.setup_stamp()
+    }
+    #[must_use]
+    pub fn probe(&self) -> WriteProbe {
+        WriteProbe {
+            cell: self.cell.clone(),
+        }
+    }
+    /// # Errors
+    /// Reports raw encoding or allocation failure without IO; borrowing failure retains this reservation and its slots.
+    pub fn encode(&self) -> Result<EncodedFrame, AcpError> {
+        let payload = match &self.payload {
+            state::Payload::Raw(v) => v.clone(),
+            state::Payload::Request { method, params } => {
+                let id = self.id().ok_or(AcpError::InvalidMessage)?;
+                let mut encoded = Vec::new();
+                id.write_json(&mut encoded)?;
+                let id = super::raw_json::RawDocument::parse(encoded)?.root_owned();
+                raw::object(
+                    [
+                        ("jsonrpc", &raw::string("2.0")?),
+                        ("id", &id),
+                        ("method", &raw::string(method)?),
+                        ("params", params),
+                    ],
+                    None,
+                )?
+            }
+        };
+        let mut bytes = payload.as_ref().compact()?.into_bytes();
+        bytes.try_reserve(1).map_err(|_| AcpError::Allocation)?;
+        bytes.push(b'\n');
+        Ok(EncodedFrame {
+            scope: self.scope(),
+            key: self.cell.key,
+            bytes,
+        })
+    }
+    #[must_use]
+    pub fn cancel(mut self) -> WriteProbe {
+        self.core.cancel(&self.cell, ZeroReason::Cancelled);
+        self.armed = false;
+        self.probe()
+    }
+}
+impl Drop for Reservation {
+    fn drop(&mut self) {
+        if self.armed {
+            self.core.cancel(&self.cell, ZeroReason::Abandoned);
+        }
+    }
+}
+pub struct EncodedFrame {
+    scope: ConnectionScope,
+    key: u64,
+    bytes: Vec<u8>,
+}
+impl EncodedFrame {
+    #[must_use]
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+pub struct EnqueueError {
+    error: AcpError,
+    reservation: Reservation,
+    frame: EncodedFrame,
+}
+impl EnqueueError {
+    #[must_use]
+    pub const fn error(&self) -> AcpError {
+        self.error
+    }
+    #[must_use]
+    pub fn into_parts(self) -> (AcpError, Reservation, EncodedFrame) {
+        (self.error, self.reservation, self.frame)
+    }
+}
+pub struct WriteTicket {
+    core: Arc<Core>,
+    cell: Arc<WriteCell>,
+}
+impl WriteTicket {
+    #[must_use]
+    pub fn probe(&self) -> WriteProbe {
+        WriteProbe {
+            cell: self.cell.clone(),
+        }
+    }
+    #[must_use]
+    pub fn progress(&self) -> WriteProgress {
+        self.cell.lock().progress
+    }
+    pub fn request_cancel(&self) {
+        self.core.cancel(&self.cell, ZeroReason::Cancelled);
+    }
+    pub async fn wait(&self) -> WriteReport {
+        loop {
+            let notified = self.cell.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let WriteProgress::Finished(report) = self.progress() {
+                return report;
+            }
+            notified.await;
+        }
+    }
+    pub async fn cancel_and_wait(&self) -> WriteReport {
+        self.request_cancel();
+        self.wait().await
+    }
+}
+impl Drop for WriteTicket {
+    fn drop(&mut self) {
+        self.core.cancel(&self.cell, ZeroReason::Abandoned);
+    }
 }
 #[derive(Debug)]
+pub struct IoShutdownReport {
+    pub joined: bool,
+    pub outstanding: Vec<WriteProbe>,
+    pub unresolved_requests: Vec<RpcId>,
+    pub error: Option<AcpError>,
+}
+#[derive(Clone, Debug)]
+pub enum PermissionSelection {
+    Selected(OptionId),
+    Cancelled,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PermissionPendingSnapshot {
+    Waiting,
+    Reserved,
+    SpentOrInvalid,
+}
+#[derive(Clone)]
 pub enum Response {
     Initialized(Strategy),
     NewSession(SessionId),
     Prompt(PromptResult),
     Resumed { session: SessionId },
+    Replayed { session: SessionId },
+    Sessions(SessionListing),
+    DeferredSessions(Strategy),
     Closed { session: SessionId },
     RemoteError { code: i64 },
 }
@@ -56,8 +352,9 @@ pub enum Response {
 pub enum UpdateOrigin {
     Live,
     DuringResume,
+    DuringReplay,
 }
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Incoming {
     Response {
         id: RpcId,
@@ -70,450 +367,361 @@ pub enum Incoming {
         origin: UpdateOrigin,
         raw: RawMessage,
     },
-    UnsupportedRequest {
-        id: RpcId,
-        raw: RawMessage,
-    },
+    UnsupportedRequest(UnsupportedRequest),
     UnknownNotification {
         raw: RawMessage,
     },
 }
-impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> Connection<R, W> {
-    #[must_use]
-    pub fn new(reader: R, writer: W) -> Self {
-        Self {
-            owner_tag: Arc::new(()),
-            reader: BufReader::new(reader),
-            writer,
-            input: Vec::new(),
-            pending: HashMap::new(),
-            server_pending: HashMap::new(),
-            server_seen: HashSet::new(),
-            next_id: 0,
-            phase: Phase::Fresh,
-            strategy: None,
-            rejected: None,
+impl Incoming {
+    const fn raw(&self) -> &RawMessage {
+        match self {
+            Self::Response { raw, .. }
+            | Self::Update { raw, .. }
+            | Self::UnknownNotification { raw } => raw,
+            Self::Permission(p) => p.raw(),
+            Self::UnsupportedRequest(r) => r.raw(),
         }
     }
-    #[must_use]
-    pub const fn strategy(&self) -> Option<&Strategy> {
-        self.strategy.as_ref()
+}
+#[derive(Clone)]
+pub struct Received {
+    scope: ConnectionScope,
+    sequence: u64,
+    receipt_order: u64,
+    incoming: Incoming,
+    view_context: ViewReadContextKind,
+    view_window: Option<ReceivedReadWindow>,
+}
+/// A receipt observation, never a claim of native RPC causality or authorization.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    clippy::enum_variant_names,
+    reason = "The frozen receipt context ABI names explicitly distinguish observation-window kinds"
+)]
+pub enum ViewReadContextKind {
+    OutsideReadWindow,
+    UniqueReceiptWindow,
+    AmbiguousReceiptWindow,
+}
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ViewReadWindowKind {
+    Resume,
+    Replay,
+}
+#[derive(Clone)]
+pub struct ReceivedReadWindow {
+    scope: ConnectionScope,
+    session: SessionId,
+    rpc: RpcId,
+    kind: ViewReadWindowKind,
+    cell_key: u64,
+}
+impl ReceivedReadWindow {
+    pub(crate) const fn cell_key(&self) -> u64 {
+        self.cell_key
     }
-    /// Takes the single parsed frame rejected for control/correlation semantics.
-    /// It remains original bytes; callers must not put sensitive contents into logs or errors.
+    pub(crate) fn scope(&self) -> ConnectionScope {
+        self.scope.clone()
+    }
+    pub(crate) const fn session(&self) -> &SessionId {
+        &self.session
+    }
+    pub(crate) const fn rpc(&self) -> &RpcId {
+        &self.rpc
+    }
+    pub(crate) const fn kind(&self) -> ViewReadWindowKind {
+        self.kind
+    }
+}
+impl Received {
+    pub(crate) const fn view_read_context(&self) -> ViewReadContextKind {
+        self.view_context
+    }
+    pub(crate) const fn view_read_window(&self) -> Option<&ReceivedReadWindow> {
+        self.view_window.as_ref()
+    }
     #[must_use]
-    pub const fn take_rejected_message(&mut self) -> Option<RawMessage> {
-        self.rejected.take()
+    pub fn scope(&self) -> ConnectionScope {
+        self.scope.clone()
+    }
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    #[must_use]
+    pub const fn receipt_order(&self) -> u64 {
+        self.receipt_order
+    }
+    #[must_use]
+    pub const fn incoming(&self) -> &Incoming {
+        &self.incoming
+    }
+    #[must_use]
+    pub const fn raw(&self) -> &RawMessage {
+        self.incoming.raw()
+    }
+}
+impl Connection {
+    /// # Errors
+    /// Returns `RuntimeUnavailable` if no Tokio runtime can own the IO tasks.
+    pub fn spawn<R, W>(reader: R, writer: W) -> Result<(Self, EventReceiver, IoOwner), AcpError>
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+        W: AsyncWrite + Unpin + Send + 'static,
+    {
+        lifecycle::spawn(reader, writer)
+    }
+    #[must_use]
+    pub fn scope(&self) -> ConnectionScope {
+        self.core.scope.clone()
+    }
+    #[must_use]
+    pub fn strategy(&self) -> Option<Strategy> {
+        self.core.lock().strategy.clone()
+    }
+    /// # Errors
+    /// Rejects a repeated attempt, closed connection, elapsed response deadline or exhausted control identity/capacity.
+    pub fn reserve_initialize(
+        &self,
+        offer: Version,
+        response_deadline: Instant,
+    ) -> Result<Reservation, AcpError> {
+        let mut state = self.core.lock();
+        if state.initialize_attempted {
+            return Err(AcpError::AlreadyInitialized);
+        }
+        if state.stopped {
+            return Err(AcpError::Closed);
+        }
+        if response_deadline <= Instant::now() {
+            return Err(AcpError::Deadline);
+        }
+        let request = super::strategy::initialize(self.scope(), offer)?;
+        let result =
+            state.reserve_request(&self.core, request, ResponseDeadline::At(response_deadline))?;
+        state.initialize_attempted = true;
+        self.core.notify.notify_waiters();
+        Ok(result)
+    }
+    /// # Errors
+    /// Returns the same one-shot initialization, closed, deadline and control errors as `reserve_initialize`.
+    pub fn reserve_preferred_initialize(
+        &self,
+        response_deadline: Instant,
+    ) -> Result<Reservation, AcpError> {
+        self.reserve_initialize(Version::preferred(), response_deadline)
+    }
+    /// # Errors
+    /// Rejects foreign scope, closed/uninitialized state, elapsed response deadline, capacity or a busy same-session read.
+    pub fn reserve_request(
+        &self,
+        request: Request,
+        response_deadline: ResponseDeadline,
+    ) -> Result<Reservation, AcpError> {
+        if request.scope != self.scope() {
+            return Err(AcpError::InvalidRequestScope);
+        }
+        let mut state = self.core.lock();
+        state.expire(Instant::now());
+        if state.stopped {
+            return Err(AcpError::Closed);
+        }
+        if state.strategy.is_none() {
+            return Err(AcpError::NotInitialized);
+        }
+        let result = state.reserve_request(&self.core, request, response_deadline);
+        self.core.notify.notify_waiters();
+        result
+    }
+    /// # Errors
+    /// Rejects reserved extension fields, raw encoding/allocation failure or closed/uninitialized state.
+    #[allow(
+        clippy::needless_pass_by_value,
+        reason = "Frozen API consumes caller-owned extension snapshot"
+    )]
+    pub fn reserve_cancel(
+        &self,
+        session: SessionId,
+        extra: ExtensionFields,
+    ) -> Result<Reservation, AcpError> {
+        extra.reject(&["sessionId"])?;
+        let params = raw::object(
+            [("sessionId", &raw::string(session.as_str())?)],
+            Some(extra.as_raw()),
+        )?;
+        let payload = raw::object(
+            [
+                ("jsonrpc", &raw::string("2.0")?),
+                ("method", &raw::string("session/cancel")?),
+                ("params", &params),
+            ],
+            None,
+        )?;
+        self.core
+            .lock()
+            .reserve_control(&self.core, OutboundKind::Cancel(session), payload)
+    }
+    /// # Errors
+    /// Rejects foreign/unbranded source, non-live original request, non-unique advertised selection or closed state.
+    pub fn reserve_permission_response(
+        &self,
+        request: &PermissionRequest,
+        choice: PermissionSelection,
+    ) -> Result<Reservation, AcpError> {
+        state::reserve_permission(&self.core, request, choice)
+    }
+    /// # Errors
+    /// Rejects a foreign original request; observes the same pending slot without IO or reservation.
+    pub fn inspect_permission_request(
+        &self,
+        request: &PermissionRequest,
+    ) -> Result<PermissionPendingSnapshot, AcpError> {
+        state::inspect_permission_request(&self.core, request)
+    }
+    /// # Errors
+    /// Rejects foreign source, a non-live original request, closed state or raw encoding/allocation failure.
+    pub fn reserve_unsupported(
+        &self,
+        request: &UnsupportedRequest,
+    ) -> Result<Reservation, AcpError> {
+        state::reserve_unsupported(&self.core, request)
+    }
+    /// # Errors
+    /// Returns `EnqueueError` owning both original inputs on scope/frame/terminal/phase/deadline failure; success transfers responsibility to the ticket.
+    fn enqueue_inner(
+        &self,
+        mut reservation: Reservation,
+        frame: EncodedFrame,
+        fence: Arc<dyn WriteFence>,
+        write_deadline: Instant,
+        observed_prompt: bool,
+    ) -> Result<WriteTicket, EnqueueError> {
+        let mut state = self.core.lock();
+        let error = if (state.observed
+            && matches!(
+                reservation.kind(),
+                OutboundKind::Request(RequestKind::Prompt(_))
+            )
+            && !observed_prompt)
+            || reservation.scope() != self.scope()
+        {
+            Some(AcpError::InvalidRequestScope)
+        } else if frame.scope != self.scope() || frame.key != reservation.cell.key {
+            Some(AcpError::InvalidFrame)
+        } else {
+            state.expire(Instant::now());
+            let progress = reservation.cell.lock().progress;
+            if let WriteProgress::Finished(report) = progress {
+                Some(state::report_error(report))
+            } else if state.stopped {
+                Some(AcpError::Closed)
+            } else if write_deadline <= Instant::now() {
+                state.finish_zero(&reservation.cell, ZeroReason::Deadline);
+                Some(AcpError::Deadline)
+            } else {
+                None
+            }
+        };
+        if let Some(error) = error {
+            drop(state);
+            return Err(EnqueueError {
+                error,
+                reservation,
+                frame,
+            });
+        }
+        reservation.cell.lock().progress = WriteProgress::Queued;
+        state.queue.push_back(state::Command {
+            cell: reservation.cell.clone(),
+            bytes: frame.bytes,
+            fence,
+            deadline: write_deadline,
+        });
+        reservation.armed = false;
+        let result = WriteTicket {
+            core: self.core.clone(),
+            cell: reservation.cell.clone(),
+        };
+        drop(state);
+        self.core.notify.notify_waiters();
+        Ok(result)
     }
     #[must_use]
     pub fn pending_count(&self) -> usize {
-        self.pending.len()
+        let s = self.core.lock();
+        if s.stopped { 0 } else { s.pending.len() }
     }
     #[must_use]
-    pub const fn is_closed(&self) -> bool {
-        matches!(self.phase, Phase::Closed)
+    pub fn server_pending_count(&self) -> usize {
+        let s = self.core.lock();
+        if s.stopped { 0 } else { s.server.len() }
     }
-    /// Attempts exactly one initialize. A failed/unknown attempt never permits retry on this connection.
+    #[must_use]
+    pub fn is_closed(&self) -> bool {
+        self.core.lock().stopped
+    }
+    pub(crate) fn stop_owned(&self) {
+        self.core.stop(None);
+    }
+    #[must_use]
+    pub fn take_rejected_message(&self) -> Option<RawMessage> {
+        self.core.lock().rejected.pop_front()
+    }
+}
+impl EventReceiver {
     /// # Errors
-    /// Rejects a repeated attempt, failed write or expired deadline.
-    pub async fn initialize(
-        &mut self,
-        offer: Version,
-        deadline: Instant,
-    ) -> Result<RpcId, AcpError> {
-        if self.phase != Phase::Fresh {
-            return Err(AcpError::AlreadyInitialized);
+    /// Returns the first terminal protocol/IO error once, after queued facts and captured-frame drain; later calls return None.
+    pub async fn next(&mut self) -> Result<Option<Received>, AcpError> {
+        if self.ended {
+            return Ok(None);
         }
-        self.phase = Phase::Initializing;
-        self.submit(super::strategy::initialize(offer), deadline)
-            .await
-    }
-    /// Registers before writing. Cancellation during any write permanently poisons this connection.
-    /// # Errors
-    /// Rejects uninitialized/closed connections, capacity exhaustion and unknown writes.
-    pub async fn request(
-        &mut self,
-        request: Request,
-        deadline: Instant,
-    ) -> Result<RpcId, AcpError> {
-        if self.phase != Phase::Ready {
-            return Err(if self.is_closed() {
-                AcpError::Closed
-            } else {
-                AcpError::NotInitialized
-            });
-        }
-        if !self
-            .strategy
-            .as_ref()
-            .is_some_and(|strategy| strategy.owns_request(&request))
-        {
-            return Err(AcpError::InvalidRequestScope);
-        }
-        self.submit(request, deadline).await
-    }
-    async fn submit(&mut self, request: Request, deadline: Instant) -> Result<RpcId, AcpError> {
-        if self.pending.len() >= MAX_PENDING {
-            return Err(AcpError::Capacity);
-        }
-        let id = self
-            .next_id
-            .checked_add(1)
-            .filter(|n| *n <= 9_007_199_254_740_991)
-            .ok_or(AcpError::Capacity)?;
-        self.next_id = id;
-        let id = RpcId::Integer(id);
-        let frame =
-            json!({"jsonrpc":"2.0","id":id.json(),"method":request.method,"params":request.params});
-        self.pending.insert(
-            id.clone(),
-            Pending {
-                kind: request.kind,
-                deadline,
-                snapshot: false,
-            },
-        );
-        self.write(frame, deadline).await?;
-        Ok(id)
-    }
-    /// Notification only; cancellation never frees the foreground Run by itself.
-    /// # Errors
-    /// Rejects uninitialized state and unknown writes. Application ownership checks precede this call.
-    pub async fn cancel(&mut self, session: &SessionId, deadline: Instant) -> Result<(), AcpError> {
-        self.require_ready()?;
-        self.write(json!({"jsonrpc":"2.0","method":"session/cancel","params":{"sessionId":session.as_str()}}),deadline).await
-    }
-    /// Delivers one selected result directly to the sole writer. This is not peer execution ACK.
-    /// # Errors
-    /// Rejects spent/unknown request IDs and unsupported/unadvertised options.
-    pub async fn permission_response(
-        &mut self,
-        request: &PermissionRequest,
-        selection: Option<&super::OptionId>,
-        deadline: Instant,
-    ) -> Result<(), AcpError> {
-        self.require_ready()?;
-        if request
-            .connection
-            .as_ref()
-            .is_none_or(|source| !Arc::ptr_eq(source, &self.owner_tag))
-        {
-            return Err(AcpError::InvalidMessage);
-        }
-        let expected = self
-            .server_pending
-            .get(&request.id)
-            .ok_or(AcpError::UnmatchedResponse)?;
-        if !expected.1 || expected.0.as_slice() != Sha256::digest(request.raw.bytes()).as_slice() {
-            return Err(AcpError::InvalidMessage);
-        }
-        let strategy = self.strategy.as_ref().ok_or(AcpError::NotInitialized)?;
-        let id = RpcId::parse(
-            request
-                .raw
-                .fields()
-                .get("id")
-                .ok_or(AcpError::InvalidMessage)?,
-        )?;
-        if id != request.id {
-            return Err(AcpError::InvalidMessage);
-        }
-        let original = strategy.permission(
-            id,
-            request.raw.clone(),
-            request
-                .raw
-                .fields()
-                .get("params")
-                .ok_or(AcpError::InvalidMessage)?,
-        )?;
-        let frame = strategy.permission_response(&original, selection)?;
-        self.server_pending.remove(&request.id);
-        self.write(frame, deadline).await
-    }
-
-    /// Standard method-not-found; unsupported client surfaces are never silently accepted.
-    /// # Errors
-    /// Rejects unknown/spent request IDs or failed writes.
-    pub async fn reject_unsupported(
-        &mut self,
-        id: &RpcId,
-        deadline: Instant,
-    ) -> Result<(), AcpError> {
-        self.require_ready()?;
-        if self.server_pending.get(id).is_none_or(|entry| entry.1) {
-            return Err(AcpError::UnmatchedResponse);
-        }
-        self.server_pending.remove(id);
-        self.write(json!({"jsonrpc":"2.0","id":id.json(),"error":{"code":-32601,"message":"Client method is not supported"}}),deadline).await
-    }
-    async fn write(&mut self, frame: Value, deadline: Instant) -> Result<(), AcpError> {
-        if self.phase == Phase::Closed {
-            return Err(AcpError::Closed);
-        }
-        if Instant::now() >= deadline {
-            self.poison();
-            return Err(AcpError::Deadline);
-        }
-        let mut bounded = FrameBuffer(Vec::new());
-        if serde_json::to_writer(&mut bounded, &frame).is_err() {
-            self.poison();
-            return Err(AcpError::Capacity);
-        }
-        let mut bytes = bounded.0;
-        bytes.push(b'\n');
-        // A dropped future leaves phase Closed. Restore it only after write_all AND flush complete.
-        let prior = self.phase;
-        self.phase = Phase::Closed;
-        let result = timeout_at(deadline, async {
-            self.writer.write_all(&bytes).await?;
-            self.writer.flush().await
-        })
-        .await;
-        if matches!(result, Ok(Ok(()))) {
-            self.phase = prior;
-            Ok(())
-        } else {
-            self.poison();
-            Err(AcpError::DeliveryUnknown)
-        }
-    }
-
-    /// Pumps one frame; caller owns polling and must not place permission handling behind a prompt wait.
-    /// # Errors
-    /// Deadlines, malformed/unmatched messages and EOF invalidate this connection without retransmission.
-    pub async fn next(&mut self, deadline: Instant) -> Result<Incoming, AcpError> {
-        if self.phase == Phase::Fresh {
-            return Err(AcpError::NotInitialized);
-        }
-        if self.phase == Phase::Closed {
-            return Err(AcpError::Closed);
-        }
-        let deadline = self
-            .pending
-            .values()
-            .map(|p| p.deadline)
-            .min()
-            .map_or(deadline, |d| d.min(deadline));
-        if Instant::now() >= deadline {
-            self.poison();
-            return Err(AcpError::Deadline);
-        }
-        let raw = match timeout_at(deadline, self.read_frame()).await {
-            Ok(Ok(raw)) => raw,
-            Ok(Err(e)) => {
-                self.poison();
-                return Err(e);
-            }
-            Err(_) => {
-                self.poison();
-                return Err(AcpError::Deadline);
-            }
-        };
-        match self.route(raw.clone()) {
-            Ok(event) => Ok(event),
-            Err(e) => {
-                self.rejected = Some(raw);
-                self.poison();
-                Err(e)
-            }
-        }
-    }
-    async fn read_frame(&mut self) -> Result<RawMessage, AcpError> {
         loop {
-            let bytes = self.reader.fill_buf().await.map_err(|_| AcpError::Io)?;
-            if bytes.is_empty() {
-                return Err(if self.input.is_empty() {
-                    AcpError::DeliveryUnknown
-                } else {
-                    AcpError::InvalidMessage
-                });
-            }
-            let newline = bytes.iter().position(|b| *b == b'\n');
-            let count = newline.map_or(bytes.len(), |i| i + 1);
-            if self.input.len().saturating_add(count) > MAX_FRAME + 2 {
-                return Err(AcpError::Capacity);
-            }
-            self.input.extend_from_slice(&bytes[..count]);
-            self.reader.consume(count);
-            if newline.is_some() {
-                self.input.pop();
-                if self.input.last() == Some(&b'\r') {
-                    self.input.pop();
+            let n = self.core.events_notify.notified();
+            tokio::pin!(n);
+            n.as_mut().enable();
+            {
+                let mut s = self.core.lock();
+                if let Some(event) = s.events.pop_front() {
+                    return Ok(Some(event));
                 }
-                if self.input.len() > MAX_FRAME {
-                    return Err(AcpError::Capacity);
+                if s.terminal {
+                    self.ended = true;
+                    return s.error.map_or(Ok(None), Err);
                 }
-                return RawMessage::parse(std::mem::take(&mut self.input));
             }
+            n.await;
         }
-    }
-    fn route(&mut self, raw: RawMessage) -> Result<Incoming, AcpError> {
-        let fields = raw.fields();
-        if fields.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-            return Err(AcpError::InvalidMessage);
-        }
-        if let Some(method) = fields.get("method") {
-            if fields.contains_key("result") || fields.contains_key("error") {
-                return Err(AcpError::InvalidMessage);
-            }
-            let method = method.as_str().ok_or(AcpError::InvalidMessage)?;
-            let absent = Value::Null;
-            let params = fields.get("params").unwrap_or(&absent);
-            if !params.is_null() && !params.is_object() && !params.is_array() {
-                return Err(AcpError::InvalidMessage);
-            }
-            let strategy = self.strategy.as_ref().ok_or(AcpError::NotInitialized)?;
-            if let Some(id) = fields.get("id") {
-                let id = RpcId::parse(id)?;
-                if self.server_seen.len() >= MAX_SERVER_IDS
-                    || self.server_pending.len() >= MAX_PENDING
-                {
-                    return Err(AcpError::Capacity);
-                }
-                if !self.server_seen.insert(id.clone()) {
-                    return Err(AcpError::InvalidMessage);
-                }
-                self.server_pending.insert(
-                    id.clone(),
-                    (
-                        Sha256::digest(raw.bytes()).into(),
-                        method == "session/request_permission",
-                    ),
-                );
-                if method == "session/request_permission" {
-                    let mut request = strategy.permission(id, raw.clone(), params)?;
-                    request.connection = Some(Arc::clone(&self.owner_tag));
-                    return Ok(Incoming::Permission(request));
-                }
-                return Ok(Incoming::UnsupportedRequest { id, raw });
-            }
-            if method == "session/update" {
-                let event = strategy.update(params)?;
-                let session = SessionId::parse(field(params, "sessionId")?)?;
-                let origin = if self
-                    .pending
-                    .values()
-                    .any(|p| matches!(&p.kind,RequestKind::Resume(s) if *s==session))
-                {
-                    UpdateOrigin::DuringResume
-                } else {
-                    UpdateOrigin::Live
-                };
-                if let SessionEvent::State { session, .. } = &event {
-                    for pending in self.pending.values_mut() {
-                        if matches!(&pending.kind,RequestKind::Resume(s) if s==session) {
-                            pending.snapshot = true;
-                        }
-                    }
-                }
-                return Ok(Incoming::Update { event, origin, raw });
-            }
-            return Ok(Incoming::UnknownNotification { raw });
-        }
-        self.route_response(raw)
-    }
-    fn route_response(&mut self, raw: RawMessage) -> Result<Incoming, AcpError> {
-        let fields = raw.fields();
-        let id = RpcId::parse(fields.get("id").ok_or(AcpError::InvalidMessage)?)?;
-        let pending = self
-            .pending
-            .remove(&id)
-            .ok_or(AcpError::UnmatchedResponse)?;
-        if fields.contains_key("result") == fields.contains_key("error") {
-            return Err(AcpError::InvalidMessage);
-        }
-        if let Some(error) = fields.get("error") {
-            object(error)?;
-            let code = field(error, "code")?
-                .as_i64()
-                .ok_or(AcpError::InvalidMessage)?;
-            field(error, "message")?
-                .as_str()
-                .ok_or(AcpError::InvalidMessage)?;
-            if matches!(pending.kind, RequestKind::Initialize(_)) {
-                self.poison();
-            }
-            return Ok(Incoming::Response {
-                id,
-                response: Response::RemoteError { code },
-                raw,
-            });
-        }
-        let result = fields.get("result").ok_or(AcpError::InvalidMessage)?;
-        object(result)?;
-        let response = match pending.kind {
-            RequestKind::Initialize(offer) => {
-                let strategy = Strategy::select(offer, raw.clone(), result)?;
-                self.strategy = Some(strategy.clone());
-                self.phase = Phase::Ready;
-                Response::Initialized(strategy)
-            }
-            RequestKind::NewSession => {
-                Response::NewSession(SessionId::parse(field(result, "sessionId")?)?)
-            }
-            RequestKind::Prompt(_) => Response::Prompt(
-                self.strategy
-                    .as_ref()
-                    .ok_or(AcpError::NotInitialized)?
-                    .prompt_result(result)?,
-            ),
-            RequestKind::Resume(session) => {
-                if self
-                    .strategy
-                    .as_ref()
-                    .is_some_and(|s| s.version() == Version::V2)
-                    && !pending.snapshot
-                {
-                    return Err(AcpError::MissingSnapshot);
-                }
-                Response::Resumed { session }
-            }
-            RequestKind::Close(session) => Response::Closed { session },
-        };
-        Ok(Incoming::Response { id, response, raw })
-    }
-    /// Stops new work immediately, clears correlation and closes stdin within one absolute budget.
-    /// # Errors
-    /// A timed-out close remains closed and requires the process owner to reclaim its resources.
-    pub async fn shutdown(&mut self, deadline: Instant) -> Result<(), AcpError> {
-        self.poison();
-        match timeout_at(deadline, self.writer.shutdown()).await {
-            Ok(Ok(())) => Ok(()),
-            Ok(Err(_)) => Err(AcpError::Io),
-            Err(_) => Err(AcpError::Deadline),
-        }
-    }
-    fn require_ready(&self) -> Result<(), AcpError> {
-        if self.phase == Phase::Ready {
-            Ok(())
-        } else {
-            Err(if self.is_closed() {
-                AcpError::Closed
-            } else {
-                AcpError::NotInitialized
-            })
-        }
-    }
-    fn poison(&mut self) {
-        self.phase = Phase::Closed;
-        self.pending.clear();
-        self.server_pending.clear();
-        self.input.clear();
     }
 }
-
-/// The serialization allocation itself obeys the byte limit, before any peer write.
-struct FrameBuffer(Vec<u8>);
-impl std::io::Write for FrameBuffer {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.0.len().saturating_add(bytes.len()) > MAX_FRAME {
-            return Err(std::io::Error::other("ACP frame byte budget exceeded"));
-        }
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+impl Drop for EventReceiver {
+    fn drop(&mut self) {
+        self.core.stop(None);
     }
 }
+impl IoOwner {
+    pub fn request_stop(&self) {
+        self.core.stop(None);
+    }
+    pub async fn shutdown(&self, deadline: Instant) -> IoShutdownReport {
+        lifecycle::shutdown(&self.core, deadline).await
+    }
+}
+impl Drop for IoOwner {
+    fn drop(&mut self) {
+        self.core.stop(None);
+    }
+}
+macro_rules! redacted{($($t:ty),*)=>{$(impl fmt::Debug for $t{fn fmt(&self,f:&mut fmt::Formatter<'_>)->fmt::Result{f.write_str(concat!(stringify!($t),"(..)"))}})*}}
+redacted!(
+    Connection,
+    EventReceiver,
+    IoOwner,
+    WriteIdentity,
+    WriteProbe,
+    Reservation,
+    EncodedFrame,
+    EnqueueError,
+    WriteTicket,
+    Received,
+    Response
+);

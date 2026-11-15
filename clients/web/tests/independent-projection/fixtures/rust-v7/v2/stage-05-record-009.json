@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"q003-tool-original-session","update":{"sessionUpdate":"agent_message_chunk","messageId":"q003-message-C","content":{"type":"text","text":"C"}}}}

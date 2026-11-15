@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-03",
+  "packages": [
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-cleanup-authority-oracle-final-review-2026-11-03",
+      "freeze": "2e2fbb8578ba7330cf0f9601bfc27d6eb9d2a38063456e17f839cbb87ebe653d",
+      "members": 2,
+      "allVerified": true
+    },
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-schema9-current-head-maintenance-gate-2026-11-03",
+      "freeze": "8d5d931003fb28e2f2669b0f0be51215f4331c4a351567d5cd8328d54dc23ba9",
+      "members": 2,
+      "allVerified": true
+    },
+    {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-schema9-current-head-oracle810-supplement-2026-11-03",
+      "freeze": "05deed4e645d77b5ae7afd0b1ce061be661587131131e738bc04e0efd65c0039",
+      "members": 2,
+      "allVerified": true
+    }
+  ],
+  "oracle": {
+    "outcome": "Pass-limited-oracle-maintenance",
+    "status": "Fixed-static + Fixed-development",
+    "candidateFreeze": "b515283b26a1dc5d9b7fdba9f1eee553f473f6cdd083cc80d3eb5ceed0edf81a",
+    "sourceManifestSHA256": "10f9a8db71821719c469f572f44012ac194ecb52a34064943fa2bf3c01368c16",
+    "formalCLDBPassed": false
+  },
+  "currentHeadMaintenance": {
+    "outcome": "Pass-limited-install-and-execution-gate-on-isolated-oracle810",
+    "permittedLeafChanges": 7,
+    "requiredPreservedSources": 803,
+    "originalPatchSHA256": "88853331a7b5d07d501e042286987fcf17426f604e031026e53bf3742d615429",
+    "compileAndTestsPassed": false,
+    "executionAssigned": true
+  },
+  "open": [
+    "Initial connect/schema/identity direct pool paths",
+    "SQLx internal acquire-error/ping/return maintenance worker original close receipts",
+    "Sticky Unconfirmed and concurrent-close complete responsibility",
+    "Formal CLDB, WP4C001–006, current810 WP4C007, full C, strict and parent cleanup closure"
+  ],
+  "rootInstallationAllowed": false
+}

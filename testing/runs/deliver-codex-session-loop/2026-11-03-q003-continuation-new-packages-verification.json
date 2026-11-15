@@ -1,0 +1,35 @@
+{
+  "date": "2026-11-03",
+  "packages": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-configuration-independent-execution-f05-stage3-v1",
+      "freeze": "862b9fefe92d6d79811a89551d42f6da8bc19f4b5956c2f60dc9fb5c347d530b",
+      "members": 824,
+      "allVerified": true
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-c-remaining-observation-proposal-v1",
+      "freeze": "ae394a96fcd4c01efd7857428f7bb7e9f97bc3abc6b87db640884cae12aa14c5",
+      "members": 14,
+      "allVerified": true
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-schema9-historical-fixture-assets-v1",
+      "freeze": "1c13c67312018b28f78f1d941c2fb2d20dccd438dbdbf9eaa3b25cba49a58200",
+      "members": 25,
+      "allVerified": true
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-cleanup-owned-acquire-implementation-v2",
+      "freeze": "5b221d06bf97e0c1da9c7043beb3f664026349d3a14fce552f16b0efe42d5552",
+      "members": 959,
+      "allVerified": true
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-schema9-007-hook-delivery-gate-2026-11-03",
+      "freeze": "1f40e323593558a62e9e92bfc47519c3ce778c00a54bcb1bc455163cffa9cf94",
+      "members": 2,
+      "allVerified": true
+    }
+  ]
+}

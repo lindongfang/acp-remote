@@ -1,0 +1,66 @@
+{
+  "scope": "Design-only same-read private rebind ABI; v1 contract plus exact real Module Status notice delivery; no implementation/independent gate or execution",
+  "created": "2026-10-31T21:30:17.102Z",
+  "effective": [
+    "input-snapshot/prior-v1/contract.md",
+    "notice-precision.md"
+  ],
+  "prior": "2f0c1a28b01cd25a95a0c9b96703aead971a6c6347e6087b9fbe6eec2d0502d7",
+  "entries": [
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-shared-view-author/revision2-supplement/read-and-source-api.md",
+      "sha256": "8422edfd377f4171b30985c0a513297b02978a69f63fbb427eb7593ac90954f5"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-shared-view-author/revision2/send-and-credit-api.md",
+      "sha256": "ea8a3ab7f9da7642b23c9760d6bc15814600adc58883aa1ba94e53ddd20ea26e"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-shared-view-author/revision2/engineering-contract.md",
+      "sha256": "e54ee9755a4bbf62b2999f9846a41d69a7db6a2ca400faad6e3ebc3382a77aeb"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-shared-view-author/revision2/native-assembly.md",
+      "sha256": "e0ea8a3b753bb23b54376dc0abf30832296937b28691316147036144b0e4b6d4"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-shared-view-tester/revision2/definition-manifest-v2.json",
+      "sha256": "96aa8288ad24e2b64460b95b604516859fdfd7a445166ef3660edb485929ed85"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-shared-view-tester/revision2/acceptance-definition-v2.md",
+      "sha256": "d2eaac1ff350dcc88c4c7bbeadf19f5fb2b674babf724a502437ef23c73bc717"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-reviewer/wp3-shared-view/revision2-supplement83-coding-gate.md",
+      "sha256": "5609f606991d0c2608074bc7914b3a8bcc33ebf51730645e988d5e87ca47178e"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/session-loop-q003-shared-view-author/implementation-v1/candidate/component-wip3/manifest.json",
+      "sha256": "d3f96d4af7b4f1b07343db130551a33ed6584b384d02820233c0b3145e7236b1"
+    },
+    {
+      "path": "input-snapshot/prior-v1/contract.md",
+      "sha256": "3594608dc90cdc54b50151532ffd7b635b530f9876c6371a29dad04804866d4d"
+    },
+    {
+      "path": "input-snapshot/prior-v1/freeze.cjs",
+      "sha256": "58522eb5336a994dbf9d287279abd203ab358b1580df15b576fc1e69ddf222f8"
+    },
+    {
+      "path": "input-snapshot/prior-v1/freeze.json",
+      "sha256": "2f0c1a28b01cd25a95a0c9b96703aead971a6c6347e6087b9fbe6eec2d0502d7"
+    },
+    {
+      "path": "notice-precision.md",
+      "sha256": "c6a106bdc8da170c46671a15b6d4c37be315d290e08bed1da79ca1e9b5d10557"
+    },
+    {
+      "path": "freeze.cjs",
+      "sha256": "4ac293f3eea78f4f7b7583413e04d29be05ded874c733700fd194ee56b6cfde0"
+    }
+  ],
+  "original83_changed": 0,
+  "rb_defined": 6,
+  "rb_executed": 0
+}

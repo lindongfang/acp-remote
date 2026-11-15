@@ -1,0 +1,26 @@
+{
+  "kind": "independent-exact-installation-static-review",
+  "date": "2026-11-02",
+  "members": [
+    {
+      "sha256": "35448cc480aab338cc985d47d950b84d3b26dc11cd14caa2df9796a7fac145e5",
+      "path": "CHECKS.json",
+      "bytes": 2999
+    },
+    {
+      "sha256": "9866b9aa742404bf107f08c076c217243dced4cf987352db167cdd6cc57c3d9e",
+      "path": "HUNK-REVIEW.json",
+      "bytes": 12022
+    },
+    {
+      "sha256": "2b81e7caf83d2b9a07e93cd37629914f46db0f1a3e4d360ac18776107b6adaee",
+      "path": "REVIEW.md",
+      "bytes": 4645
+    },
+    {
+      "sha256": "886c3c77f37201a3efa7bdfcf188528b31efd907a00863a8e44a232df3eb9004",
+      "path": "summary.json",
+      "bytes": 2090
+    }
+  ]
+}

@@ -1,0 +1,2178 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "rootProductInstalled": true,
+  "rawProduct": {
+    "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-implementation-v1",
+    "freeze": "66c12d96bee4705741cd30b47037f3d78e005f8fc8f876f56ce38fb01c170067",
+    "membersVerified": 1032,
+    "checkAllTargetsAllFeatures": 0,
+    "productBuildAllFeatures": 0,
+    "developerUniqueTestsPassed": 99,
+    "independentNewVectorsExecuted": 0,
+    "strict": {
+      "exit": 101,
+      "baseline": 698,
+      "current": 698,
+      "added": 0,
+      "removed": 0
+    },
+    "engineeringReview": {
+      "status": "Pass-limited",
+      "freeze": "6861bb4c0705cf2d5727e8943e33f8944f5c4ca67b941374302bd5ff9f8fb059",
+      "membersVerified": 3
+    }
+  },
+  "p1": {
+    "preparation": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-shared-socket-independent-preparation-v2",
+    "freeze": "185149b0f1292d2f8e69bdf08f46a7abde0181c5bb45067991aefa5830d33e54",
+    "membersVerified": 876,
+    "gateFreeze": "8ea96ac907a0357c45165381d56a6c2faaae3510e3efd5bf398bc8687480a629",
+    "gate": "Pass-limited; ORACLE001 Closed-static-program-v2",
+    "execution": {
+      "status": "First red stopped, retry 0",
+      "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-shared-socket-independent-execution-v2",
+      "freeze": "fdc07cb4af5924c378a4605e154946a8e97d1c59863fb43a53e11e0c95619fd3",
+      "membersVerified": 1019,
+      "compile": 0,
+      "uniqueExactLists": 15,
+      "passedFunctions": 12,
+      "failedFunction": "SV073",
+      "passedVectorMarkers": 33,
+      "failedBranches": 1,
+      "notExecutedVectors": 6,
+      "actual": "TLS UnexpectedEof while waiting Close1000",
+      "originalReviewer": {
+        "freeze": "42028eccc503d49f4ffa07b7f1350ba240f25b0a8ae13d5bf45b8a3249d360a1",
+        "status": "Product peer close defect Open; independent oracle stimulus mismatch separately identified"
+      }
+    },
+    "oracle002": {
+      "supplement": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-shared-socket-independent-oracle002-supplement-v1",
+      "freeze": "36d1003918457dcb1bc1173c06b505a7462a00ce0565750d8544d78a03151450",
+      "reviewFreeze": "83da980a6b7b6e96975ea080b1e9fb5ace91e3c2398a329097cf599dfd09f5c9",
+      "status": "Closed-static; exact successor composition only; no execution gate"
+    },
+    "developerCloseRegression": {
+      "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-shared-socket-peer-close-development-red-v1",
+      "freeze": "3ad844c5e06dc82765b45af2b8043a3f5eb928d8df2b8b9ccff4f82ee808a68e",
+      "compileExit": 0,
+      "uniqueExactList": 1,
+      "testExit": 101,
+      "retry": 0,
+      "actual": "Explicit peer Close1000 -> TLS UnexpectedEof",
+      "productChanges": 0,
+      "fixCandidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-shared-socket-peer-close-fix-v3",
+      "fixStatus": "Frozen; development regression passed; independent review/execution pending",
+      "fix": {
+        "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-shared-socket-peer-close-fix-v3",
+        "freeze": "feb1ac4cdec793a605ea76360a12777e7cea42221df38d090e719635b85e979e",
+        "members": 954,
+        "sourceManifestSha256": "51aeebbf1ce49256fbcb51f594a2d2b3d27670197aca6347e365f748c5512f54",
+        "compile": 0,
+        "newRealTlsTestPassed": 1,
+        "otherSocketDevelopmentTestsPassed": 10,
+        "productTestRetry": 0,
+        "allTargetAllFeatureCheck": 0,
+        "productBuild": 0,
+        "formatScope": "changed functions snippets only",
+        "formatExit": 0,
+        "sameFeatureStrict": {
+          "baseline": 652,
+          "current": 652,
+          "added": 0,
+          "removed": 0,
+          "exit": 101
+        },
+        "allFeatureStrict": {
+          "count": 700,
+          "exit": 101,
+          "baselineComparable": false
+        },
+        "independentExecution": 0,
+        "review": {
+          "status": "Pass-limited engineering; independent issue remains Open",
+          "freeze": "ed0dedae8826d77ee6c2dcf9bbe322e86dac2b2322aa75382132fdb9f328f492",
+          "next": "allowed tester successor preparation; no execution gate"
+        }
+      }
+    }
+  },
+  "rawLegacyOracle": {
+    "freeze": "8a1bc1a58b5363094878470614ee782180ade4f0bc16396f31649266da57f001",
+    "membersVerified": 10,
+    "gateFreeze": "b721afaf1a131d22888b69332b2130974f574172c7d0079875f6fe4ad69b621b",
+    "applicationGate": "Pass-limited only on new matching successor",
+    "executionGate": "Blocked RAW-LEGACY-EXECUTION001; 30 RJ + rt01; no execution",
+    "successor": {
+      "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-successor-v2",
+      "sourceCopied": 886,
+      "changed": 2,
+      "preserved": 884,
+      "appliedAndAfterVerified": true,
+      "compile": 0,
+      "tests": 0,
+      "gate": "Awaiting repaired runner, complete freeze and formal execution resource gate",
+      "sourceMembers": 898,
+      "programCompositionVerified": true,
+      "manifestSha256": "13ced02cd7ca9aa45a62de56f8eb26f9024cad7cbd5fda0c6d8d21d36a12a992",
+      "freeze": "fc59497df4f1be6f46aaadce6acc18d65cabc895e7eba87c4e260e365ca74c3b",
+      "freezeMembers": 971
+    }
+  },
+  "sqliteB": {
+    "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-storage-node-candidate-v2",
+    "freeze": "99e80798800d4d37c4411434fa17690ce38016eb03df2d6e79e9fbd9365769a7",
+    "originalReviewer": {
+      "status": "Two original P2 Closed-limited",
+      "freeze": "a3263cbf6075281e403263263ad337120dd3f9f51dea8c4ef753a5763d029c38",
+      "membersVerified": 3
+    },
+    "callerMigration": {
+      "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-development-migration-v1",
+      "sourceMembers": 885,
+      "scope": [
+        "app/src/storage/pool_close_tests.rs",
+        "app/src/storage/pool_close_tests/owned_acquire_tests.rs",
+        "app/src/storage/pool_close_tests/size_fence_tests.rs"
+      ],
+      "status": "Compiled; developer first red stopped",
+      "compiled": 0,
+      "openCallsMigrated": 10,
+      "passed": 8,
+      "failed": 1,
+      "notExecuted": 4,
+      "issue": "CLDB-CALLER-ACQUIRE-CLOSE001; close observation NotStarted vs ConfirmedJoined",
+      "diagnosticCandidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-close-diagnosis-v1",
+      "remainingDevelopmentLeaves": "Other 20 allocated original author in separate workspace; not completed",
+      "firstCandidateFreeze": {
+        "dir": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-development-migration-v1",
+        "members": 1012,
+        "sha256": "edb46c8fe4e67115e88f940bd410846d3c961b2c2c9d26de9765ab4f17777785"
+      },
+      "diagnosticFreeze": {
+        "dir": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-close-diagnosis-v1",
+        "members": 904,
+        "sha256": "031ff3d8782bd82d5f2b3a55a8e2ea8d675982e58595c7437b31792ffed8d4ee"
+      },
+      "fix1": {
+        "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-close-fix-v1",
+        "freeze": {
+          "dir": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-close-fix-v1",
+          "members": 1004,
+          "sha256": "d10e4e0b0dcb283046642b61499b9833018d9c1da88ee4903c869a1c6f96ca1f"
+        },
+        "compiled": 0,
+        "passed": 8,
+        "failed": 1,
+        "notExecuted": 4
+      },
+      "fix2": {
+        "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-close-fix-v2",
+        "freeze": {
+          "dir": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-close-fix-v2",
+          "members": 1020,
+          "sha256": "9633d402638f767733d537c192502c4e8ca5ebfd1c3286dbcab566316555e472"
+        },
+        "compiled": 0,
+        "passed": 10,
+        "failed": 1,
+        "notExecuted": 2,
+        "originalDev09": "Passed unchanged oracle"
+      },
+      "fix3": {
+        "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-close-fix-v3",
+        "sourceManifestSha256": "5fb02525981dff4deb169b87d5857ff831a4812ebf2bc444c927399678b547f3",
+        "compiled": 0,
+        "passed": 13,
+        "failed": 0,
+        "notExecuted": 0,
+        "retry": 0,
+        "productChange": "drain original registered connections before final vendor registry seal and pool close",
+        "developerOracleMigration": "two intermediate phase observers use original registry component, final aggregate/physical unchanged",
+        "staticChecks": {
+          "allTargetAllFeatureCheck": 0,
+          "changedLeavesRustfmt": 0,
+          "productBuild": 0,
+          "strict": {
+            "exit": 101,
+            "baseline": 680,
+            "current": 680,
+            "added": 0,
+            "removed": 0
+          }
+        },
+        "independentReview": {
+          "status": "Pass-limited engineering; original issuer closed both caller IDs",
+          "reviewFreeze": "aba681ec41f223d2f9af977154f8e027d75635d0393448a503c7de12a9b8f8a5",
+          "originalIssuerFreeze": "4c0a911ec7b60acb9fade60e5290d1c3762ab578f2113778a7fdbb87f52a2933",
+          "closed": [
+            "CLDB-CALLER-ACQUIRE-CLOSE001",
+            "CLDB-CALLER-PHASE-OBS001"
+          ],
+          "notExtended": "full CLDB/B or Root installation"
+        },
+        "freeze": {
+          "sha256": "f4d3a488fa462df1844289106f1f68c5a31dbfa33d0b04bc29ba1d27b29a3fff",
+          "members": 1070
+        }
+      }
+    }
+  },
+  "limitations": [
+    "Frozen packages read-only",
+    "No npm audit metadata external transfer",
+    "No commit/push/archive/index mutation",
+    "Self tests do not replace independent acceptance",
+    "Full closure and UI/Harness/Windows process tree still incomplete"
+  ],
+  "rawNewIndependentPrograms": {
+    "package": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-preservation-independent-preparation-v1/independent-programs-v1",
+    "freeze": "b09399980260077760e2464fc9b9e65a4587d3988553f3c9835846cfd45f1c04",
+    "membersVerified": 60,
+    "vectors": 1588,
+    "executed": 0,
+    "review": {
+      "freeze": "e0433bf54ec128f015cc7b7a01f3bcd6cddc0b29cc35f437bfe8b2cad2d176f3",
+      "application": "Pass-limited",
+      "execution": "Pending runner receipt/binary issues; no compile/list/test authorized"
+    },
+    "runnerSupplement": {
+      "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-independent-runner-receipts-binary-supplement-v1",
+      "freeze": "8c5f99bc918dc1628780996c67267e0085140be426ca06db87a1aeab0bae0d41",
+      "status": "RAW-RUNNER-RECEIPT001 and RAW-RUNNER-BINARY001 Closed-static by original reviewer",
+      "bundleFreeze": "2dd5ee02f3b207797b0d64dee243c2bdb6c1b7a489b41e30cf73fc8ed71f6cc6"
+    },
+    "formalResourceGate": {
+      "status": "Approved; dispatched independent tester",
+      "gate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-raw-runner-static-closure-and-execution-v2-gate-2026-11-03/GATE.json",
+      "gateSha256": "3cdcdce34c1bce35ec6e12d8e03eb9a94ad43e6074659459ddd2b1b4cdf15d90",
+      "reviewFreeze": "8b17073f92edd6da4bd67d071762ca0cfc5ff8eb2f97df9a60f37d2d261a505f",
+      "scope": "six-1588-and-legacy-31",
+      "retry": 0,
+      "firstFailureStops": true,
+      "result": {
+        "status": "Environment-blocked RAW-ENV-DISK001",
+        "firstCompileAttempt": 1,
+        "cargoPid": 44952,
+        "cargoExit": 101,
+        "actual": "Disk space insufficient OS112 writing incremental query-cache.bin",
+        "listExecuted": 0,
+        "executedVectors": 0,
+        "legacyExecuted": 0,
+        "retry": 0,
+        "ownedJobActive": 0,
+        "ownedTreeZeroConfirmed": true,
+        "sourceAfterDrift": 0,
+        "runnerSummaryAndCoverage": "could not be written because C full; tester to prepare clearly POSTHOC records, no forged original receipt"
+      }
+    }
+  },
+  "rootProtection": {
+    "verifiedSources": 791,
+    "sourceDifferences": 0,
+    "indexSha256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "indexUnchanged": true
+  },
+  "staticDocumentationChecks": {
+    "openspecStrictValidate": 0,
+    "gitDiffCheck": 0
+  },
+  "diskRecovery": {
+    "recordPackage": "D:/Project/acp-remote/.tmp/q3-disk-space-recovery-v1",
+    "freeze": "9ac66f6a3bbcf0bfd2c286ec675ce642789304601148eaceae9dee28f9983126",
+    "recordMembers": 5,
+    "fullPreservedTarget": "D:/Project/acp-remote/.tmp/q3rawind2-diskfull-preserved",
+    "files": 3540,
+    "bytes": 6629701854,
+    "destinationDoubleShaVerified": true,
+    "sourceRemovedVerifiedGeneratedFiles": 2692,
+    "sourceRetainedFiles": 848,
+    "stop": "Windows PowerShell5 long path error; stopped at first error",
+    "sourceDatabaseAndFrozenInputs": "untouched",
+    "nextResourceAttempt": "not authorized yet; new exact D target runner guard under preparation"
+  },
+  "integrationPreparation": {
+    "rawSocketStaticShadow": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-raw-socket-static-composition-check-v2",
+    "freeze": "5274d49580c1d16f4d8a08a02ce6435968f53be5a672b397d9f7520b4fad5e4c",
+    "patchCheck": 0,
+    "patchApply": 0,
+    "managementBytes": "exact fixed P1 product plus original raw cfg(test) declaration",
+    "compile": 0,
+    "test": 0,
+    "rootInstalled": false,
+    "sqliteRawDivergence": {
+      "sharedSourceLeaves": 882,
+      "differingLeaves": 54,
+      "note": "requires serial semantic merge and interface preservation; not a whole-file overlay"
+    }
+  },
+  "latestContinuation": {
+    "at": "2026-11-03T05:58:10.311Z",
+    "sqlite": {
+      "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-sqlite-caller-composition-v4",
+      "composedSourceLeaves": 886,
+      "rootInstalled": false,
+      "compositionCheck": 0,
+      "compositionApply": 0,
+      "baseSource": "f2e6d761dfda74fffb9f8e1a4377cf4a1033a97c590add36fb7a30a99ac9d65d",
+      "originalDropExact": {
+        "exit": 0,
+        "retry": 0,
+        "version": "f2e6d761dfda74fffb9f8e1a4377cf4a1033a97c590add36fb7a30a99ac9d65d",
+        "closure": "await independent evidence; no Drop/helper changes"
+      },
+      "removedUnusedTestWrappers": 2,
+      "nativeControls": {
+        "beforeSource": "025b07c7f59af94999d4779a625337db0753c217c668c4bcb71b44793c48d21a",
+        "afterSource": "6c5ae8fda050b5b5f310970bec668966ecfa54f0c3fe0c76eaf0d7a4d951b5cb",
+        "beforeExit": 101,
+        "afterExit": 0,
+        "changed": "CombinedSupervisor.cancel requests shutdown before original safe-control stage; physical cancel remains after controls",
+        "assertionsChanged": false,
+        "independentClosure": false
+      },
+      "nativeAssociated": {
+        "passed": 2,
+        "failed": 1,
+        "notExecuted": 24,
+        "newIssue": "CLDB-CALLER-NATIVE-RELEASE001",
+        "symptom": "release_target returned ResourceUnconfirmed before Storage.close",
+        "status": "diagnosis in progress; no failure cause claimed"
+      },
+      "schemaHeadMaintenance": "one success-only expected8 -> current SCHEMA_VERSION9; not yet compiled/tested",
+      "auditFixture": "author preparing isolated overlay using previously reviewed true schema6 fixture"
+    },
+    "raw": {
+      "overallCompileAttempt": 2,
+      "compileExit": 0,
+      "listProcessesExit0": 3,
+      "originalUniqueListGuard": "interrupted by runner Count exception",
+      "exactInvocations": 0,
+      "vectorsExecuted": 0,
+      "legacyExecuted": 0,
+      "status": "RAW-RUNNER-COUNT001 Open, minimal run-only supplement submitted for original reviewer",
+      "newSupplementFreeze": "edf8c7134ca94e7ca4f928bc9706f8af4f4af8971a62fe4d3a7d255fa90a992f",
+      "willReuseOnlyFixedThreeActualPEs": true,
+      "thirdCargoCompileAuthorized": false
+    },
+    "p1": "824-source independent static preparation pending; no new test results",
+    "tracked": {
+      "complete": 6,
+      "total": 25
+    }
+  },
+  "orderedContinuation": {
+    "at": "2026-11-03T09:50:42.530Z",
+    "source": "user requested ordered continuation after disk cleanup",
+    "tracked": {
+      "complete": 6,
+      "total": 25
+    },
+    "diskCleanup": {
+      "receipt": ".tmp/disk-cleanup-20261103-v2/VERIFIED.json",
+      "netFreedGiB": 41.65
+    },
+    "sqlite": {
+      "candidate": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-sqlite-caller-composition-v4",
+      "sourceManifest": "AUDIT-RELEASE-EXACT-SOURCE-MANIFEST.json",
+      "sourceSha": "d0a616b50b6e85ab55b422f73a03bcb3b40a770d263ff5fd30957259cf7912a5",
+      "leaves": 888,
+      "rootInstalled": false,
+      "compileExit": 0,
+      "nativeReleaseEarlierSource": {
+        "sourceSha": "3317205201ddd08c9162a328dcbed1368cdca2005beedf182908f95f380bcc55",
+        "runs": 30,
+        "passed": 30,
+        "independentReview": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-release-fix-independent-review-v1\\REPORT.md",
+        "scope": "two product fixes static-only; deterministic concurrency tests still absent"
+      },
+      "regression": {
+        "planned": 43,
+        "executed": 2,
+        "passed": 1,
+        "timedOut": 1,
+        "notExecuted": 41,
+        "passedName": "session_storage::request_registry::tests::registry_schema5_addition_is_atomic_at_every_new_migration_checkpoint",
+        "timeoutName": "session_storage::management_audit::dev_tests::audit_dev_real_storage_schema6_upgrade_and_fault_rollback",
+        "timeoutPid": 48756,
+        "timeoutSeconds": 60,
+        "ownedTimeoutTreeTerminated": [
+          48756,
+          4892
+        ],
+        "originalScenePreserved": true
+      },
+      "diagnostic": {
+        "workspace": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-sqlite-caller-composition-v4\\audit-timeout-diagnostic-v1\\workspace",
+        "sourceSha": "c7fc7a738ee1997d669e033e28ad2904d28369844ee31b4aee2ab09cd1b2a593",
+        "status": "stage probes added to copied test leaf; actual diagnostic compilation running",
+        "productSourceChanged": false
+      },
+      "rawPoolFix": {
+        "workspace": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-sqlite-caller-composition-v4\\raw-pool-fixture-fix-v1\\workspace",
+        "sourceSha": "3881616abbd180525adaddc5c2d54b40de5ab75ee12145c7262f58e7acef9af2",
+        "deterministicBeforeExit": 101,
+        "deterministicBeforeSize": 1,
+        "deterministicAfterExit": 0,
+        "auditHistoricalExactExit": 0,
+        "associated": {
+          "count": 43,
+          "passed": 16,
+          "timedOut": 1,
+          "notExecuted": 26,
+          "issue": "CLDB-CALLER-NATIVE-PRIORITY001"
+        }
+      },
+      "priorityFix": {
+        "workspace": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-sqlite-caller-composition-v4\\priority-notify-fix-v1\\workspace",
+        "sourceManifest": "SOURCE-MANIFEST-02.json",
+        "sourceSha": "2a12a8f43b6e72997c7cd3eae2ffadfae1368aaea4b6cbe9c2a9fb21c13f072e",
+        "sourceLeaves": 888,
+        "changedProduct": "release_control_hold notifies only an actual hold removal; original remove-before-swap remains",
+        "sameVersionTests": 45,
+        "passed": 45,
+        "failed": 0,
+        "retry": 0,
+        "naturalJobZero": true,
+        "sourceDrift": 0,
+        "allTargetsAllFeaturesCheckExit": 0,
+        "formatFourLeavesExit": 0,
+        "productBuild": "running",
+        "strict": "not yet executed",
+        "review": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-release-fix-independent-review-v1\\priority-notify-posterior-v1\\REPORT.md",
+        "priorityIssue": "Closed-limited by original independent reviewer",
+        "fullClDb": "not signed",
+        "rootInstalled": false
+      },
+      "finalCandidate": {
+        "package": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-sqlite-caller-composition-v4\\audit-phase-helpers-v1",
+        "freeze": "748138385cf7dda25f94d4f1eb372310b83dee932c1deac4bb8b419f91d18803",
+        "members": 2702,
+        "sourceSha": "fb3e8a8d5ae2c726e5783e85c86969a526f6b0322916972017a7cc93f34f97fe",
+        "sourceCount": 888,
+        "full45Development": {
+          "passed": 45,
+          "failed": 0,
+          "retry": 0,
+          "naturalListAndTestJobsZero": 90
+        },
+        "compileExit": 0,
+        "allTargetsAllFeaturesCheckExit": 0,
+        "defaultProductBuildExit": 0,
+        "formatFourLeavesExit": 0,
+        "strict": {
+          "exit": 101,
+          "baseline": 680,
+          "current": 680,
+          "added": 0,
+          "removed": 0,
+          "passed": false
+        },
+        "independentReview": {
+          "package": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-release-fix-independent-review-v1\\audit-phase-final-review-v1",
+          "freeze": "cbb173d580fb0627796a012574bf590c265b5ce63d61eb040f08fd3ba0dac87c",
+          "conclusion": "pass-limited, phase extraction and actual scoped evidence; not full CLDB"
+        },
+        "rootProductPatch": {
+          "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-sqlite-caller-composition-v4\\audit-phase-helpers-v1\\root-product-delta\\ROOT-PRODUCT-DELTA-v2.patch",
+          "sha": "4fa13c785e636f0b8db4ff0201576189572991fe5010af0c6cff96d1006e439d",
+          "paths": 155,
+          "applyCheck": 0,
+          "actualApply": false
+        },
+        "rootInstalled": false
+      }
+    },
+    "raw": {
+      "run": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-preservation-independent-execution-v4",
+      "freeze": "f22d3501eb33af5df14acfc4bad5e92d7b3e1e35c48a2ace85de5f823128d271",
+      "vectorsPassedReceipts": 1235,
+      "firstFailure": "RAW-ORDER-SELECT-NO-V2-FROM-V1",
+      "firstGroupUnobserved": 2,
+      "laterVectorsNotStarted": 350,
+      "legacyNotExecuted": 31,
+      "classification": "WSS-RAW-ORACLE-OFFER001: tester ignored explicit offer=1; independently classified, actual Rust failure preserved",
+      "correction": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-oracle-correction-v1",
+      "correctionFreeze": "72f7efb09d6c50fc9fde22fe64266eb698c83aab9847e4e65cd3ef5b82d183a2",
+      "runnerV6": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-oracle-execution-runner-v6",
+      "runnerFreeze": "b5ddbe8fdc536a107be2b9cbd4e9c4961241b5f6e1cb2b1ae0a41f18ca24b32f",
+      "status": "tester correcting only select offer argument; matching new compile under same reviewer, no product changes",
+      "currentRun": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-preservation-independent-execution-v6",
+      "previousVersionOracle": "WSS-RAW-ORACLE001 Closed-limited after actual 6 positive/17 negative plus six official capability cases",
+      "latest": {
+        "execution": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-raw-preservation-independent-execution-v9",
+        "reportedByIndependentTester": true,
+        "allSixGroupsPassed": 1588,
+        "legacyPassed": 22,
+        "legacyFirstStop": 23,
+        "legacyActualRustExit": 0,
+        "legacyStopCause": "observer rejected expected parent and child both yielding 1passed/0failed summaries",
+        "legacyNotStarted": 8,
+        "productRustFailureAtStop": false,
+        "status": "tester/reviewer preparing minimum run-only summary observer correction; full legacy not yet complete",
+        "newSourceCodeChanges": "independent tester only; no product modifications during oracle repairs"
+      }
+    },
+    "p1": {
+      "run": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-socket-independent-execution-v3",
+      "freeze": "5b92d51e65f7bd7f93a1943366c6e8a743c60b81c3c934e6c2437f441f5029b8",
+      "members": 1088,
+      "compile": 1,
+      "uniqueLists": 15,
+      "exactPassed": 15,
+      "componentVectorsPassed": 40,
+      "retry": 0,
+      "jobStagesZero": 31,
+      "scope": "component-only; full Harness/UI not covered",
+      "status": "Passed-limited component execution and independent posterior; no full Harness/UI or original finding closure claimed",
+      "rootVerifiedMembers": 1088,
+      "rootMismatches": 0,
+      "posterior": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-release-fix-independent-review-v1\\p1-v3-posterior\\REPORT.md",
+      "posteriorFreeze": "571cb8ee3df4d99483e8aa96470546a55146cef4945674572618ab183cc4e325"
+    }
+  },
+  "current905": {
+    "source": {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-components-integration-v1",
+      "manifestSha256": "05f0228f6735e847cf0640ce3c2fc0defe33adb0b266c7235dd264cc12a9e4a5",
+      "count": 905
+    },
+    "rootVerified": [
+      {
+        "directory": "session-loop-q003-components-p1-native-independent-execution-v1",
+        "freezeSha": "821d265c87880ced3784c0bc9d8f977f3ec447450c7a978de67579f9924c4c50",
+        "members": 1282,
+        "mismatches": []
+      },
+      {
+        "directory": "session-loop-q003-components-raw-independent-execution-v1",
+        "freezeSha": "fbbcca18316a65e7d227f35f3fbe6205a8e554b0871dc6d621ba4d038b9282f3",
+        "members": 158,
+        "mismatches": []
+      },
+      {
+        "directory": "session-loop-q003-components-raw-final-scope-review-v1",
+        "freezeSha": "b3101bfb69930cfc62da6fe421ce098e4b97ac30189009c01c52c1274e5d082c",
+        "members": 3,
+        "mismatches": []
+      }
+    ],
+    "p1": {
+      "passed": 15,
+      "vectors": 40
+    },
+    "native": {
+      "passed": 45
+    },
+    "testJobs": {
+      "nativeP1NaturalZero": 120,
+      "rawNaturalZero": 43
+    },
+    "raw": {
+      "passedVectors": 1588,
+      "legacyPassed": 31,
+      "selfChecks": 3,
+      "retry": 0,
+      "sourceAndLockUnchanged": true
+    },
+    "compile": {
+      "cargoExit": 0,
+      "buildFinishedSuccess": true,
+      "toolSupervision": {
+        "naturalZero": false,
+        "wrapperFailed": true,
+        "cleanupInvoked": true,
+        "ownedRemaining": [
+          {
+            "pid": 33808,
+            "name": "vctip",
+            "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\VCTIP.EXE"
+          }
+        ],
+        "afterCleanupActive": 0,
+        "scope": "Cargo compiler helper VCTIP remained after successful compilation and was stopped by its own Job; this is not a product test or a normal native-source close receipt"
+      }
+    },
+    "checkAllTargetsAllFeatures": {
+      "exit": 0,
+      "naturalJobZero": true
+    },
+    "defaultBuild": {
+      "cargoExit": 0,
+      "buildFinishedSuccess": true,
+      "naturalTreeZero": false,
+      "activeBeforeCleanup": 1,
+      "activeAfterCleanup": 0,
+      "helperIdentity": "not observed; no assumption it was VCTIP",
+      "supervisionFailure": "owned descendants required forced cleanup after test exit"
+    },
+    "strict": {
+      "cargoExit": 101,
+      "errorDiagnosticEvents": 841,
+      "naturalTreeZero": true,
+      "addedToNative888": 169,
+      "removedFromNative888": 8,
+      "comparisonScope": "Relative to888 Native-only input; normalized full compiler message, slash normalization, offsets/rendered ignored, multiplicities retained. Raw/P1/independent test additions are included; not a same-scope zero regression claim.",
+      "passed": false
+    },
+    "scope": "Same905 components only; no full Harness/WSS/UI/whole-change claim",
+    "factory": {
+      "status": "production factory installed in Root; independent acceptance pending",
+      "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-implementation-v1",
+      "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1",
+      "tester": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-independent-preparation-v1",
+      "rootProductInstalled": true,
+      "candidateV1": {
+        "sourceCount": 907,
+        "manifestSha": "9b24e0ee2330c629a4e0c10367f62d2815e7976331fcf3963e528b5d9cf763ce",
+        "checkAllFeaturesExit": 0,
+        "firstDeveloperTests": {
+          "passed": 2,
+          "failed": 1,
+          "reason": "Q3-PFACT-TEST-OBS001 wrong weak status observer after actual Host release; independent reviewer confirmed"
+        },
+        "correctedDeveloperTests": {
+          "passed": 3,
+          "failed": 0
+        },
+        "compiledJobTail": "one helper required owned stop; not natural zero"
+      },
+      "candidateV2": {
+        "manifestSha": "ac7149baf19c81180c4343d73d4c49967c5b7fee85b09880a1c8fcf2ec0c2e40",
+        "sourceCount": 907,
+        "status": "fixed, includes narrow real observation hooks; independent tests in preparation"
+      },
+      "finalCandidate": {
+        "manifestSha": "59545429640c7d5cf69ab998e5f346633699b6e1f7c19b9631b2674f7a667000",
+        "sourceCount": 907,
+        "productCount": 819,
+        "deltaPaths": 19,
+        "installation": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-factory-root-product-delta-v1",
+        "integrationChecks": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-root-production-factory-check-v1",
+        "results": {
+          "source": "59545429640c7d5cf69ab998e5f346633699b6e1f7c19b9631b2674f7a667000",
+          "rootInstalledProductPaths": 819,
+          "installPathCount": 19,
+          "sourceMismatches": [],
+          "check": {
+            "exit": 0,
+            "naturalTreeZero": true
+          },
+          "format": {
+            "exit": 0,
+            "naturalTreeZero": true
+          },
+          "defaultBuild": {
+            "cargoExit": 0,
+            "buildFinishedSuccess": true,
+            "naturalTreeZero": false,
+            "remaining": [
+              {
+                "pid": 39200,
+                "name": "vctip",
+                "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\VCTIP.EXE"
+              }
+            ],
+            "afterCleanup": 0,
+            "supervisionFailure": "owned descendants required forced cleanup after test exit"
+          },
+          "authorSameSourceDeveloper": {
+            "factoryPassed": 4,
+            "lifecyclePassed": 20,
+            "oldStopExactPassed": 1,
+            "source": "59545429640c7d5cf69ab998e5f346633699b6e1f7c19b9631b2674f7a667000",
+            "scope": "v4 developer regression, not independent DNF"
+          },
+          "strict": {
+            "exit": 101,
+            "errorDiagnosticEvents": 843,
+            "passed": false,
+            "scope": "author fixed-v4 command only; Root same exact product source, no duplicate rerun",
+            "helperCleanup": "vctip owned stop to0"
+          },
+          "independentFactory": "first seven tests under correction and compilation preparation; not executed",
+          "fullHarnessWssUi": false,
+          "bodyRegressionReuse": {
+            "passed": 14,
+            "source": "ac7149baf19c81180c4343d73d4c49967c5b7fee85b09880a1c8fcf2ec0c2e40",
+            "run": "body-v2-direct-01",
+            "scope": "actual v2 run; v2→v4 changed two other development test leaves, production/body files unchanged; not a new whole-v4 execution claim"
+          }
+        }
+      },
+      "authorDelivery": {
+        "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-implementation-v1",
+        "deliverySha": "81058da372ff40075db123053984f65ca160d2503fae5a943b1251b34db86711",
+        "verified": {
+          "freezeSha": "6f29cd2f5a2982e5f88d7410e2769a568c5016225d8a4a6c9fc380388a7534b2",
+          "members": 974,
+          "mismatches": []
+        }
+      },
+      "independentBatch": {
+        "status": "Pass-independent-first-batch-limited",
+        "casesPassed": 7,
+        "actualAssertions": 124,
+        "retries": 0,
+        "peSha": "f17e9f574d861a3f93e5eb80db048bf78f6f7d525ec387843770e8be5be7f0f7",
+        "mountedSourceSha": "9ba40b9c4835fe50f65ff900acdc364e81517532f9f6108c7b7d8b16a271c8e7",
+        "executionVerified": {
+          "sha256": "5429d1374b9e99868da32de7deef85012a16758c0b6c5466b8cd3014f35fb1f8",
+          "members": 44,
+          "mismatches": []
+        },
+        "report": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-production-factory-independent-preparation-v1/REPORT.md",
+        "posterior": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/independent-programs-v2/POSTERIOR.md",
+        "posteriorFreezeSha": "cc8dc26e1280313a5e7a2bcdc49990e3669e036c0c226a2f6e5a4741b2465e81",
+        "naturalTestJobs": 7,
+        "compileJob": "one unidentified owned member remained after Cargo0; own Job stopped to0; not natural zero",
+        "fullDnf24Passed": false
+      },
+      "remainingIndependent": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-independent-followup-v1/DNF-COVERAGE.md",
+      "followup": {
+        "firstBatch": {
+          "fixedCases": 11,
+          "firstRunPassed": 7,
+          "firstFailureCase": 8,
+          "notRunAfterFailure": 3,
+          "retries": 0
+        },
+        "continuation": {
+          "cases": 3,
+          "passed": 3,
+          "assertions": [
+            18,
+            21,
+            17
+          ],
+          "naturalJobs": 3,
+          "scope": "only original unexecuted9-11 in preserved relative order; not11allpass"
+        },
+        "openFinding": "FACTORY-FOLLOWUP-PAIR001",
+        "facts": "original actor revoked; first native source already closed with original Job/IO/SQL facts; failure occurs pairing second observer",
+        "cause": "not confirmed; deferred SQLite snapshot upgrade is hypothesis",
+        "newBatches": "next10 and fault6 test-only programs undergoing independent review; not executed"
+      }
+    },
+    "tracked": {
+      "complete": 6,
+      "total": 25
+    },
+    "npmAudit": "not executed; user refused metadata upload",
+    "productChecks": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-components-product-checks-v1",
+    "rootIntegration": {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-root-components-integration-check-v1",
+      "delta": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-components-root-product-delta-v1",
+      "installed": true,
+      "results": {
+        "installedProductPaths": 817,
+        "mismatches": [],
+        "checkAllTargetsAllFeatures": 0,
+        "web": {
+          "exit": 0,
+          "filesPassed": 28,
+          "testsPassed": 651,
+          "typeCheck": true,
+          "build": true
+        },
+        "format": {
+          "initialExit": 1,
+          "initialDiffFileCount": 7,
+          "fixExit": 0,
+          "finalExit": 0,
+          "pureTestFiles": [
+            {
+              "path": "app/src/adapters/acp/shared_view_projection/projection_independent.rs",
+              "beforeSha": "d3d29de92bd3fbda27a183f4d98f1c9cbfb07b767df44e874516cdb66cbee8ef",
+              "afterSha": "6ebe86856cbcc470213694c461b2323a9fc4cdb40ffc6879c534bd856fca0110",
+              "bytes": 6759
+            },
+            {
+              "path": "app/tests/acp_message_id_acceptance.rs",
+              "beforeSha": "f5966e5b275f7a79541e391bfb4601be63c2b612550f748abeb895ce6068df9d",
+              "afterSha": "c7c809818524ba3fc8ff71de3ffb20098cd4c7bd629fd0e14e1912f6438523aa",
+              "bytes": 11115
+            },
+            {
+              "path": "app/tests/acp_runtime_acceptance/raw_config.rs",
+              "beforeSha": "db5a8ac7bbbd3bd9af64bc389e98cf603df6266ffab79789766202b8f3a46bc7",
+              "afterSha": "9ea520e0b15e2327529a5d658ce681d7b9b7a78ef21af74bce6dc2a14a717cec",
+              "bytes": 14522
+            },
+            {
+              "path": "app/tests/acp_runtime_acceptance/remaining_public_paths.rs",
+              "beforeSha": "ec1569df31aeda1c5748bb10d89b7f518abfd48c1b6371da2f8f3481c2c47027",
+              "afterSha": "142ff2fc68083bafd70812e3d0a7b99aff2255311ee79246218190aa12a82931",
+              "bytes": 12438
+            },
+            {
+              "path": "app/tests/acp_runtime_acceptance/replies_privacy.rs",
+              "beforeSha": "ad7053624cf9b30ce3bfbe506a95ba7517095c111a66bf00932a6ea06680d4e2",
+              "afterSha": "21c947b22aad42fd5cbf1e11cf4162c7ff618fd3f2b49805853b4d931381b9a9",
+              "bytes": 10097
+            },
+            {
+              "path": "app/tests/raw_json_acceptance.rs",
+              "beforeSha": "cc07ecf34182008d39919924654c908aa5093f0f995ccc840359c7d50236c881",
+              "afterSha": "9d641d6e1d0ca700e4e58f87a679a0deb0e581abaafd73175ef0de4d396a5f1a",
+              "bytes": 29244
+            },
+            {
+              "path": "app/tests/acceptance/acp_runtime_legacy29_support.rs",
+              "beforeSha": "12e5cadd6de5056e45c401e996ce5685a6870041c919e52c5a3bb815566ea604",
+              "afterSha": "d8b4f7592f83da3d2bcdb13ac19f1dbdede8e73106c64da7d3ba5362ee66d76c",
+              "bytes": 7987
+            }
+          ]
+        },
+        "jobsNaturalZero": true,
+        "defaultBuild": {
+          "cargoExit": 0,
+          "buildFinishedSuccess": true,
+          "naturalTreeZero": false,
+          "ownedRemaining": [
+            {
+              "pid": 34232,
+              "name": "vctip",
+              "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\VCTIP.EXE"
+            }
+          ],
+          "activeAfterCleanup": 0,
+          "supervisionFailure": "owned descendants required forced cleanup after test exit",
+          "concurrentSourceChanges": "seven test-only rustfmt files; production compilation modules unchanged"
+        },
+        "strict": "same905 fixed source failed101/841; not rerun unchanged for Root",
+        "npmAudit": "not run; user refused",
+        "fullHarnessWssUi": false,
+        "rootProductAfterFormat": {
+          "count": 817,
+          "manifestSha": "49dc87f999e4096649056c353109a592a609ef3324d31da02b52d26ee67c610d",
+          "delta": "Only seven listed test files rustfmt; baseline905 and before/after copies retained"
+        }
+      },
+      "indexSha": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+    }
+  },
+  "nextP2": {
+    "status": "Upload-U1 coding in isolated workspace; no Root product install or functional pass yet",
+    "workspace": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-p2-upload-document-implementation-v1",
+    "owner": "production_factory_inventory",
+    "definitions": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-upload-document-independent-definitions-v1",
+    "definitionSha": "fc2a0341bc3c0631333408a3d287c56ab41878c1e91189624b5c84b70108da45",
+    "scope": "Upload first; DocumentTransfer and standard session/Node facades later; no full WSS/UI claim",
+    "codingReview": {
+      "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-upload-u1-coding-gate-v1/REVIEW.md",
+      "freezeSha": "987088c3f761b42595eaecc056b1d9b8086eda9e003656c4e4ad2f26839dcbcf",
+      "scope": "U1 codec/real socket-bound buffer/original body custody/seal only; L4 component subset; P3 real L5 later"
+    },
+    "independentPreparation": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-upload-u1-independent-preparation-v1",
+    "u1": {
+      "candidateV1": {
+        "manifest": "073ff31fcf115b1985824161a3942aafc20538eb80083b730254cd35da1216b9",
+        "sourceCount": 910,
+        "developerCases": 6,
+        "durationSeconds": 329.69,
+        "bodyRegression": 14
+      },
+      "candidateV2": {
+        "manifest": "cbb5b3a562ba8496af10f29498c7c268dd9035b333f553b220c6d5e3511b2b5b",
+        "sourceCount": 910,
+        "changeFromV1": "author development include pure rustfmt only; production bytes unchanged",
+        "check": 0,
+        "build": 0,
+        "format": 0,
+        "shortDeveloperTests": 5,
+        "codecTests": 1
+      },
+      "independentFirstBatch": {
+        "passed": 4,
+        "assertions": 75,
+        "source": "v1 production, independent911",
+        "freeze": "fb05e63d0a43319b8982e701e3307d894c7d99c00413fca56b5c9a3500b3bc9b",
+        "scope": "L3+L4 real authentication context and original Node body; not production routed L5"
+      },
+      "p1Regression": {
+        "firstMissingEnvironment": "14 failed due missing P1_DATA_ROOT, retained",
+        "afterEnvironment": {
+          "passed": 25,
+          "failed": 1
+        },
+        "finding": "P2U1-P1-SV074-OBS001; real flush error atomic precedes actual chunk Drop/seal",
+        "correction": {
+          "productCodeChanged": false,
+          "caseChange": "wait same original stream explicitly sealed after real flush error observation",
+          "sourceManifestPrefix": "81ef66ae",
+          "sv074FirstExactPassed": 1,
+          "originalOrderedExactPassed": 26,
+          "naturalTestJobs": 27,
+          "freeze": "be1045c15df78673436b8d1a09257f28dfe318a063ec6a24b2a9cd11e830c004",
+          "posterior": "Closed-limited by original reviewer; p2-upload-u1-delivery-v1/P1-OBS-POSTERIOR.md",
+          "sqlxWorkerJoin": "not observed",
+          "compileJob": "one unidentified owned member stopped to0; not natural zero"
+        }
+      },
+      "rootInstalled": true,
+      "pending": [
+        "Queue register/consume custody",
+        "catalog upload",
+        "DocumentTransfer",
+        "P3 real ACPI route/writer",
+        "remaining U1 close/cancel independent cases"
+      ],
+      "limitations": [
+        "4097 blocks /65552+ bytes test329.69s; duplicate Node current query noted",
+        "v1 original developer PE overwritten before separate archive; original hashes/source/logs retained, not recreated"
+      ],
+      "rootIntegration": {
+        "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-upload-u1-check-v1",
+        "delta": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-u1-root-product-delta-v1",
+        "results": {
+          "source": "81ef66ae931089d77e9dfbdd81c365f793136f2559437a7c8633e55faafc7657",
+          "rootProductCount": 822,
+          "check": {
+            "exit": 0,
+            "naturalTreeZero": true,
+            "cleanup": false,
+            "afterCleanup": 0,
+            "remaining": []
+          },
+          "build": {
+            "exit": 0,
+            "naturalTreeZero": false,
+            "cleanup": true,
+            "afterCleanup": 0,
+            "remaining": [
+              {
+                "pid": 50728,
+                "name": "vctip",
+                "path": "C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\VCTIP.EXE"
+              }
+            ]
+          },
+          "format": {
+            "exit": 0,
+            "naturalTreeZero": true,
+            "cleanup": false,
+            "afterCleanup": 0,
+            "remaining": []
+          },
+          "sameSourceClient": "unchanged; priorRoot Web651+type/build evidence reused only client scope",
+          "u1Scope": "internal Upload buffers/body custody only; production network actions/Queue consume/Document unimplemented",
+          "strict": "not passed; historyv4 843error events, U1 not falsely signed clean"
+        }
+      }
+    },
+    "u2": {
+      "workspace": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-p2-queue-handoff-implementation-v1",
+      "baseline": "553cdcc2b284db98c33c81084c931434e3aef4d9a37e3de65155fd48cc04379e",
+      "count": 912,
+      "status": "real code written under independent revised ABI; first check mechanical mapping error retained; developer cases underway",
+      "scope": "registered intent/body lease/original Queue install handoff and lifetime fence; no true network routing yet",
+      "candidateV3": {
+        "source": "5b3bbc6269406d85b4cde8fbeb384fb75a8aba87f267730846dedd4f677ea0ae",
+        "count": 914,
+        "developerCasesPassed": 8,
+        "regressions": {
+          "queue": 23,
+          "body": 14,
+          "factory": 4
+        },
+        "check": 0,
+        "buildCargo": 0,
+        "format": 0,
+        "findings": [
+          "P2U2-POLL-LOCK001",
+          "P2U2-PENDING-RETRY001",
+          "P2U2-REGISTRATION-OWNER001"
+        ],
+        "findingsStatus": "static/development fixed; independentU2 pending",
+        "rootInstalled": false
+      }
+    }
+  },
+  "pairingConcurrency": {
+    "finding": "FACTORY-FOLLOWUP-PAIR001",
+    "rootProductChanged": false,
+    "workspace": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-pairing-concurrency-fix-v1",
+    "baseline": "59545429640c7d5cf69ab998e5f346633699b6e1f7c19b9631b2674f7a667000",
+    "diagnosticSource": "f6312edce0db0d6daa4f958bec143d37493018da6ca830195dc6f54922d803bd",
+    "count": 908,
+    "status": "controlled old517 reproduced; isolated minimal BEGIN IMMEDIATE fix passed two developer exacts; original factory8 independent retest requested",
+    "normalProductBegin": "deferred unchanged",
+    "testAssetFix": "PAIR-REPRO-JOIN001 corrected to retained handle timeout then original final drain; reviewer recheck pending",
+    "firstCompile": "101/E0308 retained; format-only first binary hash error separately disclosed",
+    "next": "serial control then controlled overlapping real commits; preserve code517 if observed; BEGIN IMMEDIATE only after confirmation and independent review",
+    "oldRepro": {
+      "source": "f6312edce0db0d6daa4f958bec143d37493018da6ca830195dc6f54922d803bd",
+      "pe": "a0e518046d466c705e3508dac18b5ab9d050ba2a24c2c7ee53d176b38201779d",
+      "serialPass": 1,
+      "concurrentFailure": 1,
+      "sqliteCode": "517",
+      "facts": {
+        "a": 0,
+        "b": 1,
+        "audit": 1,
+        "revision": 1
+      },
+      "testJobsNaturalZero": true,
+      "fixtureRetained": true
+    },
+    "fixed": {
+      "source": "dff361bdf6430a08927c828d8038bbad68b8bbbab7b99e90f2b7598a2aeb9323",
+      "pe": "1ef2cd44757bf0875cdb3ca5c029b34783711fcae54bbed2a82c163c773f2a50",
+      "normalChange": "register_client begin_with BEGIN IMMEDIATE only",
+      "serialPass": 1,
+      "concurrentPass": 1,
+      "testJobsNaturalZero": true,
+      "rootInstalled": true,
+      "originalFailureClosed": "limited true; old IPC failure lacked underlyingcode; controlled517+exact original new green support fix",
+      "trustRegression": {
+        "passed": 13,
+        "naturalJobZero": true
+      },
+      "independentOriginalCase8": {
+        "passed": 1,
+        "assertions": 28,
+        "sourcePrefix": "e34f550b",
+        "unchangedProgram": true,
+        "executionFreeze": "7c5d416d1d337787300f43a0de4a8abffa65dde93bbbbddf4eaa42f571139a77",
+        "posterior": "694e8ba5079362e0c5ece64e6dd9e86b1610b9cd33127cebbd0755d2e8516c8d"
+      }
+    },
+    "rootPostIntegration": "pending composition check after privacy candidate"
+  },
+  "protectionRedaction": {
+    "finding": "FACTORY-ERROR-REDACTION001",
+    "rootInstalled": true,
+    "candidate": "61b77eb749ddb34bc81ea75e58ac55e79d8c758f4c856b3eae519a60f5e76be4",
+    "scope": "Protection Display/Debug only, sourceNone/class preserved",
+    "developerOld": {
+      "passed": 1,
+      "failed": 3
+    },
+    "developerFixed": 4,
+    "identityFakeRestore": 1,
+    "originalIndependentDNF22": {
+      "passed": 1,
+      "checks": 6,
+      "programUnchanged": true,
+      "sourcePrefix": "2e75",
+      "assetsPrefix": "c162",
+      "naturalJobZero": true,
+      "posterior": "closed limited by originalreviewer, source/observations exact"
+    },
+    "additionalRealDpapi": "new and originalv4 positive both failed CryptProtectData/os2 in current environment; no real DPAPI success or physicalclose claim"
+  },
+  "currentRoot": {
+    "actualRootManifest": "8f2c50e6cb4feffa933be9b9883c2713a02d51e1b2ed3bc2743cc58dbe10fa28",
+    "paths": 934,
+    "productPaths": 846,
+    "productDrift": [],
+    "rootDelta": 3,
+    "rootProductInstalled": true,
+    "check": 0,
+    "format": 0,
+    "defaultBuildCargo": 0,
+    "testCompileCargo": 0,
+    "checkNaturalJobZero": true,
+    "defaultBuildException": "VCTIP5828 required owned Job stop0; original exception preserved",
+    "testCompileException": "VCTIP18892 required owned Job stop0; original exception preserved",
+    "directRootRegressions": 47,
+    "directRootRegressionNaturalJobZero": true,
+    "productExecutable": "8eb5c6f2b7a06a991ff93c552ac07a674facf69aaed7bcb887d8557418779857",
+    "strictPassed": false,
+    "fullProductPassed": false,
+    "web": "no Web changed; no new browser claim",
+    "npmAudit": "not executed by user choice",
+    "checksDirectory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-p3-connection-owner-root-integration-v1",
+    "finalReview": {
+      "status": "independent limited installation posterior accepted",
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\source-session-recovery-review-v1\\P3-INSTALLATION-POSTERIOR.md",
+      "sha256": "7eda21f9ffa359b090e15662766f3e01119c1f784635d47d4ca7d9a729e7864a",
+      "reviewer": "source_review_resume",
+      "scope": "exact934 source,three leaves and47 actual Root regression results;not full P3-A/Node chain"
+    },
+    "executionFreeze": "4a6f62561522fe108de9ac9247e27bc146e81ac8a125f377a346c9e636c5bf5c"
+  },
+  "providerBrand": {
+    "finding": "FACTORY-PROVIDER-BRAND001",
+    "status": "limited closed by original independent reviewer; Read36+Accepted37 first passed; installed Root",
+    "checks": 36,
+    "failedChecks": 2,
+    "isolatedWorkspace": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-provider-brand-fix-v1/workspace",
+    "baseline": "7828978ab758d58599f89cac10628c23629ab4a603276046cb9d3110622a0ddb",
+    "rootInstalled": true,
+    "independentRetest": "pending",
+    "scope": "original RegistryOwnerScope Arc binding; same copied data cannot grant scope",
+    "developer": {
+      "source": "0b80ba511113a6ee48635d9a03b9689e9a0812f6f64a57d8042741e52e196503",
+      "count": 912,
+      "productChanged": 7,
+      "check": 0,
+      "build": 0,
+      "testCompile": 0,
+      "format": 0,
+      "runtimePassed": 29,
+      "runtimeJobsNaturalZero": true,
+      "compilerVctipCleanup": true,
+      "freeze": "a6535af25bb3061f6041766e5017b37b469224870b2510ea5936c8781df2f91e"
+    },
+    "independentRead": {
+      "status": "pass first unchanged program",
+      "checks": 36,
+      "sourcePrefix": "f241",
+      "programPrefix": "552d",
+      "binaryPrefix": "1383",
+      "naturalJobZero": true,
+      "acceptedProvider": "pending separate independent compile",
+      "posterior": "limited closed by original reviewer",
+      "executionFreeze": "73ac9cc0f3183478a0c212bc4b9348ace4fe858d35b64297db1b991fe4878b71"
+    },
+    "independentAccepted": {
+      "passed": 37,
+      "executionFreeze": "39d7769855752cb9b4f2dd30ed4a2671615d5e0d9b01eded86ad8b17360ba9ec",
+      "naturalJobZero": true
+    }
+  },
+  "uploadU2Independent": {
+    "source": "5b3bbc6269406d85b4cde8fbeb384fb75a8aba87f267730846dedd4f677ea0ae",
+    "independentSource": "59fd6d51fabadeb5a3183f71aa7b8adcc82e6aa5c182109b706ded33e6771e9f",
+    "tests": 7,
+    "checks": 134,
+    "retries": 0,
+    "testJobsNaturalZero": true,
+    "compile": "Cargo0/55warnings/unknown child1 required ownstop0",
+    "scope": "single ordinary Node, real TLS/WSS proof context then direct U1/SQLite/Queue L4 components",
+    "originalL5": "not executed",
+    "rootInstalled": true,
+    "posterior": "limited passed by originalreviewer",
+    "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-upload-u2-independent-preparation-v1/REPORT.md",
+    "executionFreeze": "5383e968fd36e933565547eaf73ea2724d90e46395ee329043bbfdcaa5b2afcf"
+  },
+  "currentIsolatedCombination": {
+    "source": "6d28314d7008dc84ea993e3833472ef221b286006adef921627fdebe2f52d022",
+    "count": 914,
+    "rootDeltaPaths": 13,
+    "check": 0,
+    "format": 0,
+    "defaultBuildCargo": 0,
+    "testCompileCargo": 0,
+    "compilerExceptions": "build/testCompile VCTIP ownstop0; check natural0",
+    "developerTests": 71,
+    "runtimeGroups": [
+      {
+        "label": "queue-regression",
+        "filter": "application::queue_owner::tests::",
+        "count": 24,
+        "exit": 0,
+        "naturalJobZero": true
+      },
+      {
+        "label": "u2-regression",
+        "filter": "node::tests::queue_management_development::",
+        "count": 8,
+        "exit": 0,
+        "naturalJobZero": true
+      },
+      {
+        "label": "factory-regression",
+        "filter": "production_factory_",
+        "count": 4,
+        "exit": 0,
+        "naturalJobZero": true
+      },
+      {
+        "label": "body-regression",
+        "filter": "node::tests::body_preparation_development::",
+        "count": 14,
+        "exit": 0,
+        "naturalJobZero": true
+      },
+      {
+        "label": "lifecycle-regression",
+        "filter": "node::lifecycle::development_tests::",
+        "count": 20,
+        "exit": 0,
+        "naturalJobZero": true
+      },
+      {
+        "label": "configuration-actor-regression",
+        "filter": "node::tests::catalog_development::node_configuration_core_real_paired_actor_and_revoke_before_catalog_sql",
+        "count": 1,
+        "exit": 0,
+        "naturalJobZero": true
+      }
+    ],
+    "runtimeJobsNaturalZero": true,
+    "sourceDrift": [],
+    "rootPatchCheck": 0,
+    "rootInstalled": false,
+    "strictPassed": false,
+    "fullChangePassed": false
+  },
+  "rootHistory": [
+    {
+      "baseline": "553cdcc2b284db98c33c81084c931434e3aef4d9a37e3de65155fd48cc04379e",
+      "sourceDefinitionCount": 912,
+      "productPaths": 824,
+      "composition": [
+        "factoryv4",
+        "UploadU1/P1wait",
+        "TrustBEGINIMMEDIATE",
+        "ProtectionDisplayDebug"
+      ],
+      "allProductHashesMatched": true,
+      "checksDirectory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-session-services-security-integration-v1",
+      "checkStatus": {
+        "source": "553cdcc2b284db98c33c81084c931434e3aef4d9a37e3de65155fd48cc04379e",
+        "productPaths": 824,
+        "sourceDrift": [],
+        "check": 0,
+        "format": 0,
+        "defaultBuildCargo": 0,
+        "testCompileCargo": 0,
+        "compilerCleanupExceptions": {
+          "build": "VCTIP48900 ownJob stopped to0",
+          "testCompile": "VCTIP48432 ownJob stopped to0"
+        },
+        "runtimeGroups": [
+          {
+            "group": "Trust",
+            "passed": 13
+          },
+          {
+            "group": "Protection error boundary",
+            "passed": 4
+          },
+          {
+            "group": "ordinary factory",
+            "passed": 4
+          }
+        ],
+        "runtimeGroupsNaturalZero": true,
+        "strictPassed": false,
+        "fullProductPassed": false
+      },
+      "strictPassed": false,
+      "fullChangePassed": false
+    },
+    {
+      "label": "before-D1-root-installation",
+      "state": {
+        "reviewedComposition": "6d28314d7008dc84ea993e3833472ef221b286006adef921627fdebe2f52d022",
+        "actualRootManifest": "9c4e36cfc8d8e87401868c1bcd48f6c445281ed8e31d7068adf44950a0c460ba",
+        "paths": 914,
+        "productPaths": 826,
+        "productDrift": [],
+        "docOnlyDelta": [
+          "README.md"
+        ],
+        "rootDelta": 13,
+        "rootProductInstalled": true,
+        "check": 0,
+        "format": 0,
+        "defaultBuildCargo": 0,
+        "checkNaturalJobZero": true,
+        "defaultBuildException": "VCTIP47896 required own Job stop to0; original failure retained",
+        "reusedCompositionTests": {
+          "source": "6d28314d7008dc84ea993e3833472ef221b286006adef921627fdebe2f52d022",
+          "tests": 71,
+          "groups": 6,
+          "naturalJobZero": true,
+          "scope": "same826 product hashes; tests executed in isolated composition, not claimed as new Root test execution"
+        },
+        "independent": {
+          "providerRead": 36,
+          "providerAccepted": 37,
+          "u2Tests": 7,
+          "u2Checks": 134,
+          "scope": "their own fixed versions; original reviewer limited closed"
+        },
+        "strictPassed": false,
+        "fullProductPassed": false,
+        "web": "no changed Web bytes; previous651/check/build only their scope",
+        "npmAudit": "not executed by user choice",
+        "checksDirectory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-provider-u2-root-integration-v1",
+        "finalReview": {
+          "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/provider-u2-root-final-v1/REVIEW.md",
+          "sha256": "695cab9b22ef40ca4ce54ec1aa3f429d22323c7e214dd8352d8ace0ce3e93282",
+          "status": "limited pass installed826 product and actualRoot checks; no full DNF/L5/strict upgrade"
+        },
+        "executionFreeze": "e3f94cceaf0d74eb0edfe5aa01b8f3691860b5e0dc6408d69d1fce6110835dd4",
+        "productExecutable": "7a37ce2fe8b6b35026799456d617c0e1dea119d6a1eb776200779440316151f5"
+      }
+    },
+    {
+      "label": "legacy-currentRoot-entry-before-P3-owner-update",
+      "state": {
+        "reviewedComposition": "4cf308e986ef1cdc2c3286352ee1f12011d6fb1ee8b01580377882d7df9afb6d",
+        "checksManifest": "01649cb2e703cad9b1b146761930ad1c3b51789669f51322546d2e7c9c3cbc35",
+        "actualRootManifest": "40d88b93861544a56cfa6e5e0c41f347788eaf2314c0a93a611f5c9d054329eb",
+        "paths": 922,
+        "productPaths": 834,
+        "productDrift": [],
+        "rootDelta": 20,
+        "rootProductInstalled": true,
+        "check": 0,
+        "format": 0,
+        "defaultBuildCargo": 0,
+        "checkNaturalJobZero": true,
+        "defaultBuildException": "VCTIP45076 required owned Job stop0; original exception preserved",
+        "testCompileException": "VCTIP53848 required owned Job stop0; original exception preserved",
+        "directRootDocumentTests": 6,
+        "directRootDocumentNaturalJobZero": true,
+        "directRootDocumentBinary": "8814bf3553ca8ffee85d4166533deb6768c0d504dd96ce32d69df07f5b9b1b23",
+        "productExecutable": "d9b8d6ab7ff29ec2da474db8db76d513ba13e5b1a4c600f5bb17fd7d37e0f4b8",
+        "strictPassed": false,
+        "fullProductPassed": false,
+        "web": "no changed Web bytes; earlier651/check/build retains original scope",
+        "npmAudit": "not executed by user choice",
+        "checksDirectory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-document-v4-root-integration-v1",
+        "finalReview": {
+          "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-root-installed-posterior-v1/REVIEW.md",
+          "sha256": "8cf45813bdd7140065f45525ad04f09dbf94dc1dbca0397168322eab63e0e4c0",
+          "freeze": "e84af04b239bce0ca42aa9248b4e9c63005ea573201583eb401dcd12033981cd",
+          "members": 53,
+          "rootMemberDrift": [],
+          "status": "limited pass: queued-input-body component installed834, actual Root checks and developer CLI smoke verified; not full P2/P3/L5/Harness/strict"
+        },
+        "docOnlyDelta": [
+          "README.md"
+        ],
+        "executionFreeze": "4cf0a603f1208ba42eb20e4434172da23a88fbc372d849364819953a3170becd"
+      }
+    }
+  ],
+  "documentD1": {
+    "status": "queued_input_body first slice integrated and independently reviewed in actual Root; full Document/P3/L5/Harness still incomplete",
+    "abi": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-document-transfer-implementation-v1/DOCUMENT-D1-ABI-v2.md",
+    "abiSha": "b420a9d071ccccc8fb8b5d6d78e4822fa7ae88e56781f6e21c05708d11f9880c",
+    "baseline": "6d28314d7008dc84ea993e3833472ef221b286006adef921627fdebe2f52d022",
+    "implemented": false,
+    "abiV1": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-document-transfer-implementation-v1/DOCUMENT-D1-ABI.md",
+    "reviewFinding": "coding gate passed f549; v2 descriptor/reap/publication exercised branches closed; LAYER001 v3 and SOURCE-SEALED001 v4 closed by original independent reviewer; pending c03 fresh-coordinator observation failure is a separate test-asset issue",
+    "effectiveAbi": [
+      {
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-document-transfer-implementation-v1/DOCUMENT-D1-ABI-v2.md",
+        "sha256": "b420a9d071ccccc8fb8b5d6d78e4822fa7ae88e56781f6e21c05708d11f9880c"
+      },
+      {
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-document-transfer-implementation-v1/D1-DISPOSAL-ADDENDUM-v1.md",
+        "sha256": "4d60f7d8bc17370b76b3b9843f068ee03c45462a18c1f38e820f552750b9d844"
+      }
+    ],
+    "independentDefinitions": {
+      "freeze": "2f384294e2b3124042275715b23b948d12fb874ee0c6b3b2e1f5fdc4f796656a",
+      "members": 29,
+      "originalIds": 14,
+      "programGroups": 12,
+      "firstBatchGroups": 4,
+      "rootHashVerificationDrift": [],
+      "assetsOnly": true,
+      "cargoOrFeatureExecution": 0
+    },
+    "codingGate": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-coding-gate-v1/REVIEW.md",
+      "freeze": "f549bb316ba1c71cd32ee6e699a59f14a8018457f755aecf5a8c2359fd78e076",
+      "members": 4,
+      "rootVerified": true
+    },
+    "partialCoreCheck": {
+      "source": "e3d6098fda62a7fcca889eed58fc8e22ec0a99d24cf33e992ea89da26711d365",
+      "exit": 0,
+      "buildFinished": true,
+      "naturalJobZero": true,
+      "sourceBeforeAfterMatched": true,
+      "scope": "source/epoch/descriptor and supervised disposal roots/slots + Storage registration/join only; Queue producer/P1 sender/Node facade/developer functions still incomplete",
+      "sourceFrozenForIndependent": false
+    },
+    "candidateV1": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-document-transfer-implementation-v1/candidate-v1",
+      "source": "61d9f757de19ed7d4a709155494d4cf1225475da7607bd91508c9074ab15223f",
+      "count": 922,
+      "rootReadOnlyHashVerificationDrift": [],
+      "deltaPaths": 20,
+      "status": "complete interface candidate check08 passed per actual receipt; developer first tests compile/running, independent binding started; no functionality pass yet",
+      "rootInstalled": false,
+      "developer": {
+        "passed": 3,
+        "source": "61d9f757de19ed7d4a709155494d4cf1225475da7607bd91508c9074ab15223f",
+        "cargoTail": "vctip required ownstop0"
+      },
+      "staticFindings": [
+        "D1-DESCRIPTOR-DECIMAL001",
+        "D1-DISPOSAL-REAP001",
+        "D1-PUBLISH-SEAL-DISPOSAL001"
+      ]
+    },
+    "candidateV2": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-document-transfer-implementation-v1/candidate-v2",
+      "source": "3bc7ea708b7740209bbc835673ca258589ca2314dcd455e10b7de75077a1c7d2",
+      "count": 922,
+      "rootHashVerificationDrift": [],
+      "developerGroups": {
+        "document": 6,
+        "P1": 26,
+        "queue": 24,
+        "body": 14,
+        "factory": 4
+      },
+      "directTestJobsNaturalZero": true,
+      "check": 0,
+      "format": 0,
+      "defaultBuildCargo": 0,
+      "defaultBuildException": "VCTIP41640 required ownstop0; original failure preserved",
+      "deliveryManifest": "c1f70916708f019ab42bf90ffaa53a9d8f2818af60e806418f476252d1072682",
+      "deliveryMembers": 1076,
+      "deliveryDrift": [],
+      "staticReview": "three fixes closed in code/developer red-green scope; independent complete pending",
+      "rootInstalled": false
+    },
+    "independentFirstBatch": {
+      "source": "557c43cf49ecc5db267ea3268a925e056257e470452df98c1cfde3ff8eab79b1",
+      "binary": "264e0ef37fa6d428f55210abdd68d4664c664fbdc43a1e19cfc48c6fc43e6c7e",
+      "D1tests": 9,
+      "D1checks": 290,
+      "P1tests": 26,
+      "captures": 7,
+      "packets": 18,
+      "all35TestJobsNaturalZero": true,
+      "executionFreeze": "c3532fb6240e91124c0a64fd5e37a33b2047fee19dc469d5174f1d7b3f559b8b",
+      "members": 272,
+      "rootMemberDrift": [],
+      "scope": "nine actual D1 L4 branches plus original P1 ordered26 on same fixed postimage; incomplete D1/P2/L5",
+      "posterior": {
+        "status": "limited pass by original reviewer; not complete D1",
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-first-nine-posterior-v1/REVIEW.md",
+        "freeze": "68ce04a4e9816c269f4c0c23d75b64570346a23a29f2f353bb88e681f7e3fc17",
+        "rootMemberDrift": []
+      },
+      "limits": [
+        "compile helper unknown1 required ownstop0/76warnings",
+        "SQLworker physicaljoin not_observed",
+        "global Raw lastArc not proved",
+        "original D1 risk groups remain; no D1 full acceptance or Root install"
+      ]
+    },
+    "implementationScope": "queued_input_body implemented in isolated candidate; implemented=false retains whole D1/Root delivery incomplete meaning",
+    "candidateV3": {
+      "source": "62b32b9f8626db6dd9b54683a034228976252e09899822557afac2d5897fa0e5",
+      "count": 922,
+      "deltaFromV2": 2,
+      "layerFinding": "D1-DISPOSAL-LAYER001 closed by original reviewer",
+      "posterior": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-layering-v1/candidate-v3-review/REVIEW.md",
+      "freeze": "09116309ddbde3a0ba07164a858a69310dc203b6442f96cbdce46a5b5eb0c00e",
+      "rootInstalled": false
+    },
+    "candidateV4": {
+      "source": "4cf308e986ef1cdc2c3286352ee1f12011d6fb1ee8b01580377882d7df9afb6d",
+      "count": 922,
+      "rootHashVerificationDrift": [],
+      "deltaFromV2": 3,
+      "deltaFromV3": 1,
+      "deliveryManifest": "9e1224ef45f9147fe71b80276e1fa3be295c9ca524f4ecec394b5e6a2c790a39",
+      "deliveryMembers": 996,
+      "deliveryDrift": [],
+      "check": 0,
+      "format": 0,
+      "includeFormat": 0,
+      "defaultBuildCargo": 0,
+      "developerPassed": 6,
+      "directTestJobsNaturalZero": true,
+      "directBinary": "359a0c5d0eab3bb0fdf0090998d7b1c1dbcce08d99317b2a183db16bcc1527a0",
+      "defaultProductBinary": "7c1d8bfc566d6b04a5f428a8d0670df842522eb58f8b46acb92f22b7463dc918",
+      "compilerException": "Cargo test and default build each required owned VCTIP cleanup; not natural compilation process-tree zero",
+      "sealedFinding": "D1-SOURCE-SEALED001 closed by original independent reviewer after actual positive and five expected negative typechecks",
+      "reuse": "reviewer permits old v2 dynamic evidence by narrow layering/sealed compile-time-only impact; retain actual old source/PE identities",
+      "rootInstalled": true,
+      "rootReadOnlyVerification": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-document-v4-root-verification-v1/RESULT.json",
+      "staticPosterior": {
+        "status": "static/developer passed, now supplemented by independent negative posterior",
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-source-sealed-v1/candidate-v4-review/REVIEW.md",
+        "freeze": "648825a6fd004c28be0170069c894e70b900e48118319b5c1a4b95d5f6b38563",
+        "members": 17,
+        "rootMemberDrift": []
+      }
+    },
+    "independentFollowupSix": {
+      "productSource": "3bc7ea708b7740209bbc835673ca258589ca2314dcd455e10b7de75077a1c7d2",
+      "source": "24217d58785d7df026182aec91f5e164ca41d79d4e7f2cc88ce997d4fcc7d1df",
+      "binary": "f902ffb84abab3570a9b66bb795050468b877b28e31edb2065ca044a1e70f1ad",
+      "tests": 6,
+      "checks": 794,
+      "checkCountNote": "659 include repeated nonce observations, not separate business rules",
+      "firstAttempts": 6,
+      "retries": 0,
+      "allTestJobsNaturalZero": true,
+      "captures": 3,
+      "packets": 8,
+      "executionFreeze": "2e981e4a0a318176d4616e08e752074296e56c7cbf940c51ceb8a1510faa4c0d",
+      "members": 55,
+      "rootMemberDrift": [],
+      "branches": [
+        "Prepared/Queued x successful edit/cancel before writer start",
+        "real outbound backpressure same nonce restore and exactly-once enqueue",
+        "queued caller observation cancellation retains owned token",
+        "real IPC revoke before writer gate with another actor still reading original input"
+      ],
+      "posterior": {
+        "status": "limited pass",
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-followup-six-posterior-v2/REVIEW.md",
+        "freeze": "3770f217f021f58bf3467c707542120bab30f02d9a6848dba62c8f6387cbf6c1",
+        "rootMemberDrift": []
+      },
+      "limits": [
+        "compile helper unknown1 required ownstop0/82 warnings",
+        "SQLworker independent physicaljoin not_observed",
+        "global Raw lastArc not observed",
+        "true Doc poll_flush Pending/Err/deadline and original remaining groups not complete"
+      ]
+    },
+    "remainingInProgress": [],
+    "remainingBasis": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-remaining-v1/REMAINING.md",
+      "freeze": "d67746ba4a9abc37569db90287c0004a7db53baf42476a4c8e9dd7b9764abdc9",
+      "rootMemberDrift": [],
+      "scope": "original 14 stable IDs/12 groups only; no new all-state cross product",
+      "laterStillRequired": [
+        "CL095 complete L5/Harness/capacity behavior",
+        "actual dispatch/content retirement paths without a real fixture remain unexecuted, not forged",
+        "other Document producers, P3 network routes and Web full end-to-end"
+      ]
+    },
+    "rootIntegrationPreparation": {
+      "deltaPaths": 20,
+      "modified": 12,
+      "added": 8,
+      "removed": 0,
+      "rootProductPaths": 826,
+      "rootProductDrift": [],
+      "patch": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-document-v4-root-verification-v1/ROOT-D1-v4.patch",
+      "patchSha256": "4e7adbc2b2005450e33b6837364d9bd9f3ed0194cd475bf75f44f1065f300eb9",
+      "applyCheck": 0,
+      "applied": true,
+      "indexSha256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+      "actualRecord": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-document-v4-root-integration-v1/INSTALLATION.json"
+    },
+    "independentNegative": {
+      "productSource": "4cf308e986ef1cdc2c3286352ee1f12011d6fb1ee8b01580377882d7df9afb6d",
+      "source": "c0b898a6fe92b6524792cb4120d055f271908f41391913ff3c81f031ac17eed8",
+      "positive": 1,
+      "expectedNegative": 5,
+      "allMatched": true,
+      "probeFunctionsExecuted": 0,
+      "scope": "actual typecheck only; not runtime functionality",
+      "review": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-negative-posterior-v1/REVIEW.md",
+      "freeze": "5db232b86467bd5dade66145cff4f337f0d647d5bb01acfd5180b5f02043f4e2",
+      "members": 16,
+      "rootMemberDrift": [],
+      "compilerNaturalJobZero": false,
+      "ownedCleanupZero": true
+    },
+    "independentPendingFour": {
+      "productSource": "4cf308e986ef1cdc2c3286352ee1f12011d6fb1ee8b01580377882d7df9afb6d",
+      "source": "b1f965500060b35b59881627a7562d1502d093b529a85a83991e4fffb7723a63",
+      "binary": "30289b257eedf3554431544699822e22ba7f73466b0ea7d0fc0bc7f6e52d117f",
+      "passed": 4,
+      "checks": 137,
+      "attempts": "first exact per c01/c02 and c04/c05 continuation; no retry",
+      "allTestJobsNaturalZero": true,
+      "drainFailures": [],
+      "branches": [
+        "real Pending then edit",
+        "real Pending then cancel",
+        "real Pending peer reset error retires source",
+        "real Pending original fifteen-second deadline retires source"
+      ],
+      "posterior": {
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-pending-four-posterior-v1/REVIEW.md",
+        "freeze": "8443076e88daf4babae89a1c1abe1b6087261a9f15c1893c8acc20919aa33902",
+        "members": 26,
+        "rootMemberDrift": []
+      },
+      "assetFailure": {
+        "id": "D1-PENDING-TRUST-OBS001",
+        "case": "c03",
+        "scope": "fixture incorrectly fetched a fresh Storage.trust_store coordinator instead of original writer coordinator; no product failure inferred",
+        "oldFailurePreserved": true,
+        "remediation": "corrected original-coordinator branch independently passed in source089ffe/PE1456cdf; original red remains"
+      },
+      "scope": "real typed Doc L4 on ordinary Node after real TLS authentication; P3 routes/L5 unimplemented"
+    },
+    "independentPendingCoordinator": {
+      "productSource": "4cf308e986ef1cdc2c3286352ee1f12011d6fb1ee8b01580377882d7df9afb6d",
+      "source": "089ffe8beed5a8fdf41c3b902dacabe07ca3a521ed1df64fc433a08f004e0e16",
+      "binary": "1456cdf63405e9d351660e0bb81b68d3969af6fd073331a571772abef50a34f0",
+      "passed": 1,
+      "checks": 49,
+      "firstExact": true,
+      "naturalJobZero": true,
+      "drainFailures": [],
+      "scope": "original TrustStore gate/revoke and cancelled real prepare observer preserve stable token; other actor retains queued-body read",
+      "posterior": {
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-pending-coordinator-posterior-v1/REVIEW.md",
+        "freeze": "bcd7650e3fff58c52500fa4364844fb8f93e95cad7d2baa2693c8721b796b90a",
+        "members": 16,
+        "rootMemberDrift": []
+      },
+      "assetFinding": "D1-PENDING-TRUST-OBS001 closed for corrected branch; old c03 remains failed historical evidence; product unchanged"
+    },
+    "firstSliceIntegrated": true,
+    "rootChecksComplete": true,
+    "minimumRemainingScope": "original minimal first-slice risks closed by independent remaining-three posterior; later producers and full L5 obligations remain",
+    "independentRemainingThree": {
+      "productSource": "4cf308e986ef1cdc2c3286352ee1f12011d6fb1ee8b01580377882d7df9afb6d",
+      "source": "fc4e3ad171bfcb2cbf9a6ccfac7ffb8cfeb4a08307f83d45f840e1240117825d",
+      "binary": "735ccaf578df7e56eff280e40570e9a4d0b919ad54dbd02f583f9913d1e0507f",
+      "childBinary": "0fbcab6eb05ee366552ca2b424552685d96d96c4e0dd52fb583ddc9cc08d6bc2",
+      "tests": 3,
+      "checks": 110,
+      "firstExact": true,
+      "allTestJobsNaturalZero": true,
+      "captures": 2,
+      "packets": 6,
+      "executionFreeze": "f5e1972d3f0c3e839a948c7bfb3c2640120c9d6ec49f1f0570c702a04262e84d",
+      "members": 54,
+      "rootMemberDrift": [],
+      "posterior": {
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-document-d1-remaining-three-posterior-v2/REVIEW.md",
+        "freeze": "97c1e285ffdee447f5e783e716c2dc6f2db003751bf6f74173a5d5e7a0126f6f",
+        "members": 30,
+        "rootMemberDrift": []
+      }
+    },
+    "independentFirstSliceSummary": {
+      "documentExactPasses": 23,
+      "countedChecks": 1380,
+      "countNote": "includes repeated nonce observations; not 1380 independent business rules",
+      "p1ExactPasses": 26,
+      "positiveTypechecks": 1,
+      "expectedNegativeTypechecks": 5,
+      "captures": 16,
+      "packets": 46,
+      "allOriginal14FullCases": "NOT_EXECUTED as full L5; component subbranches only",
+      "indexFreeze": "11af4f7eb2fb621fce0c7f3b98b69caeb42713d38c8e30baa2f46b815d343fe3",
+      "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-document-d1-independent-preparation-v1/D1-MINIMUM-COVERAGE-FINAL.md",
+      "rootFinalIndexVerificationDrift": []
+    },
+    "actualRootCliDevelopment": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-document-root-cli-smoke-v1/actual-attempt01/RESULT.json",
+      "source": "01649cb2e703cad9b1b146761930ad1c3b51789669f51322546d2e7c9c3cbc35",
+      "executable": "d9b8d6ab7ff29ec2da474db8db76d513ba13e5b1a4c600f5bb17fd7d37e0f4b8",
+      "normalUserToolContext": true,
+      "defaultNodeStarts": 2,
+      "bothReady": true,
+      "sameNodeIdentity": true,
+      "strictLoopbackTlsAndCsp": 2,
+      "ownerIpcStatusDeviceListStop": true,
+      "dbExclusiveAfterStops": 2,
+      "naturalNodeJobsZero": true,
+      "forcedStop": false,
+      "scope": "development smoke only; no Harness/pairing/new WSS/Doc runtime route",
+      "previousAssetFailure": "old unvalidated .NET certificate setup template selected; failed before any Node start; preserved, then actual previous passed frozen attempt04 template adapted",
+      "executionFreeze": "80167c7d514d7bd65bac8dad8948d419325c929c96d4f3246d65cf810099b7ea"
+    },
+    "firstSliceLimitedDeliveryComplete": true
+  },
+  "p3ReadOnlyPreparation": {
+    "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p3-authenticated-input-route-preparation-v1/ROUTE-INVENTORY.json",
+    "source": "6d28314d7008dc84ea993e3833472ef221b286006adef921627fdebe2f52d022",
+    "facts": 8,
+    "productWrites": 0,
+    "codingGate": false,
+    "ownershipInventory": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p3-authenticated-input-route-preparation-v1/CONNECTION-OWNERSHIP-INVENTORY-v2.json",
+      "sha256": "12b0d45b204973c094a91ff783025b03dbacafeb0c9ee17f9b2908569328662d",
+      "sourceFiles": 5,
+      "facts": 6,
+      "productWrites": 0,
+      "functionalExecution": 0
+    }
+  },
+  "dpapiEnvironment": {
+    "productChanged": false,
+    "rootDiagnostic": {
+      "status": "environment contrast observed; no product change",
+      "productSource": "6d28314d7008dc84ea993e3833472ef221b286006adef921627fdebe2f52d022",
+      "binary": "88a202e5fd18f189585f8e48cac102e960b33a96b7256dd4962b2fe50c9f74ca",
+      "defaultContext": {
+        "case": "platform::windows::tests::dpapi_round_trip_uses_current_user_scope",
+        "passed": 0,
+        "failed": 1,
+        "exit": 101,
+        "naturalJobZero": true
+      },
+      "normalUserContext": {
+        "cases": [
+          "platform::windows::tests::dpapi_round_trip_uses_current_user_scope",
+          "identity::tests::dpapi_identity_is_recovered_by_a_new_process"
+        ],
+        "passed": 2,
+        "failed": 0,
+        "naturalJobZero": true
+      },
+      "scope": "existing real DPAPI roundtrip incl wrong entropy refusal, and selfowned crossprocess identity fixture; not full factory/Harness/supplychain",
+      "rootChanged": false,
+      "oldFailuresPreserved": true,
+      "independentReview": "limited pass recorded below in posterior; no product encryption change"
+    },
+    "developerFreeze": "ee07a50c34bcafc9feed73e7e6f09060746adadc610e0c553848a3668fdfed5d",
+    "independent": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-independent-followup-v1/dpapi-environment-recheck-v1/REPORT.md",
+      "freeze": "3365b111329ed6d4f6512bad0add629b5ff3e82827471d6d9082f46ace428422",
+      "members": 24,
+      "rootMemberVerificationDrift": [],
+      "old907IdentityExact": 1,
+      "new908IdentityExact": 1,
+      "naturalJobZero": true,
+      "scope": "identity environment limited, not ordinary factory/Harness/Root914 full acceptance"
+    },
+    "posterior": {
+      "status": "limited pass by original reviewer; no product change/fullfactory/Harness/Nodejoin upgrade",
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/dpapi-environment-posterior-v1/REVIEW.md",
+      "freeze": "83a4822d66333697782d4f7ca17f7467453412876093e85e6f73e726ac83daa1",
+      "members": 3,
+      "rootVerified": true,
+      "executionModeEvidence": "actual executor attestations, not automatically exported tool audit or measured SID/token"
+    }
+  },
+  "realDefaultCliDevelopment": {
+    "productSource": "6d28314d7008dc84ea993e3833472ef221b286006adef921627fdebe2f52d022",
+    "executable": "7a37ce2fe8b6b35026799456d617c0e1dea119d6a1eb776200779440316151f5",
+    "normalStartsAndStops": 2,
+    "sameNodeIdentity": true,
+    "strictLoopbackHttps": 2,
+    "ownerIpcStatusAndDeviceListAndStop": true,
+    "dbExclusiveAfterStops": 2,
+    "naturalNodeJobsZero": true,
+    "forcedCleanupInSuccessfulAttempt": false,
+    "ownedCommands": 8,
+    "priorInfraFailures": 3,
+    "priorForcedStops": 2,
+    "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-real-cli-dpapi-smoke-v1/DEVELOPMENT-REPORT.md",
+    "freeze": "000a5b0db4a57d77b583a840bcf76fc0c54db772ac94c7097d52f328dd2268af",
+    "members": 67,
+    "scope": "Root development only, actual default app/DPAPI/empty-config factory, TLS and owner IPC/restart; no Harness or new WSS/Document functions",
+    "independentReview": {
+      "status": "reviewed as Root developer evidence only; no formal factory/Harness upgrade",
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/real-cli-dpapi-smoke-posterior-v1/REVIEW.md",
+      "freeze": "9e3c9c05a7aa8ff507ba7b66629525ec26084b9f4d225af16de807109453c722"
+    },
+    "privateFixtureSnapshot": false
+  },
+  "catalogC1": {
+    "status": "C1 v2 limited internal component delivery installed and final installation independently reviewed; all 840 product leaves match reviewed candidate. Actual Root check/build/fmt, 37 targeted tests and real default CLI lifecycle passed within stated compiler supervision limits; complete P2/P3/Web/Harness remains pending",
+    "baseline": "4cf308e986ef1cdc2c3286352ee1f12011d6fb1ee8b01580377882d7df9afb6d",
+    "mapping": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-catalog-upload-implementation-v1/C1-V4-COMPOSITION-AND-ACCEPTANCE-v2.md",
+    "freeze": "889630f489eafc0999c5903acf63c531be1548f377c1fbce02c05b79cee7cb48",
+    "members": 2,
+    "rootMemberDrift": [],
+    "mergeOrder": "D1 then C1 with actual rebasing and final combination verification",
+    "codingGate": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-catalog-c1-coding-gate-v1/REVIEW.md",
+      "freeze": "e3543db2d0cd085aa512b8737fd848a683cc0d8008a2b33fec4051c06a9886cb",
+      "members": 6,
+      "rootMemberDrift": [],
+      "originalCases": [
+        "P2U-010",
+        "P2U-012",
+        "P2U-013",
+        "P2D-003",
+        "P2D-010",
+        "P2X-001",
+        "P2X-002",
+        "P2X-003"
+      ]
+    },
+    "planningProductWrites": 0,
+    "planningCargo": 0,
+    "isolatedImplementationStarted": true,
+    "rootProductWrites": 0,
+    "findings": [
+      {
+        "id": "C1-WORKER-RESULT001",
+        "reporter": "Root read-only implementation spot check",
+        "scope": "mutable prototype, before final candidate freeze",
+        "status": "fixed in candidate v1; independent Failed/no-original-result branch passed and received limited posterior review; StartUnconfirmed and all other branches not independently claimed",
+        "issue": "known worker terminal failure without normal result could leave receipt wait/status indefinitely pending",
+        "requiredSemantics": "report WorkerUnconfirmed without invented NoWrite/SQL observation; retain roots, original task identity and cleanup uncertainty"
+      }
+    ],
+    "candidateV1": {
+      "source": "b3ec39645a0a27a4173b342a7fef601f802d4b117611a955834275acec108829",
+      "paths": 928,
+      "rootHashVerificationDrift": [],
+      "deltaPaths": 19,
+      "modified": 13,
+      "added": 6,
+      "rootInstalled": false,
+      "status": "fixed candidate delivered; six developer tests and unaffected targeted regressions reported passed; broad Catalog 25 has four baseline-reproduced failures, so full delivery remains open"
+    },
+    "independentInitial": {
+      "source": "48e7f270c17e4b469db1485696d95527b0e60e0b9f0aa4b9415abcb5c4f35515",
+      "scope": "original Catalog install/publish/bind typed L4 first batch; P3 routes not implemented",
+      "installFirstPassed": 1,
+      "installChecks": 46,
+      "publishFirst": "failed only two test-asset metadata observations; original raw/application steps and cleanup otherwise completed",
+      "bindFirst": "unexecuted at first stop; old binary first continuation authorized",
+      "assetFinding": {
+        "id": "C1-METADATA-OBS001",
+        "classification": "independent observer substring incorrectly matched legal result.kind=profile; structural field/canary correction prepared, product unchanged",
+        "oldFailurePreserved": true,
+        "correctedPublish": "first execution passed 97 checks with structural metadata/canary observations; old failure retained, product unchanged"
+      }
+    },
+    "independentFirstThree": {
+      "status": "limited posterior passed; not complete C1/P3/Harness acceptance",
+      "firstPassed": 3,
+      "checks": 221,
+      "installChecks": 46,
+      "bindChecks": 78,
+      "publishChecks": 97,
+      "posteriorFreeze": "a2ebfbce99b57874c76897c4e8eac25792eca7319db0f0bf7f14b7e87a3a9600",
+      "posteriorMembers": 29,
+      "rootMemberDrift": [],
+      "assetCorrectionPosteriorFreeze": "14d45c4d9f7924101148ee3b295982bcc32e9a3e140deacbaae785ceccf6c65a",
+      "assetCorrectionMembers": 19,
+      "assetCorrectionRootMemberDrift": []
+    },
+    "independentFollowup": {
+      "source": "aaec81808b4c7868eb3311580d8971b1af562c66eb387d7a35a8f6ef35111a35",
+      "binary": "ea25bbef7a485ac9bc2f5e9c47fa4675b1429906fe9d465a7ca0d477e292f012",
+      "normalFirstPassed": 5,
+      "normalChecks": 123,
+      "normalDrainEmpty": true,
+      "normalNaturalJobZero": true,
+      "isolatedExpectedUnknownFirstPassed": 1,
+      "isolatedChecks": 25,
+      "unknownPayloadRoots": 1,
+      "unknownRegisteredJobs": 1,
+      "unknownActiveUse": 1,
+      "unknownShutdownPending": true,
+      "unknownNormalNodeJoin": false,
+      "unknownRootRelease": false,
+      "executionPath": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-catalog-c1-independent-preparation-v1/followup-v1/execution-freeze.json",
+      "executionFreeze": "bd492806cf61cb283db9e5f443074361a639c0936cbab14321c58cbeb6d1bc6e",
+      "executionMembers": 74,
+      "executionRootMemberDrift": [],
+      "posteriorPath": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-catalog-c1-followup-posterior-v1/REVIEW.md",
+      "posteriorFreeze": "c4928f6065ddf24d777c39b3138c0c6ed564d016630a32120062f62fc100a0f8",
+      "posteriorMembers": 25,
+      "posteriorRootMemberDrift": [],
+      "compileLimitation": "Cargo succeeded but compiler auxiliary process required owned stop; runtime natural job zero recorded separately"
+    },
+    "catalogRegression": {
+      "id": "C1-CATALOG-REGRESSION001",
+      "status": "closed by original independent reviewer on candidate v2; original expectations unchanged and global report failure/root protection retained",
+      "candidateV1CatalogPassed": 21,
+      "candidateV1CatalogFailed": 4,
+      "sameFourExactFailedOnD1V4": true,
+      "cause": "confirm_actual_cleanup incorrectly requires successful report outcome in addition to original physical close acknowledgement, original task join and worker confirmation; report loss permanently prevents otherwise confirmed cleanup",
+      "approvedRepair": "remove only report outcome equality from actual-cleanup predicate; retain original close/task/worker observations and unchanged report/global failure state",
+      "testExpectationsChanged": false,
+      "rootProductChanged": true,
+      "classificationFreeze": "1c5b61aafbb1207d670b65e11849569908bab417c496a7936edb3aa79f092aaa",
+      "classificationMembers": 32,
+      "classificationRootMemberDrift": [],
+      "closureFreeze": "3bdb450f2b88fa4aa920e7f548fe6628279471efc57ecc6d1d253aacb76c4e37",
+      "closureScope": "original four exact, Catalog25, receipt4, scoped2 and C1 developer six on new source/binary; global Unknown remains explicit"
+    },
+    "candidateV2": {
+      "source": "d96141ec7a4de556d5d72442664f0b43bff52ed2dd11d23c9ea564b3ac704dbf",
+      "paths": 928,
+      "rootHashVerificationDrift": [],
+      "deltaPathsFromD1": 20,
+      "modified": 14,
+      "added": 6,
+      "rootPreimageDrift": [],
+      "rootInstalled": true,
+      "changedFromV1": "one report-outcome predicate removed from original actual-cleanup check; all other 927 source leaves unchanged",
+      "developerBinary": "48835f6854f948569380dbd32ca2c0084b35ad89066fc73e71ce598d50d9f9d5",
+      "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-catalog-upload-implementation-v1/candidate-v2/REPORT.md",
+      "deliveryFreeze": "6fba297b2663f7d46a83cc497479e744c8af12189ead87681888b101dbc47a8d",
+      "rootVerification": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-catalog-v2-root-integration-v1/READONLY-VERIFICATION.json",
+      "strictLint": "not rerun in this slice; no passing claim",
+      "compileLimitation": "Cargo check/fmt succeeded; no-run and default build Cargo0 but VCTIP required owned stop, retained as supervision exception"
+    },
+    "remainingMinimumAcceptance": {
+      "sameDatabaseRestartAndDurableQuery": "passed and independently reviewed; 92 checks, original close/restart on same database, durable query retained and Ready body unavailable",
+      "originalCloseFailureReconcileAndStableReceipt": "passed and independently reviewed on v2; 43 checks, local cleanup/reconcile/fresh facts separated from sticky global Unconfirmed/root retention",
+      "fullProductStaticDeliveryReview": "limited C1 component delivery passed, freeze288141c0/1; full P2/P3/L5/Harness remains unverified",
+      "rootIntegrationAndActualChecks": "installed 20 paths; actual check/build/fmt, 37 targeted tests and real CLI lifecycle done; final installed posterior limited pass"
+    },
+    "independentMinimumDelivery": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p2-catalog-c1-independent-preparation-v1/C1-MINIMUM-COVERAGE-FINAL.md",
+      "indexFreeze": "0537fb50a103a2d411f9e3eb9646e78fc982f97ee64e551afc6e54670412a431",
+      "members": 18,
+      "rootMemberDrift": [],
+      "validFirstExact": 11,
+      "countedChecks": 504,
+      "normalFirstExact": 9,
+      "normalChecks": 436,
+      "isolatedFirstExact": 2,
+      "isolatedChecks": 68,
+      "isolatedScope": "WorkerUnconfirmed and SQL report failure retain original root/global uncertainty; process exit is not normal global Node join or in-process root release",
+      "limitedDeliveryReviewFreeze": "288141c07bda1ec16e960af373f09202743b822f3d4eb888dc479062d4f040a5",
+      "limitedDeliveryReviewMembers": 1,
+      "rootDeliveryReviewMemberDrift": []
+    },
+    "rootIntegration": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-catalog-v2-root-integration-v1/REPORT.md",
+      "executionFreeze": "a1c2517193f152bce0f2728208fa866cd23f41c6a479e9d27ccc472d98a97096",
+      "executionMembers": 62,
+      "checkSource": "e08ee21df72c1cd3de3cba4d84853d4e65fcff6d940baab2714d479722f5801c",
+      "finalSource": "9ca1ff7aeb594d72410a764ccb71d036f073a078d3e9bb8b7c4b672954a63f7c",
+      "sourcePaths": 928,
+      "checkSourceBeforeAfterDrift": [],
+      "postCheckChangedPaths": [
+        "README.md"
+      ],
+      "productPaths": 840,
+      "productDrift": [],
+      "installedPaths": 20,
+      "modified": 14,
+      "added": 6,
+      "eolOnlyCorrections": 16,
+      "gitApplyCheckExit": 0,
+      "gitApplyExit": 0,
+      "cargoCheckAllTargetsAllFeaturesExit": 0,
+      "cargoCheckNaturalJobZero": true,
+      "cargoDefaultBuildExit": 0,
+      "cargoDefaultBuildSupervision": "VCTIP49140 required owned Job stop, final zero; original exception retained",
+      "testCompileExit": 0,
+      "testCompileSupervision": "VCTIP53328 required owned Job stop, final zero; original exception retained",
+      "formatExit": 0,
+      "targetedPassed": 37,
+      "targetedGroups": {
+        "catalogC1": 6,
+        "nodeConfiguration": 25,
+        "originalReceipt": 4,
+        "originalScopedReceipt": 1,
+        "originalScopedReportLoss": 1
+      },
+      "targetedNaturalJobZero": true,
+      "firstTargetedAttempt": "4 passed, 2 failed at missing C1_NATIVE_CHILD test fixture preparation; preserved, then original pinned child supplied and same test PE passed six; no product or expectation change",
+      "testBinary": "b0a48210ac6c5b6b0a042068b6774fa9253ea0fe9970ad5452976f643463ff9e",
+      "defaultBinary": "44805b9d997f78779b05e7fcc181f1c0cb91cb41a574e9bb7483b4fe12981982",
+      "indexSha256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+      "gitDiffCheckExit": 0,
+      "openSpecStrict": "11 passed, 0 failed",
+      "cli": {
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-catalog-root-cli-smoke-v1/attempt01/RESULT.json",
+        "executionFreeze": "0923a85fd773f55fd2d497d00f2328ba2b264720010fdbd2e7190000bf1cdfe9",
+        "members": 34,
+        "normalStartsAndStops": 2,
+        "sameNodeIdentity": true,
+        "realDpapi": true,
+        "strictLoopbackTls": 2,
+        "ownerIpcStatusDeviceListStop": true,
+        "dbExclusiveAfterStop": 2,
+        "naturalNodeJobsZero": true,
+        "auxiliaryCommands": 8,
+        "forcedCleanup": false,
+        "scope": "actual default product empty-configuration developer lifecycle; no pairing/new business routes/Harness acceptance"
+      },
+      "installedPosterior": {
+        "status": "limited pass by original independent reviewer",
+        "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p2-catalog-c1-root-installed-posterior-v1/REVIEW.md",
+        "freeze": "40adf11973d20279f7541ab7c3246a27afcb421a1f97591ad1a135bef79b79f0",
+        "members": 64,
+        "rootMemberDrift": [],
+        "scope": "internal C1 installation and actual developer evidence only, no full P2/P3/L5/Harness upgrade"
+      }
+    }
+  },
+  "sourceSessionFacadePreparation": {
+    "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-native-session-facade-contract-v1/SOURCE-SESSION-ABI-v1.md",
+    "initialFreeze": "6e810f5d88cde616e3846b2074a752ef7fe808bd422dd609c1ed6978f8a745aa",
+    "initialMembers": 8,
+    "status": "exact interface/DDL/result custody preparation under independent review, no coding gate or product implementation yet",
+    "scope": "source-only standard discovery/create and existing real-target load; native deletion and other downstream lifecycle capabilities retain tests.md responsibility boundaries",
+    "openFinding": "SSF-RESULT-CUSTODY001: account for both original source.raw and adapter view capture strong references and supervised release; do not claim Document handoff alone releases every original result owner",
+    "additionalOpenFinding": "SSF-SCHEMA-NULL-CHECK001: proposed SQLite CHECK predicates must explicitly reject required NULL values; independent counterexample concerns preparation DDL only, no product migration executed",
+    "readerBoundary": "existing synchronous raw/list decoding remains explicit; Arc clone does not offload decoding or prove same-connection control progress during decode",
+    "productWrites": 0,
+    "cargo": 0,
+    "newTarget": 0
+  },
+  "rustControlSyntaxComponent": {
+    "status": "independent public API/Web cross-language acceptance and limited delivery passed; pure component installed in Root with actual check/build/fmt and developer tests passed; final installation independently reviewed within pure DTO scope",
+    "contract": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-root-session-command-codec-preparation-v1/CONTRACT.md",
+    "codingGate": "800115203e842be519af0a0bb8054553394f1be77a72670d7492a4cf5f8ec666",
+    "candidate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-root-session-command-codec-implementation-v1/candidate-v2/REPORT.md",
+    "source": "8c9d8c6a204b7dd666b1d2c99bc4006f5596d5d8cd3dfda43f9d050a62e102c9",
+    "sourcePaths": 930,
+    "sourceBeforeAfterDrift": [],
+    "deltaPaths": 3,
+    "modified": 1,
+    "added": 2,
+    "actions": 28,
+    "queueMutationBranches": 5,
+    "scope": "pure protocol metadata parse/encode only; no route/service/actor/proof/IO, no new Source fields or response schema",
+    "rootInstalled": true,
+    "rootApplyCheck": 0,
+    "patch": "6ebe2c21a03a5dc1a53ad8390b8efcde330b4e4f7d19283a6565b4ae0c827999",
+    "candidateFreeze": "1dbd50e0c0f1714e7881edba3ce9fa72ea3c3d1a0e95268eeb2393f2353fdcbe",
+    "candidateMembers": 938,
+    "executionFreeze": "91e0e47c572c2918404f03c746765bef4c26eed112eca1751f90ee61d3ba2f7f",
+    "executionMembers": 62,
+    "staticReview": "aa1cce81ce4b4e2f98dc35b3d6d794bcb7c64b47cf59518c3b34ce7b89c8e432",
+    "staticReviewMembers": 31,
+    "checkAllTargetsAllFeaturesExit": 0,
+    "formatExit": 0,
+    "developerPassed": 3,
+    "developerNaturalJobZero": true,
+    "testBinary": "603e7f3ef49541a69be775e544a2608623610300680265b2040965bb31757248",
+    "defaultBuildExit": 0,
+    "defaultBinary": "0d1cd366cd72c941418117e50e5139cdc305268f5f28cf91466305569265b931",
+    "compilerSupervision": "test no-run VCTIP42120 and default build VCTIP51464 required owned Job stop0; original exceptions retained",
+    "strict": {
+      "scope": "actual --lib --all-features invocation in isolated candidate, not Root/all-target/full-project success",
+      "initialSource": "fd77ebd1fe23325cda04880caa36e28a421a64e5a7da6b3577c93af2bb3abce2",
+      "initialMessages": 709,
+      "initialComponentMessages": 1,
+      "fix": "split long action parser into namespace helpers without changing accepted fields or lint rules",
+      "finalMessages": 708,
+      "finalComponentMessages": 0,
+      "exit": 101
+    },
+    "preparationFailure": "candidate-v1 is partial Python snapshot due legacy Windows long path handling, never delivered/tested; new extended-path candidate-v2 has same final product source",
+    "independentAcceptance": {
+      "status": "limited pure DTO acceptance passed and independently reviewed",
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-root-session-command-codec-independent-preparation-v1/REPORT.md",
+      "executionFreeze": "810b419dc201b8467d5247d7cd4d2b76ed19af0a579c57ccf9ba59a95899cb39",
+      "members": 93,
+      "rootMemberDrift": [],
+      "publicApiFirstExactPassed": 5,
+      "countedChecks": 428,
+      "originalStrictDepthFirstPassed": 1,
+      "webCrossLanguageFirstSpecPassed": 1,
+      "crossLanguageWires": 4,
+      "naturalTestJobsZero": true,
+      "cacheObservationFinding": "DTO-WEB-CACHE-BINDING001 limited closure: original post-check misclassified writable Vitest cache; exactly one changed results file and eight generated cache files verified, immutable sources unchanged; no functional rerun",
+      "sequenceLimitation": "outer PowerShell native failure did not stop later RustAfter, which actually ran; original observation failure/order limitation retained",
+      "compileLimitation": "each compilation Cargo0 but one unknown auxiliary process required owned stop0, no natural compiler Job claim",
+      "posterior": "312cf1256784459fc2944b779fa59f3d5e2f3aa0a74874032776654ae44e323c",
+      "posteriorMembers": 51,
+      "rootPosteriorMemberDrift": []
+    },
+    "rootIntegration": {
+      "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-session-command-codec-root-integration-v1/REPORT.md",
+      "executionFreeze": "d14c917dce1f04de2479439e49e51ef55bc4e84690cc0eb98c1acd584a51097b",
+      "members": 33,
+      "source": "f0fc282ac308daf70df774e366939f8d40d2517a0895b01802d69082f62e7446",
+      "sourcePaths": 932,
+      "sourceBeforeAfterDrift": [],
+      "additionalExistingWebInputs": [
+        "clients/web/src/management/session-protocol.ts",
+        "clients/web/tests/session-protocol.test.ts"
+      ],
+      "inventoryScope": "all current app .rs plus clients/web src/tests .ts/.css/.html; no unlisted inputs in that scope",
+      "historicalManifestScope": "old 928/930 fixed input manifests omitted these two pre-existing Web files; those histories remain unchanged, actual cross-language Web inputs were independently bound",
+      "installedPaths": 3,
+      "eolOnlyCorrections": 3,
+      "reviewedSourceDrift": [],
+      "productPaths": 844,
+      "applyCheckExit": 0,
+      "applyExit": 0,
+      "checkAllTargetsAllFeaturesExit": 0,
+      "defaultBuildExit": 0,
+      "formatExit": 0,
+      "developerPassed": 3,
+      "developerNaturalJobZero": true,
+      "compilerSupervision": "default build VCTIP54096 and test no-run VCTIP23884 required owned Job stop0; original exceptions retained",
+      "defaultBinary": "f702e53de3fbea6d46468d813b4712edf7d662210487489ea204f76b5f3d9378",
+      "testBinary": "fba3c93a856f5839895a659d5c1319c32e9f281659eb35d39e0ef1e1660b48c1",
+      "indexSha256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+      "gitDiffCheckExit": 0,
+      "openSpecStrict": "11 passed, 0 failed",
+      "installedPosterior": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-production-factory-review-v1/p3-session-command-codec-root-installed-v1/REVIEW.md",
+      "installedPosteriorFreeze": "de8a78de1c99853fd57ce8bb408adb35cb5d13b9d0817b56756ce8efd29090a5",
+      "installedPosteriorMembers": 30,
+      "rootPosteriorMemberDrift": [],
+      "scope": "pure DTO syntax only; production commands/router are still unwired"
+    }
+  },
+  "nativeSessionFacadeImplementation": {
+    "status": "original fixed candidate blocked by SSF-SQL-RECONCILIATION001;isolated v2 repair and independent original seven-risk program preparation proceed;not Root installed",
+    "baseline": "f0fc282ac308daf70df774e366939f8d40d2517a0895b01802d69082f62e7446",
+    "baselinePaths": 932,
+    "codingGate": "f3a3e084a3e5af0d2087e0e7f3483645b445db84ae6ff426a0e304a7ca206b60",
+    "codingGateMembers": 36,
+    "developmentOnly": "74 actual executions/73 unique tests passed including real controlled-child discover/create and original target load/resume after queue acceptance;all-target/features check and fmt0;compile/build Cargo0 but VCTIP cleanup exceptions retained",
+    "remaining": "fix original SQL receipt reconciliation and close/claim responsibility;independent original-reporter review and seven-risk execution before scoped integration",
+    "scope": "same Source/runtime/receiver, direct ACP, schema10 additive; no management_ws/DTO/Web edits; external SID read and full Harness remain pending",
+    "sourceSha": "dabe98b9d2d3ecd61b23c3c2ee4a0c9a01c553f5010629655192c4e858523ca1",
+    "sourcePaths": 943,
+    "latestRecord": "testing/runs/deliver-codex-session-loop/2026-11-07-q003-source-session-development.json",
+    "independentFinding": "SSF-SQL-RECONCILIATION001 P1 Open;static,not dynamically reproduced"
+  },
+  "connectionOwnerPreparation": {
+    "status": "sixth exact934 candidate independent36 passed and successor reviewed; three-leaf WIP installed in Root; actual Root check/fmt/build and47 regressions passed; installation posterior pending",
+    "contractFreeze": "eea32accf32627199c6d9cde1b2196a69d543962ba29888aa34d61ed33b3ba5f",
+    "revision2Freeze": "0debaf5b1a9d78ce414e242ff4ccc8947a4cca0c2dd495c74e0cad9ae599c91b",
+    "independentMapping": "f0339f11467a2dd2f5f7677c3028cf48ff1a19208f7268094cba5496e2c6c1a5",
+    "codingGate": "f9f4a93486e28a00df852e931f41b7844159e51bb9a6cb57a08a0555de10bae6",
+    "implementation": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p3-connection-owner-implementation-v1",
+    "firstSource": "cfb8f4f8017f9856a3d0f694b310035dc7162f3d84c3e4d865b42bb71d6e9b4d",
+    "firstCheckAllTargetsAllFeaturesExit": 0,
+    "sameRegressionOldExit": 101,
+    "sameRegressionNewExit": 0,
+    "sameRegressionFixtureBytesUnchanged": true,
+    "firstTestBinary": "e713e094853773a1cf47edd89ef63039aa32a96e0ae1acf594a44f5c188b6703",
+    "firstTestJobNaturalZero": true,
+    "compilerSupervision": "old no-run VCTIP51308 and new no-run VCTIP45916 required owned Job stop0; exceptions retained",
+    "firstStaticReview": "dce520735f720675e26bb80cb7bffbb3a047a41be511d03125ecbd0c3bb0b744",
+    "openFindings": [
+      "P3A-PROTOCOL-SETTLEMENT001",
+      "P3A-SUPERVISOR-FAILURE-RECEIPT001"
+    ],
+    "findingFixState": "sixth typed settlement/sticky supervisor developed and 9 original expectations pass; recovery reviewer successor assessment does not close original unavailable reporters; own panic-close finding closed in fourth",
+    "writeScope": [
+      "app/src/management_ws.rs",
+      "app/src/management_ws/connection_owner.rs",
+      "app/src/management_ws/connection_owner/development_tests.rs"
+    ],
+    "scope": "existing protocol/writer/rejected close ownership only; new command routes, input CPU workers, document pumps and Web remain pending",
+    "latestDevelopmentRecord": "testing/runs/deliver-codex-session-loop/2026-11-07-q003-connection-owner-development.json",
+    "latestSource": "8f2c50e6cb4feffa933be9b9883c2713a02d51e1b2ed3bc2743cc58dbe10fa28",
+    "latestSourcePaths": 934,
+    "latestTestPe": "83fa198cbfe789dbddf3c02b804dd45284d4f039a07530bc476bf45a097e4cd5",
+    "latestDefaultPe": "1325f61cbabdaa642055f7c82db933dc81638f2b2d566bb8d2b7af0e7a3bc084",
+    "latestDeveloperResults": {
+      "newOwnershipTests": "9/9",
+      "managementRegression": "7/7",
+      "originalP1Regression": "11+15=26/26",
+      "testJobsNaturalZero": true,
+      "allTargetCheck": 0,
+      "format": 0,
+      "defaultBuild": 0,
+      "strictLibExit": 101,
+      "strictLibErrors": 708,
+      "newOwnerDiagnostics": 0
+    },
+    "independentProgram": "v2 c7486c9f103ef76e038dd64f8eacd3a0bd8f7122bb7acf1de5032a176a185aaa/12;compile02 actual0;36/36 actual exact tests;each Job natural0",
+    "retainedLimits": [
+      "full Node deadline and rejected-close actual two-second I/O timeout not dynamically covered",
+      "compiler VCTIP supervision exceptions retained; test Job0 not SQL worker join",
+      "full routes/Web/Harness and original reporter closure still pending"
+    ],
+    "independentDelivery": "32e852e0032bd2d12ab3c9f65fff4fa4882fb0e05a33949fce62dd596f354342/184",
+    "independentReview": "final-sixth-posterior-v1/REVIEW.md c27e817c819dedcfdef412aa6d11502b255c616e9524b25dec75660f2ad6f780 permits three-leaf WIP integration only",
+    "rootInstallationRecord": "testing/runs/deliver-codex-session-loop/2026-11-07-q003-connection-owner-root-integration.json",
+    "rootInstalled": true,
+    "installationPosterior": {
+      "status": "independent limited installation posterior accepted",
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\source-session-recovery-review-v1\\P3-INSTALLATION-POSTERIOR.md",
+      "sha256": "7eda21f9ffa359b090e15662766f3e01119c1f784635d47d4ca7d9a729e7864a",
+      "reviewer": "source_review_resume",
+      "scope": "exact934 source,three leaves and47 actual Root regression results;not full P3-A/Node chain"
+    }
+  },
+  "updatedAt": "2026-11-07T03:24:40.059621+00:00"
+}

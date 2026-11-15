@@ -1,0 +1,129 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "root": {
+    "sourceFiles": 791,
+    "schema": 8,
+    "allVerified": true,
+    "indexSHA256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+  },
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "candidate": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-sqlite-worker-join-candidate-v1",
+  "stageA": {
+    "codingGate": "44753c47544906eb7ebef28cf84bda63b4a622b5c834eb70ca434a0a9cccb1f0",
+    "workspaceGate": "c9e99c122b1ec18fe0cef639e22eee13e9084d0b1e6d30e61d9850f1158b65c0",
+    "implementation": "Draft original worker registry, actual handle ownership/join, separate ACK/SQL close facts, private cfg(test) points; not compiled",
+    "firstCompile": {
+      "exit": 101,
+      "reason": "patched dependency with dev dependencies is not a workspace member",
+      "testsRun": 0
+    },
+    "workspaceAmendment": {
+      "members": [
+        "vendor/sqlx-sqlite"
+      ],
+      "defaultMembers": [
+        "."
+      ],
+      "resolver": "3",
+      "noDepsMetadataExit": 0
+    },
+    "secondCompile": {
+      "exit": 101,
+      "reason": "no matching package chrono found in offline crates.io index; Rust compilation not reached",
+      "testsRun": 0
+    },
+    "lockSHA256": "d111eb5e9310ba392cbd6dfe800a12f30bd4180bc6617171724ee01302f1af22",
+    "lockChanges": "same sqlx-sqlite 0.8.6 source/checksum removal only; 261 packages unchanged; workspace attempt added no further edge",
+    "rustfmtExplicitNineLeavesExit": 0,
+    "developmentTestsDefined": 6,
+    "developmentTestsExecuted": 0,
+    "independentTestsExecuted": 0,
+    "reviewOfNextEntry": "requested; no alternate command or network executed",
+    "rootInstalled": false
+  },
+  "strictMaintenance": {
+    "reviewFreeze": "63d38ba85654d6be435c53ed4fd6c8f39c363b0b3ab0550bc66423e9bf56002a",
+    "status": "D-LIFE-STRICT001 limited static maintenance closure only",
+    "strictExit": 101,
+    "diagnostics": 680,
+    "runtimeTestsRun": 0
+  },
+  "newIndependentDefinitions": {
+    "workspaceEntryFreeze": "56d7e86b707eeb80e8dc6f7c46256ea062b21ada16c317293b41058dbf9d7dbc",
+    "ackErratumFreeze": "d3d24693810911433ff03e3696aa098c11489e08859bbca4acff7bde6147ed30",
+    "stageBFreeze": "970ca54be42be6dde06843835c15e23e828601d00b4ef1bae7d4027316b9b13c",
+    "stageB": {
+      "cases": 13,
+      "vectors": 45,
+      "entries": 16,
+      "status": "defined; not coded or run; reviewer gate requested"
+    },
+    "rootVerifiedAllMembers": true
+  },
+  "evidence": [
+    {
+      "path": "Cargo.toml.before-workspace",
+      "bytes": 4000,
+      "sha256": "34f58940076923ca10ba840e6fae56b92db11ad8cbf9598ae6b70349b9f91105"
+    },
+    {
+      "path": "Cargo.lock.before",
+      "bytes": 65680,
+      "sha256": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+    },
+    {
+      "path": "Cargo.lock.resolved",
+      "bytes": 63001,
+      "sha256": "d111eb5e9310ba392cbd6dfe800a12f30bd4180bc6617171724ee01302f1af22"
+    },
+    {
+      "path": "Cargo.lock.workspace-v2",
+      "bytes": 63001,
+      "sha256": "d111eb5e9310ba392cbd6dfe800a12f30bd4180bc6617171724ee01302f1af22"
+    },
+    {
+      "path": "VENDOR-TEST-COMPILE-FIRST.json",
+      "bytes": 326,
+      "sha256": "856f3e21039bc7cd18728efb0437ec87242684cc65376f5d3f4a8e7784795272"
+    },
+    {
+      "path": "VENDOR-TEST-COMPILE-V2.json",
+      "bytes": 326,
+      "sha256": "0f8a28ce591db435012b316f752f79383f3ca4c401a90bf980390245242465bf"
+    },
+    {
+      "path": "logs/vendor-test-compile-first.stderr.log",
+      "bytes": 120,
+      "sha256": "bc29bffe76b23c8d1eb49586a5dff5fbb779b0de85cd37a50e4a19d318c1b897"
+    },
+    {
+      "path": "logs/vendor-test-compile-v2.stderr.log",
+      "bytes": 460,
+      "sha256": "ac1fd16df302854b574ae0bfdfebf8364c1589637a4c854b134b4f7a999f2862"
+    },
+    {
+      "path": "logs/vendor-rustfmt-check-v3.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "STAGE-A-HOOK-CROSSWALK.md",
+      "bytes": 3040,
+      "sha256": "5b5f5ec8d00551a976401affe7f845be6d8394fc341abce3f92cfcd095b4cfd9"
+    }
+  ],
+  "notPerformed": [
+    "network dependency fetch",
+    "npm audit",
+    "Root product edits",
+    "commit",
+    "push",
+    "publication",
+    "archive",
+    "index writes"
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "scope": "WP2/2.1 public model only",
+  "snapshot": [
+    {
+      "path": "app/src/domain/native.rs",
+      "sha256": "8d01cef25c7ba12ffd2aff94cc78fc8bfbe41d604feaf2312f13fe47cadf9abd"
+    },
+    {
+      "path": "app/src/domain/activity.rs",
+      "sha256": "4ce09688e51216fb9bd6f1ebac7f43e67152bb569240c4bdf66669f15d9d8b32"
+    },
+    {
+      "path": "app/src/domain/activity/tests.rs",
+      "sha256": "bacabf34418a74545551751910ddd0318e563706ef57f2fad5c55c75aee7169c"
+    },
+    {
+      "path": "app/src/domain/mod.rs",
+      "sha256": "b376908d82df340dbf8f106242b193f7d30b8284b7d30584cf4161875884032c"
+    },
+    {
+      "path": "app/Cargo.lock",
+      "sha256": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+    }
+  ],
+  "probeExtraResolvedPackages": []
+}

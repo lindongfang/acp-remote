@@ -1,0 +1,78 @@
+{
+  "scope": "Independent data-component result; limited reviewer postcheck pending; no Root product integration",
+  "verifiedMembers": 703,
+  "independentFreeze": "1c2a870d998b70a525b2651c7570da8cb46d5a031f6bba0a905a8411ad577a6e",
+  "rootInputsUnchanged": 636,
+  "sourceCount": 639,
+  "result": {
+    "safeFinal": true,
+    "productDeliveryPass": false,
+    "candidateFreezeSha256": "f18cb38376ed07320ac617fd161f6638e2060122067a57e6403a73c4a9122d50",
+    "definitionFreezeSha256": "44123afa6b1498aef69d8373fb7de0597a0e7bd2225d3f580ea8c91630951928",
+    "independentTests": {
+      "passed": 7,
+      "failed": 0,
+      "filtered": 530
+    },
+    "developerTests": {
+      "passed": 4,
+      "failed": 0,
+      "filtered": 533
+    },
+    "groups": {
+      "EI01": "pass-data-component",
+      "EI02": "pass-data-component",
+      "EI03": "pass-data-component",
+      "EI04": "pass-data-component",
+      "EI05": "pass-data-component",
+      "EI06": "pass-dynamic-ownership-plus-structural-drop",
+      "EI07": "partial-unreached-allocation-and-overflow",
+      "EI08": "fail-strict-dead-code"
+    },
+    "openIssues": [
+      {
+        "id": "E1-OPEN001",
+        "state": "open",
+        "strictDefaultExit": 101,
+        "strictAllExit": 101,
+        "errorsEach": 13
+      }
+    ],
+    "pendingDynamic": [
+      "OffsetExhausted",
+      "Allocation",
+      "near-address-space-limits",
+      "allocator-physical-deallocation"
+    ],
+    "rootWrites": 0,
+    "network": false,
+    "committed": false,
+    "pushed": false,
+    "sourceDrift": false,
+    "ownActiveCommands": 0,
+    "tmpEmpty": true
+  },
+  "reviewerPostcheck": "pending",
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-independent-result/freeze.json",
+      "sha256": "1c2a870d998b70a525b2651c7570da8cb46d5a031f6bba0a905a8411ad577a6e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-independent-result/REPORT.md",
+      "sha256": "6b503fa00f70d02c2fdbce97d7047cd080a4aa3152831a5bfb3593fcaa132dec"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-independent-result/result.json",
+      "sha256": "d73c8237cfa41bcb2e45331f946277a41464b1cf0fdd55bd06b1abb1931ebb6f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-independent-result/acceptance.patch",
+      "sha256": "ee0d38473d4e2de82d61778a55566e6b558e3a65eb203b1531f3e470a7e28f7c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-independent-result/source-manifest.json",
+      "sha256": "b429d4c477ebc6e8246e18590f3874a426b334729969adaa80e56ea88000d284"
+    }
+  ]
+}

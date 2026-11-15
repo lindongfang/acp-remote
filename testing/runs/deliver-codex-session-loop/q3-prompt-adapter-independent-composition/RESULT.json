@@ -1,0 +1,570 @@
+{
+  "date": "2026-11-02",
+  "kind": "Independent PromptDocument A exact rebase retest",
+  "candidateFreezeSha256": "805516613647a63053a5b23228bb0ca21d3b6ba1c55537b05b45d6d866132a12",
+  "candidateSourceManifestSha256": "f0c04322e75867f8335f020ad00ae373085e366d29a9bcda770fa425f8d85be9",
+  "gateFreezeSha256": "b957c293dd00e0ae7b01b334b75e4ac0d0fb4b4a03aaa5574f133dd7c8e77434",
+  "sourceCount": 785,
+  "sourceManifestSha256": "c1523765558bbd8497a4d613c1c3b4a68c0cb2de6ac9ce1da11b4820f873bbf7",
+  "assetInstallPatchSha256": "2f310d341e30bb2392cf3f226c8ebb5b9dd1399ddf59d78c6079024ba697450d",
+  "safeFinalForFrozenEvidence": true,
+  "safeFinalForADataComponent": true,
+  "safeFinalForCompleteProduct": false,
+  "limitedAcceptance": {
+    "passed": 12,
+    "failed": 0,
+    "notExecuted": 0,
+    "cases": [
+      {
+        "test": "pa01_normal_dependency_combines_only_existing_data_and_native_traits",
+        "mode": "public",
+        "status": "PASS"
+      },
+      {
+        "test": "pa02_full_upload_moves_without_copy_and_bound_body_shares_the_original_bytes",
+        "mode": "public",
+        "status": "PASS"
+      },
+      {
+        "test": "pa02_server_hash_uses_full_bytes_not_semantic_json_or_root_only",
+        "mode": "public",
+        "status": "PASS"
+      },
+      {
+        "test": "pa03_flat_owned_unknown_depth_and_number_lexemes_remain_data",
+        "mode": "public",
+        "status": "PASS"
+      },
+      {
+        "test": "pa03_invalid_shapes_and_complete_json_errors_never_produce_a_sealed_document",
+        "mode": "public",
+        "status": "PASS"
+      },
+      {
+        "test": "pa03_known_shapes_preserve_existing_width_and_unknown_fields",
+        "mode": "public",
+        "status": "PASS"
+      },
+      {
+        "test": "pa08_error_mapping_is_static_and_does_not_embed_body_or_parser_diagnostics",
+        "mode": "public",
+        "status": "PASS"
+      },
+      {
+        "test": "prompt_document_acceptance::actual_wire::pa05_retained_actual_prompt_reaches_wire_above_old_frame_limit_and_v1_fallback",
+        "mode": "private",
+        "status": "PASS"
+      },
+      {
+        "test": "prompt_document_acceptance::pa06_parse_failure_precedes_all_r3_calls_and_retainer_is_same_arc",
+        "mode": "private",
+        "status": "PASS"
+      },
+      {
+        "test": "prompt_document_acceptance::pa06_real_r3_same_id_full_bytes_dedup_and_whitespace_conflict",
+        "mode": "private",
+        "status": "PASS"
+      },
+      {
+        "test": "prompt_document_acceptance::pa07_direct_capture_is_from_real_consumption_and_keeps_full_byte_binding",
+        "mode": "private",
+        "status": "PASS"
+      },
+      {
+        "test": "prompt_document_acceptance::pa07_prepared_capture_drop_edit_stale_selection_and_new_revision_bytes",
+        "mode": "private",
+        "status": "PASS"
+      }
+    ]
+  },
+  "regressions": {
+    "acpUserContext": {
+      "passed": 143,
+      "failed": 0,
+      "exit": 0
+    },
+    "acpFirstSandbox": {
+      "passed": 114,
+      "failed": 29,
+      "exit": 101
+    },
+    "r3": {
+      "passed": 46,
+      "failed": 0,
+      "exit": 0
+    },
+    "protocolPrimary": {
+      "passed": 38,
+      "failed": 0,
+      "exit": 0,
+      "childProcessSummaries": 4,
+      "childSummariesAddedToCount": false
+    }
+  },
+  "checks": {
+    "defaultAllTargets": 0,
+    "allFeaturesAllTargets": 0,
+    "fmt": 0,
+    "strict": {
+      "exit": 101,
+      "errorDiagnostics": 603,
+      "sameAsCandidateCodeMessageAllSpans": true,
+      "added": 0,
+      "removed": 0,
+      "aDirectSpans": 0
+    }
+  },
+  "all11CommandsSourceAndLockUnchanged": true,
+  "results": [
+    {
+      "mode": "acp-regression",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--lib",
+        "adapters::acp::",
+        "--",
+        "--test-threads=1"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:12:46.668Z",
+      "finished": "2026-11-02T14:13:03.874Z",
+      "exitCode": 101,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\acp-regression",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": [
+        {
+          "state": "FAILED",
+          "passed": 114,
+          "failed": 29,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 531
+        }
+      ]
+    },
+    {
+      "mode": "acp-regression-elevated",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--lib",
+        "adapters::acp::",
+        "--",
+        "--test-threads=1"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:17:22.154Z",
+      "finished": "2026-11-02T14:17:41.530Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\acp-regression-elevated",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": [
+        {
+          "state": "ok",
+          "passed": 143,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 531
+        }
+      ]
+    },
+    {
+      "mode": "check-all",
+      "command": [
+        "cargo",
+        "check",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--all-targets",
+        "--all-features"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:12:15.801Z",
+      "finished": "2026-11-02T14:12:44.232Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\check-all",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": []
+    },
+    {
+      "mode": "check-default",
+      "command": [
+        "cargo",
+        "check",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--all-targets"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:10:58.202Z",
+      "finished": "2026-11-02T14:11:38.978Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\check-default",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": []
+    },
+    {
+      "mode": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:12:44.504Z",
+      "finished": "2026-11-02T14:12:46.403Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\fmt",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": false,
+      "testSummaries": []
+    },
+    {
+      "mode": "platform-precondition",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--lib",
+        "platform::windows::tests::dpapi_round_trip_uses_current_user_scope",
+        "--",
+        "--exact",
+        "--nocapture"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:16:31.847Z",
+      "finished": "2026-11-02T14:16:32.605Z",
+      "exitCode": 101,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\platform-precondition",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": [
+        {
+          "state": "FAILED",
+          "passed": 0,
+          "failed": 1,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 673
+        }
+      ]
+    },
+    {
+      "mode": "private",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--lib",
+        "prompt_document_acceptance::",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:09:21.632Z",
+      "finished": "2026-11-02T14:10:20.036Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\private",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": [
+        {
+          "state": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 669
+        }
+      ]
+    },
+    {
+      "mode": "protocol-regression",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--test",
+        "raw_json_acceptance",
+        "--test",
+        "acp_runtime_capabilities_config_wire",
+        "--",
+        "--test-threads=1"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:15:19.060Z",
+      "finished": "2026-11-02T14:15:23.814Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\protocol-regression",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": [
+        {
+          "state": "ok",
+          "passed": 5,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "state": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 32
+        },
+        {
+          "state": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 32
+        },
+        {
+          "state": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 32
+        },
+        {
+          "state": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 32
+        },
+        {
+          "state": "ok",
+          "passed": 33,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ]
+    },
+    {
+      "mode": "public",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--test",
+        "prompt_document_acceptance",
+        "--",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:08:19.351Z",
+      "finished": "2026-11-02T14:08:54.926Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\public",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": [
+        {
+          "state": "ok",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ]
+    },
+    {
+      "mode": "r3-regression",
+      "command": [
+        "cargo",
+        "test",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--test",
+        "registration_queue_extension",
+        "--test",
+        "shared_input_queue_acceptance",
+        "--",
+        "--test-threads=1"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:15:14.596Z",
+      "finished": "2026-11-02T14:15:18.785Z",
+      "exitCode": 0,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\r3-regression",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": [
+        {
+          "state": "ok",
+          "passed": 7,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        },
+        {
+          "state": "ok",
+          "passed": 39,
+          "failed": 0,
+          "ignored": 0,
+          "measured": 0,
+          "filtered": 0
+        }
+      ]
+    },
+    {
+      "mode": "strict",
+      "command": [
+        "cargo",
+        "clippy",
+        "--manifest-path",
+        "app/Cargo.toml",
+        "--offline",
+        "--locked",
+        "--all-targets",
+        "--all-features",
+        "--message-format=json",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\workspace",
+      "started": "2026-11-02T14:15:24.077Z",
+      "finished": "2026-11-02T14:15:58.270Z",
+      "exitCode": 101,
+      "signal": null,
+      "spawnError": null,
+      "target": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\target",
+      "data": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-prompt-adapter-independent-composition-retest-v1\\data\\strict",
+      "sourceCount": 785,
+      "sourceSame": true,
+      "offline": true,
+      "locked": true,
+      "testSummaries": []
+    }
+  ],
+  "issues": [
+    {
+      "id": "Q3-COMP-STARTUP001",
+      "state": "Open-intermittent (Root); independent first 29 start failures and sandbox DPAPI os error 2 recorded; subsequent143 green does not close Root issue",
+      "independentProductRootCauseProven": false
+    },
+    {
+      "id": "Q3-COMP-CLEANUP001",
+      "state": "Open-intermittent (Root); not reproduced in independent single143green; no closure claimed"
+    },
+    {
+      "id": "STRICT-BASELINE-603",
+      "state": "Open-known-boundary; no product/expectation edit"
+    }
+  ],
+  "notCovered": [
+    "Full Node ordinary factory and D lifecycle ownership",
+    "Root integration/installation",
+    "Physical database/sidecar release and full Windows process tree cleanup",
+    "Node/WSS/upload/UI end to end and real Harness",
+    "Physical OOM or allocation-failure injection",
+    "Complete product/strict-clean delivery"
+  ],
+  "cleanup": {
+    "ownedTempChildrenRemoved": 29,
+    "privateSyntheticDatabasesRetained": 5,
+    "userDataChanged": false,
+    "processTreeAuditClaimed": false
+  },
+  "networkAuditCommitPush": false
+}

@@ -1,0 +1,12 @@
+{
+  "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-schema9-007-hook-delivery-gate-2026-11-03",
+  "freeze": "1f40e323593558a62e9e92bfc47519c3ce778c00a54bcb1bc455163cffa9cf94",
+  "members": 2,
+  "allVerified": true,
+  "kind": "Independent limited original transaction 007 execution gate",
+  "outcome": "Pass-limited",
+  "allowed": "New isolated formal WP4C007 assets and actual execution",
+  "formalExecutionPassed": false,
+  "rootInstalled": false,
+  "sourceCandidateFreeze": "ecb9ee67b00d0e455ecd6f981332205885ef59d927db20124e7a1af764b6152c"
+}

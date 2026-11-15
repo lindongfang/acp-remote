@@ -1,0 +1,18 @@
+{
+  "date": "2026-11-03",
+  "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-schema9-f05-cleanup-v2-composition-review-2026-11-03",
+  "freeze": "ca51ff3bb99685be5908271ab6e5e6a3666c678ccb2cdd0a7a95eb5ccab05b93",
+  "members": 2,
+  "allVerified": true,
+  "outcome": "Pass-limited-composition",
+  "candidateFreeze": "8f66541aaf09edd2299c9f2b8cbeebaf741f8fb123d348580ff1d5051b75063d",
+  "patchCheck": {
+    "forwardStrict": 0,
+    "reverseStrictCurrentAutoCRLFTrue": 0,
+    "reverseStrictExplicitAutoCRLFFalse": 1,
+    "reason": "Current after source CRLF; content preservation independently verified; check is Git configuration dependent"
+  },
+  "rootInstallationAllowed": false,
+  "formalCLDBPassed": false,
+  "parentClosurePassed": false
+}

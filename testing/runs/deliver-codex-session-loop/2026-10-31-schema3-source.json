@@ -1,0 +1,54 @@
+﻿[
+    {
+        "path":  "app/src/session_storage/product_schema.rs",
+        "sha256":  "6243339225616835236c2348d357c432620c9d1d15195e40b06f6d73d84755ba"
+    },
+    {
+        "path":  "app/src/session_storage/schema.rs",
+        "sha256":  "9a80c9e01cb67396eef4bf53eff7d7b3c0b4b1e86373c5b4da4da19dd1c33b2c"
+    },
+    {
+        "path":  "app/src/session_storage/mod.rs",
+        "sha256":  "0420bafe7b38dbec78bbe76d55f958879a25a3f922260253fc6c506f1eba21be"
+    },
+    {
+        "path":  "app/src/storage.rs",
+        "sha256":  "a91c4125ed82921ee0d68c97e36efba522e7fe60735f38afcc0e227124e79281"
+    },
+    {
+        "path":  "app/src/error.rs",
+        "sha256":  "3554d9ee29885f8db99e19566062a279dbecfa45d5b76d75b69e7006445c9be2"
+    },
+    {
+        "path":  "app/src/node.rs",
+        "sha256":  "c97a0f51f3c878801bcc259452242fac9bd6f3764ec45da50443184fc38c0067"
+    },
+    {
+        "path":  "app/src/lib.rs",
+        "sha256":  "1db31ea7b447f70a8438eeac3ae51bc905cce45ad90e2ff0ec9e1309cf453847"
+    },
+    {
+        "path":  "app/src/data_dir.rs",
+        "sha256":  "47b20a142e7af2d332367a111f07333dbad012ed4fb70c20c536e51780cf89e1"
+    },
+    {
+        "path":  "app/src/platform/windows.rs",
+        "sha256":  "c740ba9d4d452341f7e8ce0366d65645ec01e7aaf1a418c968c7e0df359233cf"
+    },
+    {
+        "path":  "app/Cargo.lock",
+        "sha256":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+    },
+    {
+        "path":  "app/tests/acceptance/schema3_migration.rs",
+        "sha256":  "2fb2e326088eb107bcd05ae6a949238c9a073803e64a2f6357886926a5d9dc91"
+    },
+    {
+        "path":  "openspec/changes/deliver-codex-session-loop/implementation-contract.md",
+        "sha256":  "d805da41f7b89fe073fb7dcc5d35609a928d7097467504fc7eba1de06b968a8d"
+    },
+    {
+        "path":  "testing/ci/windows-owner.ps1",
+        "sha256":  "e262ac6d70d0d7ccb4e17b72c727d393e3877c50ab79a46541970bd82caa5403"
+    }
+]

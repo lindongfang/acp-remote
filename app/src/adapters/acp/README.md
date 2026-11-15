@@ -1,42 +1,17 @@
-# 公共 ACP 客户端：3.4 第一候选
+# 公共 ACP 客户端
 
-本包只负责标准ACP编码、一次版本协商和调用者拥有的异步stdio状态机。无进程启动、SQLite、安全策略或Web接线，不表示真实Harness产品闭环通过。未知字段和未知更新种类按完整原始消息保留，不降成文本。
+本模块实现 raw JSON、完整配置、按连接协商的 v1/v2 策略和受监督的单 reader/单 writer。协议层没有进程、数据库、Actor 授权或 Node/WSS 装配；这些数据类型与来源品牌都不是业务授权。
 
-## 固定依据
+`Connection::spawn` 返回可克隆操作句柄、唯一 `EventReceiver` 和唯一 `IoOwner`。调用路径是 reserve → Reservation.encode → enqueue(应用私有 WriteFence) → Ticket/Received；响应与实际写入报告分开。Reservation 和 Ticket 的 Drop 有明确取消责任；错误 enqueue 归还所有权。`ExtensionFields::empty()` 返回 Result，调用方必须处理配置分配错误。
 
-主仓库 testing/runs/deliver-codex-session-loop/2026-10-30-network-retry.md 与 session-contract.md §7–9；官方规范观测引用 abc8a31b16fc4eb6e3578ced562088e8e26d959a。v2为Draft，程序/SDK发布号不等于协议号。
+reader 在 writer 背压、外部 SQL 等待或 consumer 未 next 时继续接收。实际 poll_read 返回含 LF 的批次冻结本地 receipt 及原 RPC/read-window 资格；锁外 parse 不借后来的发送或恢复窗口补资格。Stop 封新 poll，保已取得完整帧，排空后才发布终止错误。shutdown 使用同一绝对期限实际 join；等待方取消或原 runtime 关闭后仍可由原 Core 槽继续收敛。joined 不代表原生执行成功。
 
-读取主仓库 .tmp/cl-wp1-probe/node_modules/@agentclientprotocol/sdk 2.1.0 固定标准schema：
+每次真实 poll_write/poll_flush 都经过外部私有短围栏。零发送、部分帧 Unknown、完整帧接受、flush/Written 和 RPC response 是不同事实；部分异常封连接，未知不重发。外部 IO 提供者必须独占且不在后台或 Drop 自主首写。实际管道与 mock/buffered 写层证据分别记录。
 
-- v1 schema.json SHA256：1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5
-- v2 schema.json SHA256：28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d
+RawMessage.fields 使用 raw_json 浅借用，无 Value DOM 兼容入口；完整未知字段、大数、转义和数字原词法保留。公共 ACP 链删除旧 32MiB/96 层/token/列表条数及 Message/Tool 输出身份长度门槛。保原 RPC 控制、双方64同时pending、Session/Option4096和原 list/replay/listing cwd/cursor 参数检查；这些是平台兼容差异，不是 SDK 上限。累计 server ID 不设寿命阈值，seen 防重不清空。pending_count 是可接受新动作的 live 关联数；关闭后为0，原不确定关联仍保在 shutdown 的 unresolved_requests。
 
-规范入口：[v1初始化](https://agentclientprotocol.com/protocol/v1/initialization)、[v2初始化](https://agentclientprotocol.com/protocol/v2/initialization)、[v2 prompt生命周期](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle)。本候选手写核心必需字段及能力解释，不宣称提供完整JSON Schema引擎或全部可选方法；未广告的fs/terminal/auth客户端方法返回method-not-found。
+SessionSetup 要求有版本和来源的完整 cwd/MCP/additionalDirectories 快照，Known(empty) 与 Unknown 分开；有序 env/header 和未知 raw 扩展不缩水。协议不扫描本机私有配置或验证路径授权。不支持的版本/能力仅限制对应路径。固定 SDK 2.1.0 stable schema：v1 `1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5`，v2 `28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d`。
 
-## 版本策略
+`view_observations` 与 `tool_projection` 为旧可选预算显示适配器。公开入口必须真实 Received、核相同连接来源；它们的 ViewWindows/history/anchor/key 预算尚未整体消除，不能成为真实 IO 必经门槛，也不声称长键完整历史投影。开发旧同步单元仅验证同生产私有数据算法/旧布局和计费；新增真实客户端用例另验公开品牌，测试不提供 fake Received。
 
-initialize使用offer形状且每连接仅一次；先关联响应ID、检查selected受支持且不高于offer，再按selected解析info/capabilities。v2 offer→v1 selected使用agentInfo/agentCapabilities。错误、未知版本或不匹配结构关闭连接，禁止再次初始化或重发业务输入回退，不依据程序名分流。
-
-v1 prompt的stopReason响应是该调用完成；v2 messageId仅表示插入，完成依据state_update，取消通知不等于终态。resume引用原native session并省replayFrom，不替代为new/load；v2须在响应前有同session的current-state snapshot。恢复期间所有更新标为DuringResume，快照不能产生新完成或正文哈希去重。可靠Run及平台前台互斥由后续session owner实现。
-
-工具name的省略/null在v1均保持，在v2 null清除；v2工具_meta按顶层键patch，null删除/清空，嵌套对象直接替换。其他结构保留原文，由后续版本化事件映射解释，不能套通用深合并。native request/tool/message/session/option ID分类型，数字请求ID与字符串不同。
-
-权限tool_call及带toolCallId的command subject可提供引用。无法关联的command、缺失/未知subject、未知选项不能选择允许；原文保留，应用层仍须同session/Run/代际关联已观察工具。缺rawInput本身不拒合法引用。运输层绑定私有连接来源，响应时重新解析原广告，调用方篡改、跨连接同ID借用及重复交付不能扩大选项。cancelled可明确关闭未支持请求。这里的来源不是应用授权issuer。
-
-## 所有权和资源预算
-
-Connection独占读半部、唯一writer、关联表及部分读缓冲，无后台任务或无界发送队列。调用者持续pump next，等待prompt时须处理权限/更新。request注册后直接有界write_all+flush；写future取消即留下closed状态，不能重试。未知/重复响应、超时、EOF、非法消息使连接失效，无自动重发。shutdown用绝对Instant预算清理关联并关闭stdin；平台OwnedProcess负责完整Job回收，stdout EOF不是树回收证明。
-
-ACP stdio独立预算：消息32MiB（不含CRLF），容纳16MiB输入加RPC信封；JSON深度96、结构token计数131072、native字符串ID4096 UTF-8字节、RPC字符串ID1024字节、双方各最多64未决请求、对端已见ID4096个。满则明确失败/关闭，不驱逐旧ID复活，不裁原文。事件返回后保留内容由调用者预算负责。管理WSS的32KiB/深度8/限流/队列不受此预算影响。
-
-最终接线在同一client_gate→session owner围栏内核实真实issuer、actor、Run及代际；强刷和版本检查后持久化claim并直接调用实际writer。write/flush只是transport事实，无peer应用ACK。公共内部传输API不是远程授权入口。
-
-## 开发验证范围
-
-参数化duplex fixture覆盖双版/回退、字段、关联乱序、未知/重复响应、取消/插入、恢复边界、深层原文、权限广告防篡改/来源隔离、patch差异、异步字节边界及读写future取消。fixture不是实际Codex/DeepSeek或Windows Job。真实兼容、恢复、审批围栏、树清理由后续固定集成版独立验收。
-
-## ACP-R001 / ACP-R002 修复候选
-
-v1仅固定官方五个stopReason（end_turn/max_tokens/max_turn_requests/refusal/cancelled）产生Completed。未知、空或错类型控制值使连接失败关闭，不能释放上层Run互斥；通过take_rejected_message一次取回唯一被拒解析帧的完整原文，最多保留一帧，不进入普通日志。v2原始state事件仍由后续owner判定可靠Run事实，不由此包把任意字符串升级为完成。
-
-Request带私有Strategy来源tag；Connection在登记ID及任何写入前核对其当前冻结Strategy来源。其他连接（即使同版本同能力）或已关闭连接的旧Strategy生成的Request均零写拒绝，未改变正常目标连接/关联ID，可继续用目标自身Strategy构造请求。此约束不依赖调用方保证不拿错，也不是应用授权issuer。原C381快照及原独立问题报告保留，新候选须原tester/reviewer复查，coder不关闭问题。
+工程合同见当前 change 的 acp-runtime revision2 及 empty 构造器补充；独立验收候选及最终固定源码另记。协议夹具和自有 PowerShell child 的真实管道均不是实际 Harness、Windows Job 树、必要派发账本、持久审批或 Node/WSS 集成的通过证明。

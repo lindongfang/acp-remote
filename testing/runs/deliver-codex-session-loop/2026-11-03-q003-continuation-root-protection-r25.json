@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-03",
+  "sourceCount": 789,
+  "manifestSHA256": "9d7afb680899bd1f38740fe87d0f0dc8d18785cf48aab4f450dc697c45bd2478",
+  "mismatches": [],
+  "indexSHA256": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+  "checks": {
+    "gitDiffCheck": 0,
+    "openspecStrict": 0
+  },
+  "implementationCandidate": {
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-named-configuration-abi-candidate-v1",
+    "changed": 4,
+    "preserved": 806,
+    "rootInstalled": false
+  },
+  "unperformed": [
+    "npm audit",
+    "git commit",
+    "git push",
+    "openspec archive",
+    "index writes"
+  ]
+}

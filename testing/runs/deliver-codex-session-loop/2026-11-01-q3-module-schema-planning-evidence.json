@@ -1,0 +1,726 @@
+{
+  "scope": "Planning and immutable handoff preservation only. Shared final developer candidate verified1227 members; only manifest embedded, full candidate remains external. Shared planning14 and reachability design43 preserved. Schema asset55 plus header supplement23 and original gates preserved; all of these freezes are pre-execution definitions, not runtime acceptance. Later Native schema hybrid v19 results are not embedded here. No product source or task checkbox changed; current Root334 source bytes verified.",
+  "sharedCandidate": {
+    "verifiedMembers": 1227,
+    "sourceCount": 360,
+    "embedded": "manifest only"
+  },
+  "rootInputCount": 334,
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\api-reachability-issues.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/api-reachability-issues.md",
+      "sha256": "089481e7ade9f73d0c74037d615db7316d5f52f7a7bf890e301e541bb725b2c5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\audit-and-copy.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/audit-and-copy.cjs",
+      "sha256": "927a74a866b97ee333475c891b7d4c377bd50c5ece5954ce4b54efbb98bb7553"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\build-planning-map.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/build-planning-map.cjs",
+      "sha256": "1dc7c4479ba63b68390b4e69cfd2661e39497d3b0fb0c0685b0cfbf4c1dd0a99"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\definition-inputs.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/definition-inputs.json",
+      "sha256": "b431b3dbab8e553c7b5b783395d8c815442212c2ee5accae0a0833abd814b3c5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\execution-plan.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/execution-plan.md",
+      "sha256": "ceebb8d07f9eda732d65c77c36adf0ae2cee600108e35045a45b347101482f92"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\HANDOFF-planning.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/HANDOFF-planning.md",
+      "sha256": "8fefea1ca4e5e0a643cd1a4c14c11db2f1a94d83d4eb2ec08f8b76c21c72753c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\initial-input-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/initial-input-audit.json",
+      "sha256": "2d28b552621ab1a55123c48ff9018dd8d089793dff4e9dbfd3303a544f903a27"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\input-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/input-audit.json",
+      "sha256": "6036e9d20e262fbaceb852c103ee271c5487c620b6d5a26d63d2e5513ac631c5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\original83-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/original83-map.json",
+      "sha256": "ec28749fe6175defa1bad9883aceb9d617d9c6bd1b66cf47ff3cede21ff1c23e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\planned-function-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/planned-function-map.json",
+      "sha256": "5023112fcf7b8109f25f5cdfed8fbcfbacda4bbf74e878fe65cd2d58d83c4304"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\rf-rb-mapping.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/rf-rb-mapping.md",
+      "sha256": "e26590c9aec14fcb20385c0cb7bdeb014e7af5f7086f00ea11fcc0496974a1cf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/source-before.json",
+      "sha256": "2464aef85f99c66407fd7f785beb8953ece6d792bdb76cc6f4854fade9eed3e8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\logs\\patch-apply.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/logs/patch-apply.json",
+      "sha256": "b69eb82087ad146b45c874a531959285bcf073a5acc3fc45ada2a85ae422bfde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\logs\\patch-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/logs/patch-check.json",
+      "sha256": "b3d12edbd057f35823e8effcd2578b9f1bcdc8cd429147762a4db930658d6fdc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v2-module\\planning-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-planning/planning-freeze.json",
+      "sha256": "b86376979590edb4a917b1ad3cfaeb062e2b83ee95c4b33fb9e9feef72f43980"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/HANDOFF.md",
+      "sha256": "8fcbd3ede6a54ee53e2dfdc0a26f9ab834c020432f122f97a1c26adb62923562"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\contract.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/contract.md",
+      "sha256": "7513b03daddbf0d843864a2a0603935e1c4522ba974851735bd84d00bc828bb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\freeze.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/freeze.cjs",
+      "sha256": "f9bd287e3cb377473eb7001546ea3992f8ede13e3dcbdae2cb9969ab27ba5f12"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\authority\\acceptance-definition-v2.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/authority/acceptance-definition-v2.md",
+      "sha256": "d2eaac1ff350dcc88c4c7bbeadf19f5fb2b674babf724a502437ef23c73bc717"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\authority\\definition-manifest-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/authority/definition-manifest-v2.json",
+      "sha256": "96aa8288ad24e2b64460b95b604516859fdfd7a445166ef3660edb485929ed85"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\authority\\replay-failure-supplement-v2-coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/authority/replay-failure-supplement-v2-coding-gate.md",
+      "sha256": "751abd1911f2e8efc4465c9ef9c98cb4ab953022bf303d598ff2be83f7900b33"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\authority\\revision2-supplement83-coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/authority/revision2-supplement83-coding-gate.md",
+      "sha256": "5609f606991d0c2608074bc7914b3a8bcc33ebf51730645e988d5e87ca47178e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\authority\\same-read-rebind-v2-coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/authority/same-read-rebind-v2-coding-gate.md",
+      "sha256": "6b5b5711b83b35773449b4b3529f289c3f1b25cd2845980b2562c404d1e1f852"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\component-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/component-manifest.json",
+      "sha256": "92de45af47b75ae5053ca5947f709c87dfeb68a9a9630b9ebc6ace590cb71671"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\repository\\AGENTS.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/repository/AGENTS.md",
+      "sha256": "1019d8854aca68d2519e599d0f3a1484e49667273708a49ac03818834aa38be3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\repository\\openspec\\config.yaml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/repository/openspec/config.yaml",
+      "sha256": "2838c774a014e389be5ec702bd2f293f1686012d7d8f6c01fb500a8c21980a2f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\repository\\openspec\\role\\coder.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/repository/openspec/role/coder.md",
+      "sha256": "b06e9ddb4af0a912bddd7bbf48b16f2c6786e533fdbd6f6fafa0cea0d7783961"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\root322.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/root322.json",
+      "sha256": "6a8e95cb6f514a9488fe1ffa1aeda5e5562983d18ef8001832a2935cf1ab02a4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\Cargo.toml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/Cargo.toml",
+      "sha256": "0c26002e8c10e8720cf801c5cb5623adc774829da83a4a84936a4e257ec441c4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\adapters\\acp\\mod.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/adapters/acp/mod.rs",
+      "sha256": "e6c04a73547a3d1f6535220abc75beb5963303a6192efd34168b010b2d81a949"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\adapters\\acp\\shared_view_module.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/adapters/acp/shared_view_module.rs",
+      "sha256": "109c209cc52af1eec99c1c3ee12d16ae7512fb59d7ed1a15ebc565184c348fb4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\adapters\\acp\\shared_view_module\\history.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/adapters/acp/shared_view_module/history.rs",
+      "sha256": "5841ea8e66c1ee181e74e56780f8c4ec15069567fa3d29c2af1b48c2ef5d920a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\adapters\\acp\\shared_view_module\\transfer.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/adapters/acp/shared_view_module/transfer.rs",
+      "sha256": "e06263011374b023dbbbbd9c2d72f29cc4b9a0fb710f67db58a1f35c1528d8de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\adapters\\acp\\transport.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/adapters/acp/transport.rs",
+      "sha256": "141ed74a182ce26346b4db7d3cfb0b3d4bc2951583ececeae348428f125676c0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\adapters\\acp\\transport\\writer.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/adapters/acp/transport/writer.rs",
+      "sha256": "c737e5e0705bdaece83b72f89ed3541be8abf073f76f3464ebc46992aad85d8f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\application\\shared_views\\budget.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/application/shared_views/budget.rs",
+      "sha256": "7e2fc2df4b4dc4fa107c53b578a9abd81a263e4578b6eec966ea138342b3ac20"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\application\\shared_views\\read_control.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/application/shared_views/read_control.rs",
+      "sha256": "208ebd26c5b9a73ae1b644413a28c7d3917a1786ae153dca382cc099164d9f83"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\application\\shared_views\\reader.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/application/shared_views/reader.rs",
+      "sha256": "262ab21201b64b3db92b889d3ced95ba2972b70fd25d9e2eb09782f6594c72e8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/lib.rs",
+      "sha256": "a881e2383ac331c25d88d7290943f8855a4a1ee240e3233f2c5339329f3385a0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\shared_view_test_support.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/shared_view_test_support.rs",
+      "sha256": "d6e5b2ff657a5d3400e17e988f504d5ee3bcfd9fd7cd2a5c4fff8484d3b93503"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\shared_view_test_support\\wire.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/shared_view_test_support/wire.rs",
+      "sha256": "6630f35be642edc07fe873f2d1b564f8e8745e9b1dbec185c4f162d24e53ca5b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\source\\app\\src\\shared_view_test_support\\wire\\child.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/source/app/src/shared_view_test_support/wire/child.rs",
+      "sha256": "a0ae0e2d0250bd48f0b91e69c9ed815c5c363c667cf5ad952002817eea3cf3e7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\HANDOFF-planning.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/HANDOFF-planning.md",
+      "sha256": "8fefea1ca4e5e0a643cd1a4c14c11db2f1a94d83d4eb2ec08f8b76c21c72753c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\api-reachability-issues.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/api-reachability-issues.md",
+      "sha256": "089481e7ade9f73d0c74037d615db7316d5f52f7a7bf890e301e541bb725b2c5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\audit-and-copy.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/audit-and-copy.cjs",
+      "sha256": "927a74a866b97ee333475c891b7d4c377bd50c5ece5954ce4b54efbb98bb7553"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\build-planning-map.cjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/build-planning-map.cjs",
+      "sha256": "1dc7c4479ba63b68390b4e69cfd2661e39497d3b0fb0c0685b0cfbf4c1dd0a99"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\definition-inputs.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/definition-inputs.json",
+      "sha256": "b431b3dbab8e553c7b5b783395d8c815442212c2ee5accae0a0833abd814b3c5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\execution-plan.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/execution-plan.md",
+      "sha256": "ceebb8d07f9eda732d65c77c36adf0ae2cee600108e35045a45b347101482f92"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\initial-input-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/initial-input-audit.json",
+      "sha256": "2d28b552621ab1a55123c48ff9018dd8d089793dff4e9dbfd3303a544f903a27"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\input-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/input-audit.json",
+      "sha256": "6036e9d20e262fbaceb852c103ee271c5487c620b6d5a26d63d2e5513ac631c5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\logs\\patch-apply.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/logs/patch-apply.json",
+      "sha256": "b69eb82087ad146b45c874a531959285bcf073a5acc3fc45ada2a85ae422bfde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\logs\\patch-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/logs/patch-check.json",
+      "sha256": "b3d12edbd057f35823e8effcd2578b9f1bcdc8cd429147762a4db930658d6fdc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\original83-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/original83-map.json",
+      "sha256": "ec28749fe6175defa1bad9883aceb9d617d9c6bd1b66cf47ff3cede21ff1c23e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\planned-function-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/planned-function-map.json",
+      "sha256": "5023112fcf7b8109f25f5cdfed8fbcfbacda4bbf74e878fe65cd2d58d83c4304"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\planning-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/planning-freeze.json",
+      "sha256": "b86376979590edb4a917b1ad3cfaeb062e2b83ee95c4b33fb9e9feef72f43980"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\rf-rb-mapping.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/rf-rb-mapping.md",
+      "sha256": "e26590c9aec14fcb20385c0cb7bdeb014e7af5f7086f00ea11fcc0496974a1cf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\inputs\\tester\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/inputs/tester/source-before.json",
+      "sha256": "2464aef85f99c66407fd7f785beb8953ece6d792bdb76cc6f4854fade9eed3e8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\validation.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/validation.json",
+      "sha256": "846b8ecc38053514a4079b6a110a85114df1ae0481993a8494cd7e104fdc184b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\module-reachability-supplement-v1\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-supplement/freeze.json",
+      "sha256": "906d5be46d49deb28906b7a57509e3cb01d8f4b388de4f960f520d1018a0164a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\after\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/after/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "98f5ca684855c08a15e0511a9b19e842ee16c0ecc2d5f38c5f0f06f3c62cea81"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\after\\app\\tests\\native_dispatch_acceptance\\schema6_combined_vectors.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/after/app/tests/native_dispatch_acceptance/schema6_combined_vectors.rs",
+      "sha256": "0144241437185cade6f84eb5f2d8c0ea3903ba194299b9b38f9d678fe8e5a870"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\after\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/after/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\after\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/after/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "0ef175167195d380722d3db7796d6fd4dc959c6b5de4a5c8e00bf73442f4a8ab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\after\\app\\tests\\native_dispatch_acceptance\\schema6-api06-before-fixture.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/after/app/tests/native_dispatch_acceptance/schema6-api06-before-fixture.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\after\\app\\tests\\native_dispatch_acceptance\\schema6-combined-vectors.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/after/app/tests/native_dispatch_acceptance/schema6-combined-vectors.json",
+      "sha256": "90ea7ec285ffdd8dd2752f832c272f4e06f10ce1f20dbd55b4f1811599430327"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\before\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/before/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\before\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/before/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\before\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/before/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\build-reachability-map.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/build-reachability-map.mjs",
+      "sha256": "ce8dc2f89b18776b4563f2832a8502994be94484dd2c0cdd630afa5147de7c31"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\build-schema-vectors.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/build-schema-vectors.mjs",
+      "sha256": "bbb786e75aac9ea55d6423d512cb34984d456146af2f89175474236992e1ddf2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\ddl-diff-summary.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/ddl-diff-summary.json",
+      "sha256": "a28be3b30eff4492b056a6617fb6aea964d23461081bcfbb6cda33934176cb90"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\definitions\\no-native-effects-required.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/definitions/no-native-effects-required.sql",
+      "sha256": "baed47f0300abd3020e1e5de2c411f3871555463a79ab1d474265a184f5aaee4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\definitions\\reachability-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/definitions/reachability-map.json",
+      "sha256": "fd45dedfcae842dbebfbe9d0d12b6b649c28173c01bb3a46db953755a7fdb047"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\definitions\\repository-proof-oracles.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/definitions/repository-proof-oracles.md",
+      "sha256": "75b24e846d39e324e7b9335f9044e9b98cf6e11946e0de596035d627a2a10573"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\finalize-candidate.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/finalize-candidate.mjs",
+      "sha256": "ff2c65a6ec39f0b17c78213d258e6ad2b50fc890afe6ad02c68a81fe14a956c2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\input-hashes.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/input-hashes.json",
+      "sha256": "a4999495bb1e354ef8fd31b4da456b4b283a09694e006560c0906bbce69db153"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\acceptance-definition-v5.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/acceptance-definition-v5.md",
+      "sha256": "5afba439e405e59e6a09eadd4818e327164d8af012d93f9e0c95ae3756e470fa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined-coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined-coding-gate.md",
+      "sha256": "8c21b1631bde1312885aa3b8e879f1aa2fc4046b54bf7a34b63084b5e32194c5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\01-provider-proposed.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/01-provider-proposed.patch",
+      "sha256": "448cfac8d9ea9127093d253a51454156679c0e0eff1c516e0cb40061044e714c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\02-permission-proposed.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/02-permission-proposed.patch",
+      "sha256": "1db17668896d1f4eaf4a4dddc3089e8dac00feab2f0fecd9066c2436e3468f6e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\CONTRACT.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/CONTRACT.md",
+      "sha256": "13b8f4f9a8cd0fa0e01de21aa1962685e315b6b202ef6c52f25400b105049f8e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/freeze.json",
+      "sha256": "f61d394e1ab799fc6a3ec8d6b6180b31aaa1ff0404fea2048136f7dd39211e80"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\inputs.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/inputs.json",
+      "sha256": "ac3b6bf94de7aa8e49a63564591a481616fd45fcc1194d0018427d7a69135959"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\inputs\\app\\src\\adapters\\acp\\model.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/inputs/app/src/adapters/acp/model.rs",
+      "sha256": "28d03424909af829a8a800efd1c2698fc76486794a12c467a18cd0dfcaf315d9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\inputs\\app\\src\\session_storage\\product_schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/inputs/app/src/session_storage/product_schema.rs",
+      "sha256": "e3d2d32c0e3ec32f1c6ef4ed4a971f31c4f203bd8ca6d67063f81b4f14aa6c00"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\inputs\\app\\src\\session_storage\\registration_schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/inputs/app/src/session_storage/registration_schema.rs",
+      "sha256": "4bc3bb41a8b40456ac1bccf6bb331f1549b5e4e60b048a106504d4ba0efddf67"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\inputs\\app\\src\\session_storage\\schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/inputs/app/src/session_storage/schema.rs",
+      "sha256": "b7e6092f4e39ac97192bf43b2a2a53dcb002fdeb7c777273004142ef76f0adbe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\schema6-api06-before.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/schema6-api06-before.rs",
+      "sha256": "73b5e8a6f2ee0238fa7cfa639b0cfe24d3867c8fa80174687b2ea5d4fd91f18d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\schema6-combined-proposed.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/schema6-combined-proposed.rs",
+      "sha256": "fe155c0d82b5aa587dee8d5000f5dc5e959f00e95974c4db07a886e536a2e0ad"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\schema6-combined-proposed.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/schema6-combined-proposed.sql",
+      "sha256": "478262bbeb09bbda8441584bd78eb41bd9fc80093ae5c4f0d9ded2fa39c4daf6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\schema6-provider-proposed.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/schema6-provider-proposed.rs",
+      "sha256": "a4fce905d8f689f3bf25f4ce24bd8538881425258b6d4afb80ba30134ba2f8b1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\schema6-provider-proposed.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/schema6-provider-proposed.sql",
+      "sha256": "a17b38ec575e4deb67c692890c18483a0fe2a0f272a59ade8727a7b68c4b3f38"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\combined\\schemas1-5-preservation.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/combined/schemas1-5-preservation.json",
+      "sha256": "1398ef0ee1fcc78bbfcd16c099c8881e134b2f3190c1d869fb879c0232c46767"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\control-subcases-v5.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/control-subcases-v5.md",
+      "sha256": "f6292dc21e1a9810316042fbb52700b5c1a9312de353f2e3b3215dcd1874c72a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\definition-index-v5.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/definition-index-v5.json",
+      "sha256": "7d2f85f6e72920b7db8b0c3dcb4fa03fef4f1cd2d526d532e83e3c8fc0881e23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\old-fixture-dependencies\\delivery4.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/old-fixture-dependencies/delivery4.rs",
+      "sha256": "83c259d74c7dbbffdac6cfec8d007fd749e5c61806043c2ef22752264ff4314c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\old-fixture-dependencies\\legacy_fixtures.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/old-fixture-dependencies/legacy_fixtures.rs",
+      "sha256": "694dc9ae93759d070929f6f1ddb1a744c96b6fc8b411d8e6a1e74878bd94e242"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\old-fixture-dependencies\\registration-schema5.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/old-fixture-dependencies/registration-schema5.sql",
+      "sha256": "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\permission-approvals-spec.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/permission-approvals-spec.md",
+      "sha256": "935bd6039aa07fc33e3706ba50d20766cbd58022ac8dc57450547bec2854ea3b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\provider-draft\\CONTRACT.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/provider-draft/CONTRACT.md",
+      "sha256": "aab21ddd3691a9b4511a2f1d3af66daab3b20f615edd59251d8f7c4b262f291e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\provider-draft\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/provider-draft/freeze.json",
+      "sha256": "d56c0c177e0f8578cafedf4a1fef50b51f1ddc19824763bcad1f3bcbdfa69e05"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\provider-v2\\ADDENDUM.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/provider-v2/ADDENDUM.md",
+      "sha256": "485ef8a99041ab2214889ac2c82345d78cb232bc92a46925d1af848fc2fe4f5d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\provider-v2\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/provider-v2/freeze.json",
+      "sha256": "75385018d6c9bfef14d4a1a81e65c693fe4c48892913432becc2daa591977a34"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\root-git-status-readonly.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/root-git-status-readonly.json",
+      "sha256": "39ba4d23eb86b4f267bf87a7c064d7ff1b332702cd6da3a1f1fca38f387d4211"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\stable-permission-primary-excerpts.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/stable-permission-primary-excerpts.json",
+      "sha256": "dbbc86466c58cf14d2942ed08daff92e713396a8daba34ae027c377c533a72e1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\stable-sdk\\package.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/stable-sdk/package.json",
+      "sha256": "6c74af591623a1c362d9b1073cb43268f6e4e532fafa419f73465225628bb12c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\stable-sdk\\schema\\v1\\schema.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/stable-sdk/schema/v1/schema.json",
+      "sha256": "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\stable-sdk\\schema\\v2\\schema.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/stable-sdk/schema/v2/schema.json",
+      "sha256": "28c7251e820511da257cdb55d30e2c30bbbe59226305b04e3b751dc655e0778d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\inputs\\v18\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/inputs/v18/freeze.json",
+      "sha256": "2e5354db68ad0b7eddc01b469439eb4b3df910413fad64a9999735e6d33c8e14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/report.md",
+      "sha256": "3a45136486ae1f462369627088e6a79d3e58c6fdea542e607b88096ad33b031a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\root-relative.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/root-relative.patch",
+      "sha256": "f0d5fedeee31a38d0d019ef87f805f6690d044d75f4725b89f720024efd823c0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\validation\\patch-application.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/validation/patch-application.json",
+      "sha256": "83845c8357eb74c934b8647631160f3dfa33ce3b98001469de897eeb3cfe73a6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\validation\\schemas1-5-preserved-first-static-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/validation/schemas1-5-preserved-first-static-check.json",
+      "sha256": "3fd04280a0fdd8381ae80f06bdf164c2b403847f39bf900453d40887e13de006"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\validation\\schemas1-5-preserved-static.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/validation/schemas1-5-preserved-static.json",
+      "sha256": "3fd04280a0fdd8381ae80f06bdf164c2b403847f39bf900453d40887e13de006"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v1\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-assets-v1/freeze.json",
+      "sha256": "a3a0b5e12b35b2525a5ab3634852ce4f7cf8d8b371ffb578df2ba48326ec6627"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\build-supplement.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/build-supplement.mjs",
+      "sha256": "a5a43ef8360d2c4947ff9c4bc4282d8d81b22bb93631ff563590bf9a5d731e0e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\definitions\\no-native-effects-required.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/definitions/no-native-effects-required.sql",
+      "sha256": "baed47f0300abd3020e1e5de2c411f3871555463a79ab1d474265a184f5aaee4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\definitions\\reachability-map.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/definitions/reachability-map.json",
+      "sha256": "fd45dedfcae842dbebfbe9d0d12b6b649c28173c01bb3a46db953755a7fdb047"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\definitions\\repository-proof-oracles.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/definitions/repository-proof-oracles.md",
+      "sha256": "75b24e846d39e324e7b9335f9044e9b98cf6e11946e0de596035d627a2a10573"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\effective-after\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/effective-after/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "98f5ca684855c08a15e0511a9b19e842ee16c0ecc2d5f38c5f0f06f3c62cea81"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\effective-after\\app\\tests\\native_dispatch_acceptance\\schema6_combined_vectors.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/effective-after/app/tests/native_dispatch_acceptance/schema6_combined_vectors.rs",
+      "sha256": "9c6279f528bf8a2d899d05d00785a80986f4b53b51648a2cfcb66dc8b72da276"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\effective-after\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/effective-after/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\effective-after\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/effective-after/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "0ef175167195d380722d3db7796d6fd4dc959c6b5de4a5c8e00bf73442f4a8ab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\effective-after\\app\\tests\\native_dispatch_acceptance\\schema6-api06-before-fixture.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/effective-after/app/tests/native_dispatch_acceptance/schema6-api06-before-fixture.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\effective-after\\app\\tests\\native_dispatch_acceptance\\schema6-combined-vectors.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/effective-after/app/tests/native_dispatch_acceptance/schema6-combined-vectors.json",
+      "sha256": "90ea7ec285ffdd8dd2752f832c272f4e06f10ce1f20dbd55b4f1811599430327"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\effective-root-relative.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/effective-root-relative.patch",
+      "sha256": "cefad1e37f9af763644c52b979b02e9c80bd7ceb86ddbc4e079684a18fc98b56"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\header-only.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/header-only.patch",
+      "sha256": "59255c43bff3e217a73541bb1eb6fb98861085d21d8b61cebf5514abce66302b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\inputs\\prior-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/inputs/prior-freeze.json",
+      "sha256": "a3a0b5e12b35b2525a5ab3634852ce4f7cf8d8b371ffb578df2ba48326ec6627"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\inputs\\reviewer-pre-review.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/inputs/reviewer-pre-review.md",
+      "sha256": "03f438007c13ad60404193b98b3f1294a25411cccee3d4c39127bbd7a8509932"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\original-before\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/original-before/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\original-before\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/original-before/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\original-before\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/original-before/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/report.md",
+      "sha256": "269e0f53b774c22b528f53a2588e2d5abb0babbd50ff8dab4c7f72276298e120"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\supplement-after\\app\\tests\\native_dispatch_acceptance\\schema6_combined_vectors.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/supplement-after/app/tests/native_dispatch_acceptance/schema6_combined_vectors.rs",
+      "sha256": "9c6279f528bf8a2d899d05d00785a80986f4b53b51648a2cfcb66dc8b72da276"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\supplement-before\\app\\tests\\native_dispatch_acceptance\\schema6_combined_vectors.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/supplement-before/app/tests/native_dispatch_acceptance/schema6_combined_vectors.rs",
+      "sha256": "0144241437185cade6f84eb5f2d8c0ea3903ba194299b9b38f9d678fe8e5a870"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\validation\\effective-application.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/validation/effective-application.json",
+      "sha256": "7df847cb0f6aae70548395fd9dc5ff6aeb8bff6960dafe0b772b66ca3e9af029"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\validation\\header-only-application.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/validation/header-only-application.json",
+      "sha256": "1654afaa24cf0054342925db67d9762541c25a7433b9ea023294fa51bebcb349"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\validation\\preservation.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/validation/preservation.json",
+      "sha256": "cbfa4540b26dc56c4f0f8331c2f0fe75b434c22377d765919ad6752fa39da6af"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\schema6-combined-assets-v2-header-supplement\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/schema-header-supplement/freeze.json",
+      "sha256": "87707adf3149a4750cf7ddf8dde375dfae0067cf4f4176c5ca33fea79f2a885f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\implementation-v1\\candidate\\module-component-v1-delivery\\manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/shared-component/manifest.json",
+      "sha256": "92de45af47b75ae5053ca5947f709c87dfeb68a9a9630b9ebc6ace590cb71671"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-shared-view\\module-v1-independent-planning-reachability-review.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/reviews/wp3-shared-view/module-v1-independent-planning-reachability-review.md",
+      "sha256": "8dfca2cf9e6612bc80d630f39347ce29e2dd791512a2a882c3fe1097aebb4fe4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-native-dispatch\\schema6-combined-independent-assets-v1-pre-review.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/reviews/wp3-native-dispatch/schema6-combined-independent-assets-v1-pre-review.md",
+      "sha256": "03f438007c13ad60404193b98b3f1294a25411cccee3d4c39127bbd7a8509932"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-native-dispatch\\schema6-header-supplement-assets-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-module-schema-planning/reviews/wp3-native-dispatch/schema6-header-supplement-assets-gate.md",
+      "sha256": "ae333eeecf2031dbf583c516b779913e4b56533bc8cc201ba469e044a179d335"
+    }
+  ]
+}

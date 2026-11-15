@@ -10,9 +10,13 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 归档结果与历史路径映射见[归档记录](testing/runs/establish-node-access/2026-10-30-archive-record.md)。完整产品目标见 [Harness Control Plane 设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md)。
 
-`deliver-codex-session-loop` 正在已有部分实现上按新规格增量调整，Harness/Web 会话闭环尚未交付。当前Q-001规格采用远端受理、节点共享三条待发送队列、本地Harness串行执行；会话历史以Harness为准，无重放可使用当前连接模式。队列可跨设备编辑取消，无期限但不跨节点重启保存；正文和输出缓存不另设平台容量上限。上述为新规划，旧部分实现仍须增量调整。内层已补原生活动模型、独立用途请求签名、schema1/2/3到4无损管理迁移、管理输入受理与单次消费、公共ACP发现/重放与有界内存窗口，并分别通过相应子范围的独立测试。旧聊天存储和强刷审批接口只在测试构建中保留，正常构建不再提供这些接口；旧数据库内容原样保留，不自动清库。实际审批owner、结构化视图适配、资源管理及WSS/Web会话页面仍待装配和验收。[旧会话存储合同](openspec/changes/deliver-codex-session-loop/session-contract.md)停用，当前依据为[实施合同](openspec/changes/deliver-codex-session-loop/implementation-contract.md)及[执行计划](openspec/changes/deliver-codex-session-loop/plan.md)；文档、模型测试及旧探测不代表新版产品验收。
+`deliver-codex-session-loop` 正在已有部分实现上按新规格增量调整，完整 Harness/Web 会话闭环尚未交付。原生活动模型、既有管理迁移及公共ACP发现/重放已分别验证；最新请求和队列服务进展见下文。旧会话动作签名、期限/回退水位及有界视图保留在历史实现中，相关新通路仍在替换。旧聊天存储和强刷审批接口只在测试构建中保留，旧数据库内容原样保留，不自动清库。普通启动已装配审批与原生会话服务；认证入口的会话动作、Web页面接线及完整验收仍待完成。[旧会话存储合同](openspec/changes/deliver-codex-session-loop/session-contract.md)停用；当前行为与阶段依据见[实施合同](openspec/changes/deliver-codex-session-loop/implementation-contract.md)及[执行计划](openspec/changes/deliver-codex-session-loop/plan.md)，历史报告仅在原范围有效。
+
+主工程现已合入 SQLite schema9、拥有明确关闭责任的 Node/原生运行组件、共享视图及原始 JSON 保真处理。组件回归和主工程编译、Web 检查已分别执行；普通 Node 启动已装配同一配置、队列、原生运行、审批、视图和正文准备服务；独立工厂验收仍在进行，WSS/Web 完整会话操作及真实 Harness 验收尚未完成。节点内的上传分块、连接绑定、正文准备、共享队列交接、排队正文分块回读及配置文档上传/登记/应用/查询组件已合入；配置读取会核对凭据所属的原节点，拒绝另一节点的凭据。上传、配置管理、队列和正文回读的认证网络路由及页面操作仍待接线。全项目格式检查已通过，严格 lint 仍有待清理项，固定版本与具体结果以[执行计划](openspec/changes/deliver-codex-session-loop/plan.md)为准。
 
 重建的能力归属、交付闭环与 change 依赖见 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)。10个 change 的规划文档已建立；节点接入已实现并归档，其他能力仍按各自 change 交付。文档检视、上游依赖与真实验收结果分别记录，不能将节点接入验收外推为其他能力已经通过。
+
+新版共享队列、节点请求登记、SQLite schema5及拥有后台任务的队列服务已实现，168项阶段独立验收包含原39项队列测试和追加的物理关闭回归。公共ACP运行时现已接入原始JSON解析，保留未知结构和大数，并提供持续读取、单写入者及可取消和等待关闭的IO所有者；120项阶段独立验收覆盖公开协议路径和自有测试子进程。这些阶段组件与后续原生派发、共享视图已进入普通 Node 装配；网络入口与 Web 共享操作仍待接线，当前配对管理页尚不能操作该队列。详细范围及主工程集成检查见[执行计划](openspec/changes/deliver-codex-session-loop/plan.md)，阶段测试不代表完整Harness/Web闭环已交付。
 
 本轮 DC-001 已确认的重放计时、默认环境继承及显式接入来源取舍见 [总体设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md) 和 [领域术语表](openspec/GLOSSARY.md)；本次同步仅为文档修订，不代表现有会话代码已符合新版规则。
 
@@ -100,10 +104,26 @@ tls_key = "D:/ACPRemote/tls/localhost.key"
 
 提交信息规则以 [commitlint.config.mjs](commitlint.config.mjs) 为准。本地 Git 钩子校验提交信息；持续集成另执行开发工具依赖审计与密钥扫描，具体步骤见 [CI 配置](.github/workflows/ci.yml)。
 
+请求登记的硬退出重启验收需要显式开启测试夹具：
+
+```powershell
+cargo test --manifest-path app/Cargo.toml --locked --features registration-acceptance-fixtures --test registration_restart -- --test-threads=1
+```
+
+公共ACP运行时的真实管道和所有者关闭验收也需要显式开启测试夹具：
+
+```powershell
+cargo test --manifest-path app/Cargo.toml --locked --features acp-runtime-acceptance-fixtures --test acp_runtime_owned_pipe -- --test-threads=1
+```
+
+这两个功能只用于验收子进程；默认构建不生成这些夹具。完整检查入口仍为前述 `npm run check` 和 `npm run build:rust`，Windows测试使用同一实际owner环境。
+
 ## 许可证
 
 [Apache-2.0](LICENSE)。
 
-本轮Q-001仅同步规格与规划，新增[ACP额外限制核对](openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md)。输入及审批受理后由节点接管，批准严格保存，附加审计故障分开处理；代码、迁移及真实Harness/Web验收尚未按新版完成。
+以下保留规格调整时的历史阶段记录；当前实现和验证范围以上文及执行计划为准。
+
+Q-001阶段仅同步规格与规划，新增[ACP额外限制核对](openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md)。输入及审批受理后由节点接管，批准严格保存，附加审计故障分开处理；当时的代码、迁移及真实Harness/Web验收尚未按新版完成。
 
 Q-002补充：已删除公共ACP客户端累计4096个对端请求ID后使连接失效的旧阈值。失败后旧队列挂起、新输入优先、点击继续恢复旧项已补入规格，完整队列实现仍待后续交付。

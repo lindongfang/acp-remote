@@ -1,0 +1,32 @@
+{
+  "scope": "Archival supplement for inherited v1 semantics and opaque wire format expressly retained by v2 engineering contract section 2; overlapping interfaces superseded by v2; no new authority or implementation",
+  "parentCodingInputs": "decbb1bfc7147484080ff510648b55fd73127f001d4f6ca72373ccc823f5305b",
+  "v2Freeze": "777a273e2a570ab8b61f7aba69defa1e638da3d5c46b2d8e6be8b760f9f18637",
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\input-snapshot\\prior-v1\\engineering-contract.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/input-snapshot/prior-v1/engineering-contract.md",
+      "sha256": "eee353d81eb018c32a694ff3e9c59f3dd60222602ca2c1e70002ef649f5868ad"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\input-snapshot\\prior-v1\\interfaces.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/input-snapshot/prior-v1/interfaces.md",
+      "sha256": "1935204923be11469f997b08ea1f2f32b999381cac37022f9d976701a12a29e2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\input-snapshot\\prior-v1\\assembly-and-delivery.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/input-snapshot/prior-v1/assembly-and-delivery.md",
+      "sha256": "2fc51d893c2afa2a8d6637fa613f88a8f9021d37284fb0509f5e7ccbd41397f5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\input-snapshot\\prior-v1\\verification-reachability.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/input-snapshot/prior-v1/verification-reachability.md",
+      "sha256": "abf3b7b7438d6a58ef2aaded307ffb2da113011b19a319190e6d463d01614fb4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\input-snapshot\\prior-v1\\freeze-v1.json",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/input-snapshot/prior-v1/freeze-v1.json",
+      "sha256": "57267f52c75e71bcd2498cc65ca93eb3cb0bd9fd69a038b4763521871dc8576c"
+    }
+  ]
+}

@@ -1,0 +1,900 @@
+{
+  "scope": "Nonvisual Web component: fixed coder and independent local acceptance. 40 mapped rows/159 independent, full Web320 and check/build0; full Shared83 IDs/L5/WSS/DOM/Native/Harness not passed. Delivery code review and Root integration pending at archive time. Full 36 candidate build inputs embedded, including unchanged dist3.",
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\dist\\assets\\index-0luCBpbO.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/dist/assets/index-0luCBpbO.css",
+      "sha256": "59f460f235f69fc261ab0d97c4518ee9fb511717330afa09c4da71276c5b3880"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\dist\\assets\\index-DpQyfqZ1.js",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/dist/assets/index-DpQyfqZ1.js",
+      "sha256": "e7d2d3679eb07c5d5033e265a7fc8a2f308b41f5e00ec1a9749bdd3b820f355b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\dist\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/dist/index.html",
+      "sha256": "76cd985a6377fd5231fb01a18d59f2be9e5e54c17d35055417f52f20dea23c71"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\package-lock.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/package-lock.json",
+      "sha256": "1212cdaa6f409a971a08b74e3ead7930b41032689227760e1b47e79154415d5a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\package.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/package.json",
+      "sha256": "b2d1b128088c1773bfdefa2112907bea1e48f9c794846c07a988f26fa2f766cc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\main.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/main.ts",
+      "sha256": "ce6d443e44d4c920d7e7b184beaab83ef713b68b8f9cff4fc6d58499d5d14815"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\management\\client.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/management/client.ts",
+      "sha256": "471cf8299b306a4fbf02f417a65a7535a4f9952e4ad73be3aaea9ab7465b8281"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\management\\protocol.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/management/protocol.ts",
+      "sha256": "b49c62c95fef1c8fa1c1d9b34d8cc1aff545501fe8ab7c2665938dcf8cbef5b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\management\\reconnect.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/management/reconnect.ts",
+      "sha256": "0a66ef170f7dff5467e0a8d6c029221ba193d2449f3b37acb03215d8e060d169"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\pairing\\api.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/pairing/api.ts",
+      "sha256": "52ebf9e24fba7ce0ee88ff96c3c538bce4891e826fcfb46ee1db00b6d76daf14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\pairing\\identity.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/pairing/identity.ts",
+      "sha256": "854b880e20c33d52fa367f7217727d1d169773706f87f01285c3475da1368f59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\pairing\\session.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/pairing/session.ts",
+      "sha256": "75ae0e93130e205045f67539428e8095286bcf89f65d5d81e200f04758d0ec59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\protocol\\jws.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/protocol/jws.ts",
+      "sha256": "60e8d8f34cd26a806e7bcdd8fb108cc62911068d2b116b82f4eba46246132019"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\protocol\\pairing.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/protocol/pairing.ts",
+      "sha256": "fa78fdb1ae38dd096db2bb150caf5061d1a8f5ce8ae0bf7470a260510b2faa23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\styles.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/styles.css",
+      "sha256": "0109aa878dce55a26b539a81dd3aadfe9a3e94e651d82541cdd104ff348fafe2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\src\\vite-env.d.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/src/vite-env.d.ts",
+      "sha256": "424faf9241dd699dda995b367ed36665732da1e6ec1f33b2fd40394488ecac92"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\fixtures\\jws-v1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/fixtures/jws-v1.json",
+      "sha256": "4d4cc9061163eab340c37fbd167cff31d3607586bcf49b4681f191c85034656d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/index.html",
+      "sha256": "f95ccd4eee548fae8b19034adc198c810a988cecc39e272850e265a9f39b968f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\api.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/api.test.ts",
+      "sha256": "0d577bb0f835e90657b74093067873dc1a938c91e563057f8af46a5043089b89"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\browser\\jws-browser.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/browser/jws-browser.ts",
+      "sha256": "4e8da0916f6ac27a5e21e53a7bc0b2f5fc93e684e8ed95066e6eec752ef6f5d9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\browser\\jws.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/browser/jws.html",
+      "sha256": "48d32c8da3ecf919551e8953bdc7f1b0acd1df4237065425830787d5869543dd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\debug-lookup.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/debug-lookup.test.ts",
+      "sha256": "62a4c6889edb0994b1b22d403d7a68763cc37406d3b4b95fc7ad3c1cde7eb823"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\jws.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/jws.test.ts",
+      "sha256": "b3af6826aed0169ba2b5adf83962d4d507589af48204a9b058838a3a61fccac4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\management.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/management.test.ts",
+      "sha256": "eef4221bf8c08ed5fa8438c8043a260bf6bafed8ce39d36549ba2ab65d4ea288"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\pairing.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/pairing.test.ts",
+      "sha256": "690a96ef1101c2756952062bd7d6e4bfb777a3c536d41f83dfa067b59f2b3cc9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\reconnect.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/reconnect.test.ts",
+      "sha256": "14093402f84ca3c053f0378c0304fc69490dc6997709d4be60bee36fe3737809"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tests\\smoke.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tests/smoke.test.ts",
+      "sha256": "60cce0ccc09161e6cdb169ab720eaf411bf87d3ecf1c0bd047bbb47121a71e51"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\tsconfig.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/tsconfig.json",
+      "sha256": "eed51d8d10632044475e4a4f93822dedc9628be9d3387a24c143a8ae40f5d018"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\clients\\web\\vite.config.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/clients/web/vite.config.ts",
+      "sha256": "b6ba04555219f648ae25dd47a6d080a538a125e3aa3684f369406bac3c710aae"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\AGENTS.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/AGENTS.md",
+      "sha256": "1019d8854aca68d2519e599d0f3a1484e49667273708a49ac03818834aa38be3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\config.yaml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/config.yaml",
+      "sha256": "2838c774a014e389be5ec702bd2f293f1686012d7d8f6c01fb500a8c21980a2f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\role\\coder.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/role/coder.md",
+      "sha256": "b06e9ddb4af0a912bddd7bbf48b16f2c6786e533fdbd6f6fafa0cea0d7783961"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\role\\tester.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/role/tester.md",
+      "sha256": "55811d6dde7b6dc50df076037fff12df93fc941e61d3f42ba3ae4024f32d5e14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\role\\reviewer.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/role/reviewer.md",
+      "sha256": "d36cd77fb71906fa3a6052c1febea0f62535fec450d9343b5648369d68320e31"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\specs\\structured-history\\spec.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+      "sha256": "bfcd46d1735773b920f7400524dacb1fedf218452ecfdc1fa00842d8525ab13a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\specs\\acp-platform-constraints\\spec.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/specs/acp-platform-constraints/spec.md",
+      "sha256": "ba9b7d791efaa7a6e061060ecf67cda75f963225ca98318a9f092207e6a6cbe1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\shared-view\\revision2\\input-snapshot\\prior-v1\\assembly-and-delivery.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/shared-view/revision2/input-snapshot/prior-v1/assembly-and-delivery.md",
+      "sha256": "2fc51d893c2afa2a8d6637fa613f88a8f9021d37284fb0509f5e7ccbd41397f5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\shared-view\\revision2\\engineering-contract.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/shared-view/revision2/engineering-contract.md",
+      "sha256": "e54ee9755a4bbf62b2999f9846a41d69a7db6a2ca400faad6e3ebc3382a77aeb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\shared-view\\revision2\\send-and-credit-api.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/shared-view/revision2/send-and-credit-api.md",
+      "sha256": "ea8a3ab7f9da7642b23c9760d6bc15814600adc58883aa1ba94e53ddd20ea26e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\shared-view\\same-read-rebind-v2\\contract.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/shared-view/same-read-rebind-v2/contract.md",
+      "sha256": "3594608dc90cdc54b50151532ffd7b635b530f9876c6371a29dad04804866d4d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\shared-view\\same-read-rebind-v2\\notice-precision.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/shared-view/same-read-rebind-v2/notice-precision.md",
+      "sha256": "c6a106bdc8da170c46671a15b6d4c37be315d290e08bed1da79ca1e9b5d10557"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\shared-view\\replay-failure-v2\\contract.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/shared-view/replay-failure-v2/contract.md",
+      "sha256": "04f0f254b475c5d446e2e5382d58818166a157777458d2fa2764259f0cdf22cd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\openspec\\changes\\deliver-codex-session-loop\\shared-view\\replay-failure-v2\\receipt-context-precision.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/openspec/changes/deliver-codex-session-loop/shared-view/replay-failure-v2/receipt-context-precision.md",
+      "sha256": "ac4c57adb13a7de84d7453e32916922bb83a475b26077059c1eeabbed8399ee8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\testing\\runs\\deliver-codex-session-loop\\q3-shared-view-definition\\acceptance-definition-v2.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/testing/runs/deliver-codex-session-loop/q3-shared-view-definition/acceptance-definition-v2.md",
+      "sha256": "d2eaac1ff350dcc88c4c7bbeadf19f5fb2b674babf724a502437ef23c73bc717"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\shared-original-coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/shared-original-coding-gate.md",
+      "sha256": "5609f606991d0c2608074bc7914b3a8bcc33ebf51730645e988d5e87ca47178e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\inputs\\root-source.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/inputs/root-source.json",
+      "sha256": "0b911c01d84a6fbe8eff2224fa1b4d2062730f45973d82856184f405a0303b9c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\CONTRACT.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/CONTRACT.md",
+      "sha256": "ec82470e2dc293fc6e954817a45b082c64a0ccb5741c9b981340637f863797cc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/prior-v1/freeze.json",
+      "sha256": "9b4b67d8ccc8ede97f21cb8402a1ce2b35576934518be6a2a96256088d03862e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\research\\shared-wire.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/research/shared-wire.rs",
+      "sha256": "1cc2d0a822f6ef317ad1897f8e2f238e419a0336944fe96ac44fbb90079d3a3c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\precision.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/precision.md",
+      "sha256": "cd25ab9a65609ddde4a9867e95cc3871a833bb250356818badbb85ecea52410f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/design/freeze.json",
+      "sha256": "7607043b785c033d842679b1af28267a4f958597bc03ce430b1d1029c999697a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\API-AND-REPORT.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/API-AND-REPORT.md",
+      "sha256": "b7ec469e0ca0f9e6c3bfc6c8dbd53a21ec35ae50389a2caf2415f526e081896e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\checks\\session-loop-q3-web-core-checks.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/checks/session-loop-q3-web-core-checks.mjs",
+      "sha256": "f435623c9ec56919b76766a5b2fe8d0e0409b941146684c58b7ee8a95c24bcd1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\checks\\session-loop-q3-web-core-run-one.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/checks/session-loop-q3-web-core-run-one.mjs",
+      "sha256": "b58f5d3c6e96cf21c0855f0364c7d1cbe5d9887c54ecf2a7358a57ab1ad633f1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\coding-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/coding-gate.md",
+      "sha256": "3d7d6b39f52f46a6281de003efde0feae4b97a1aa467a30dcf6469041f2f706f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\dependency-setup.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/dependency-setup.json",
+      "sha256": "5badb2a359b764866409a0b18f698c2dca089ae9f8e0e1ab1496eef9d7676403"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-build.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-build.json",
+      "sha256": "e959a778bf1799ecead4433575af5e3652d1fb04c1365edf936a1bc477dbf427"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-build.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-build.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-build.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-build.stdout.log",
+      "sha256": "8232c12236fd6f6e34ec216396c087795f1e2f0902207de637892266e110c290"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-check.json",
+      "sha256": "d283e138bf0dec9e7c88c7d0f088145ef294120672d583b8f923832d692df731"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-check.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-check.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-check.stdout.log",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-test.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-test.json",
+      "sha256": "e0f2dde26f0a789b6ed6759d4c297b8ae2f5c7056a74140f73c0bee916adb99a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-test.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-test.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\baseline-1-test.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/baseline-1-test.stdout.log",
+      "sha256": "735f2915b8e8dadae164f1b4989709ebb4c25b9cfaa2b42b3537a8aee49de168"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-build.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-build.json",
+      "sha256": "b33adfd4f3a26ba0b8253cc57384ac5358aee82b85eb2fc4ee106673a566217b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-build.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-build.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-build.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-build.stdout.log",
+      "sha256": "a86dd94297b36f0c0f043cdcb419f39521f81a7dedf15022f551b741f182f3ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-check.json",
+      "sha256": "e7f3aabdb1d0b2715b388a4aaaba1fbe0f81aa882a35395975428e8adaa2a77a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-check.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-check.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-check.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-check.stdout.log",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-test.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-test.json",
+      "sha256": "9c8d698ad6e1b54898dc9f4cf46ea6215b2477dfe62d51078c1795d91fd2bfe9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-test.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-test.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\component-final-1-test.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/component-final-1-test.stdout.log",
+      "sha256": "c1808220562aae0f5ce6a490118d0f70bee858275efb15e2ba53bc7bbb68117b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-build-1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-build-1.json",
+      "sha256": "1f1e3e78898e70be471a2fb7eef5aed1bfa5b37c954ee922d972ff618a217d35"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-build-1.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-build-1.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-build-1.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-build-1.stdout.log",
+      "sha256": "ec6174a706d67606b77f9ec0d917f80131feebd71252602d15630be54cd8e0a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-check-1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-check-1.json",
+      "sha256": "46302c686625a0841a15ffefce34152777f2498d5ed9b3dfb9cb5deabbb43d2c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-check-1.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-check-1.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-check-1.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-check-1.stdout.log",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-precheck-1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-precheck-1.json",
+      "sha256": "ffb09c2769d3428466a444c1343475ca619b169e9bc61874746cd9bb0ed2c8a3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-precheck-1.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-precheck-1.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-precheck-1.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-precheck-1.stdout.log",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-tests-1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-tests-1.json",
+      "sha256": "1f992056af306defee8db2edf699ba01a34012d5e3e66095b326d15b263accd7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-tests-1.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-tests-1.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\logs\\core-tests-1.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/logs/core-tests-1.stdout.log",
+      "sha256": "2fb20ff858995c5c7f734ad72502a05f590d0124622ce5ab451ea06364480567"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\ownership.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/ownership.json",
+      "sha256": "2ffff5b78c9a3db49e68118224448f817022a3c1d9ee1191249901341deeff75"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\patch-attempt-1-failure.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/patch-attempt-1-failure.json",
+      "sha256": "42f55b6b11c45f6c66dae7b2a0609539b110a839548bcfa4f6d5be8b07a490a4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\patch-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/patch-check.json",
+      "sha256": "cc82333966867e3869f251d8969f3e5d292e369d395bb7dfadf6e46b76de397a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\root-new-files.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/root-new-files.patch",
+      "sha256": "2f4b1cbd78df2da7e197a078681b2c6be783d5d1a02e15b233c972473056e3e3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source-after.json",
+      "sha256": "fb769c579049d7585b4b2cf3b035516837db16e8717d6ba9c4f9c781265db44d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source-before.json",
+      "sha256": "640bd8bbfe3982d802898405b2135c4614ddb4ae33cc512a3dfd98d189110f73"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/freeze.json",
+      "sha256": "1406bb941a49e3af069727f4c0e1241f5320b946160994a7a0f8e0b0227f7c54"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\dist\\assets\\index-0luCBpbO.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/dist/assets/index-0luCBpbO.css",
+      "sha256": "59f460f235f69fc261ab0d97c4518ee9fb511717330afa09c4da71276c5b3880"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\dist\\assets\\index-DpQyfqZ1.js",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/dist/assets/index-DpQyfqZ1.js",
+      "sha256": "e7d2d3679eb07c5d5033e265a7fc8a2f308b41f5e00ec1a9749bdd3b820f355b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\dist\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/dist/index.html",
+      "sha256": "76cd985a6377fd5231fb01a18d59f2be9e5e54c17d35055417f52f20dea23c71"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/index.html",
+      "sha256": "f95ccd4eee548fae8b19034adc198c810a988cecc39e272850e265a9f39b968f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\package-lock.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/package-lock.json",
+      "sha256": "1212cdaa6f409a971a08b74e3ead7930b41032689227760e1b47e79154415d5a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\package.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/package.json",
+      "sha256": "b2d1b128088c1773bfdefa2112907bea1e48f9c794846c07a988f26fa2f766cc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\main.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/main.ts",
+      "sha256": "ce6d443e44d4c920d7e7b184beaab83ef713b68b8f9cff4fc6d58499d5d14815"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\management\\client.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/management/client.ts",
+      "sha256": "471cf8299b306a4fbf02f417a65a7535a4f9952e4ad73be3aaea9ab7465b8281"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\management\\protocol.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/management/protocol.ts",
+      "sha256": "b49c62c95fef1c8fa1c1d9b34d8cc1aff545501fe8ab7c2665938dcf8cbef5b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\management\\reconnect.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/management/reconnect.ts",
+      "sha256": "0a66ef170f7dff5467e0a8d6c029221ba193d2449f3b37acb03215d8e060d169"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\pairing\\api.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/pairing/api.ts",
+      "sha256": "52ebf9e24fba7ce0ee88ff96c3c538bce4891e826fcfb46ee1db00b6d76daf14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\pairing\\identity.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/pairing/identity.ts",
+      "sha256": "854b880e20c33d52fa367f7217727d1d169773706f87f01285c3475da1368f59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\pairing\\session.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/pairing/session.ts",
+      "sha256": "75ae0e93130e205045f67539428e8095286bcf89f65d5d81e200f04758d0ec59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\protocol\\jws.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/protocol/jws.ts",
+      "sha256": "60e8d8f34cd26a806e7bcdd8fb108cc62911068d2b116b82f4eba46246132019"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\protocol\\pairing.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/protocol/pairing.ts",
+      "sha256": "fa78fdb1ae38dd096db2bb150caf5061d1a8f5ce8ae0bf7470a260510b2faa23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\styles.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/styles.css",
+      "sha256": "0109aa878dce55a26b539a81dd3aadfe9a3e94e651d82541cdd104ff348fafe2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\views\\binary.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/views/binary.ts",
+      "sha256": "fad4ed0bd71b4b8c51605836e17c29ee289b9e32065fd9cca95d230b49d3f1a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\views\\errors.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/views/errors.ts",
+      "sha256": "98f39fea9a160ab267195b23544e8a895aca7b1b0443ba2f9cbd5a4ea71a9a7d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\views\\raw-json.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/views/raw-json.ts",
+      "sha256": "b0db7a20a2bb16b25522174ead6d11772c1805b16ca10a6f134fa37310613332"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\views\\records.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/views/records.ts",
+      "sha256": "b80ff77349028b0631355b0dd3e26b4463e15aa2d69b8bc8fd4114ae1838c02a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\src\\vite-env.d.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/src/vite-env.d.ts",
+      "sha256": "424faf9241dd699dda995b367ed36665732da1e6ec1f33b2fd40394488ecac92"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\api.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/api.test.ts",
+      "sha256": "0d577bb0f835e90657b74093067873dc1a938c91e563057f8af46a5043089b89"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\browser\\jws-browser.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/browser/jws-browser.ts",
+      "sha256": "4e8da0916f6ac27a5e21e53a7bc0b2f5fc93e684e8ed95066e6eec752ef6f5d9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\browser\\jws.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/browser/jws.html",
+      "sha256": "48d32c8da3ecf919551e8953bdc7f1b0acd1df4237065425830787d5869543dd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\debug-lookup.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/debug-lookup.test.ts",
+      "sha256": "62a4c6889edb0994b1b22d403d7a68763cc37406d3b4b95fc7ad3c1cde7eb823"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\fixtures\\jws-v1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/fixtures/jws-v1.json",
+      "sha256": "4d4cc9061163eab340c37fbd167cff31d3607586bcf49b4681f191c85034656d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\jws.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/jws.test.ts",
+      "sha256": "b3af6826aed0169ba2b5adf83962d4d507589af48204a9b058838a3a61fccac4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\management.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/management.test.ts",
+      "sha256": "eef4221bf8c08ed5fa8438c8043a260bf6bafed8ce39d36549ba2ab65d4ea288"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\pairing.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/pairing.test.ts",
+      "sha256": "690a96ef1101c2756952062bd7d6e4bfb777a3c536d41f83dfa067b59f2b3cc9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\reconnect.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/reconnect.test.ts",
+      "sha256": "14093402f84ca3c053f0378c0304fc69490dc6997709d4be60bee36fe3737809"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\smoke.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/smoke.test.ts",
+      "sha256": "60cce0ccc09161e6cdb169ab720eaf411bf87d3ecf1c0bd047bbb47121a71e51"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\views\\binary.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/views/binary.test.ts",
+      "sha256": "def7eb7f8d269dfb82c41b9c2d8cbe3f84209689dc75b3f03145554eeb408ac9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\views\\raw-json.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/views/raw-json.test.ts",
+      "sha256": "dce902fb87c02b3d777e010fd5413a08ebc7a0a6ea977a74bc1c2d5714df11f0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tests\\views\\records.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tests/views/records.test.ts",
+      "sha256": "66f2ddc576b8d52bc1a7191bea3f2db5f81735114142812a88d39ca0169bb5e9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\tsconfig.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/tsconfig.json",
+      "sha256": "eed51d8d10632044475e4a4f93822dedc9628be9d3387a24c143a8ae40f5d018"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1\\source\\clients\\web\\vite.config.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/candidate/source/clients/web/vite.config.ts",
+      "sha256": "b6ba04555219f648ae25dd47a6d080a538a125e3aa3684f369406bac3c710aae"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1-clarification\\clarification.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/clarification/clarification.md",
+      "sha256": "f9ee2cb31293de352dfdc2998b298b30efe5a0893cf0bd7f16512cd88af5b8f4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1-clarification\\parent-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/clarification/parent-freeze.json",
+      "sha256": "1406bb941a49e3af069727f4c0e1241f5320b946160994a7a0f8e0b0227f7c54"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1-clarification\\parent-patch-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/clarification/parent-patch-check.json",
+      "sha256": "cc82333966867e3869f251d8969f3e5d292e369d395bb7dfadf6e46b76de397a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\implementation-v1\\candidate\\component-v1-clarification\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/clarification/freeze.json",
+      "sha256": "8efe34e2ab47b539c2298886228374811c1e6d58b49933e25b3b39f6f013081e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\assets\\binary.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/assets/binary.independent.test.ts",
+      "sha256": "76e5dd1a298bcfe4378b87407f305086b0bdf346028efba37ae2ebe155a16b14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\assets\\raw-json.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/assets/raw-json.independent.test.ts",
+      "sha256": "8bca6346f4d424bfed5fd15d91818427fe5ac7052249b263d8270c3e3a4136ab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\assets\\records.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/assets/records.independent.test.ts",
+      "sha256": "7c53a389b9c3875dc9a03bec7d4cc7ca6d762547dc1c3fd1c30de280b83bab8c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\assets\\support.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/assets/support.ts",
+      "sha256": "a4b2280decbe8f74cc076ce43c356cc8b3abc304893a7a4aef1adaf9b7309599"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\portable\\clients\\web\\tests\\independent-views\\binary.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/portable/clients/web/tests/independent-views/binary.independent.test.ts",
+      "sha256": "76e5dd1a298bcfe4378b87407f305086b0bdf346028efba37ae2ebe155a16b14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\portable\\clients\\web\\tests\\independent-views\\raw-json.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/portable/clients/web/tests/independent-views/raw-json.independent.test.ts",
+      "sha256": "8bca6346f4d424bfed5fd15d91818427fe5ac7052249b263d8270c3e3a4136ab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\portable\\clients\\web\\tests\\independent-views\\records.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/portable/clients/web/tests/independent-views/records.independent.test.ts",
+      "sha256": "7c53a389b9c3875dc9a03bec7d4cc7ca6d762547dc1c3fd1c30de280b83bab8c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\portable\\clients\\web\\tests\\independent-views\\support.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/portable/clients/web/tests/independent-views/support.ts",
+      "sha256": "a4b2280decbe8f74cc076ce43c356cc8b3abc304893a7a4aef1adaf9b7309599"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\build.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/build.json",
+      "sha256": "4874e0178a4a2eca78e71e0df75329de9dff7d04a85d688d3cebfb1a8d0a7418"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\build.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/build.txt",
+      "sha256": "179fe81bcb7f980898b7d21304c5a503580a3bb64ce4421ae47d23009c8e6b09"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\check-first-asset-typing.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/check-first-asset-typing.json",
+      "sha256": "345865b99029713087b9d16b564bcebf3f8d9dd68e5dea4729c36dcd827b03f9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\check-first-asset-typing.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/check-first-asset-typing.txt",
+      "sha256": "9beb9302b3ae68220880db92a548e99300194ab32e6802bbaaccad5672fc3fa6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/check.json",
+      "sha256": "58406d57567526fe87a817c7e03481b6ae215cff0fd88a1d12727c38e43023ef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\check.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/check.txt",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\full.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/full.json",
+      "sha256": "be01c2efc683a48c7b97a23930665c234f950408a8a97364ea7ed4bed5d06f54"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\full.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/full.txt",
+      "sha256": "8740741abc1da92ff2d5fb4908c90af9b46bda7f61bfe76d16fdba418a4ff34a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\independent.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/independent.json",
+      "sha256": "d324e52db7cc4f3c38ed7b9864cd0c5118bb69855337478833a0ce7340487302"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\independent.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/independent.txt",
+      "sha256": "c0674ffb3f7f255b958591800e820e5db5a34edd6532dd4f58183934f5336efe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\build.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/build.json",
+      "sha256": "dc891cb90791f69c837789acee1e224cf622e814d92bd0f2cfcb5b1469170416"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\build.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/build.txt",
+      "sha256": "a86dd94297b36f0c0f043cdcb419f39521f81a7dedf15022f551b741f182f3ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/check.json",
+      "sha256": "0a878ce081886c7401241cf6474d57b832bccd017f8179a7ecaf8eb2cc3bcda3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\check.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/check.txt",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\full-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/full-results.json",
+      "sha256": "abed9e7f257e1543596bef3f5b9e06d56b3940630884fd6a154ca510c41ac1d1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\full.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/full.json",
+      "sha256": "e88c79ff6b1b5835a6d8733311dbdada9caa17d7ee4b98effc9ff15b48152ec9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\full.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/full.txt",
+      "sha256": "8740741abc1da92ff2d5fb4908c90af9b46bda7f61bfe76d16fdba418a4ff34a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\independent-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/independent-results.json",
+      "sha256": "915a4d9bb490b112efbc442a77630d3ad21364fd0833766ad8d9cc1dd99d57e1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\independent.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/independent.json",
+      "sha256": "d4664a78bbea69f590f1f44622081a0d0e5c43b90e2ce8c8eb41b1e8d61aef34"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\logs\\initial-green\\independent.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/logs/initial-green/independent.txt",
+      "sha256": "c0674ffb3f7f255b958591800e820e5db5a34edd6532dd4f58183934f5336efe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\input-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/input-audit.json",
+      "sha256": "6af7fe36fa3b57129f298f3aad8a53909aca728497aa2c6a261ce62fdd0b3d29"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\local-subassertions.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/local-subassertions.json",
+      "sha256": "83320495f9c31cbf8a8aea0871069cd7fecbb2312aa9d4c82390d644da7439d0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\local-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/local-results.json",
+      "sha256": "85ef7ee6b864c555bbd31ac8a25c673850c4de0b623f9c59c59f72d4e0a9312b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\api-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/api-results.json",
+      "sha256": "b45c2949a82050a620416662aed13122a320e3289f80537a4256f891cf87a606"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\source-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/source-after.json",
+      "sha256": "06327f9a82bcff2a1c7527bd9b32a81091fb715a13015687249b8bc6ebdc2c39"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\environment.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/environment.json",
+      "sha256": "15c6457140959a1d3649c14092bdc9fbc550a47c921ebf860d09508f5ea8d6be"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\independent-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/independent-results.json",
+      "sha256": "4417fde64e096ad2c6959fa95526725995bc63dbbd2439b85e429ca5a642aad2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\full-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/full-results.json",
+      "sha256": "3cd831ce61392b516add7241b2dfd6e8f9c926a1e3297b3040fb9b94ab87161b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\portable-assets.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/portable-assets.json",
+      "sha256": "a7146923e3a24fea3b1761099a468b056e6d88fd984e27b7ba4b3424afbfa5f5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\acceptance.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/acceptance.md",
+      "sha256": "a0b7afa5c1263639b3cc5a982a7f6904d47a248b7138591f2253c5ca7963e76a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/HANDOFF.md",
+      "sha256": "d5fc4b21e3656c925a1b5c7bfe3150022e750119169ebf176cfa7d4cac91a47c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\prepare.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/prepare.mjs",
+      "sha256": "3693946ff73809a79110568274ec9558e8ce071a7cd149201f6b8da007b0f310"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\install-and-map.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/install-and-map.mjs",
+      "sha256": "687992f8ce667f3ac2ac7b8aee41c88456ad4abece607c8bf61ccaf32ec04bea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\run-one.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/run-one.mjs",
+      "sha256": "44ee2bd40877ec6751fbcc3e9e293d2159ddb28bb3afabb0bc84a117126c0ab5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\finalize.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/finalize.mjs",
+      "sha256": "4170d0e24f1c27c3d06acc453a2f9168d439d57a77603cb5cc8aa412b65c44c1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-core-independent-tester\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-core-delivery/independent/freeze.json",
+      "sha256": "f911b1f4c2dbd3f03875f03a28485c2bf7d3800d3c8ccc95eef60bd3e4f021b1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\prior-v1\\CONTRACT.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/web-core-v2/prior-v1/CONTRACT.md",
+      "sha256": "ec82470e2dc293fc6e954817a45b082c64a0ccb5741c9b981340637f863797cc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-core\\design-v2\\precision.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/web-core-v2/precision.md",
+      "sha256": "cd25ab9a65609ddde4a9867e95cc3871a833bb250356818badbb85ecea52410f"
+    }
+  ]
+}

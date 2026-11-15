@@ -1,0 +1,664 @@
+{
+  "scope": "RequestAuthority production candidate and developer evidence only, not Root integration or independent28 acceptance. Developer7 and strict checks pass; original Node39 assertion successes with a physical TEMP failure remain a failed group, late cleanup not a normal join. Fixed373 inputs already include3dist, all externally verified, not all copied. Exact independent VM observer/mount plan passed limited reviewer gate; actual formal acceptance is separate and pending. No product ownership/authorization boundary inferred from developer tests.",
+  "copyPreparation": "First copy stopped on incorrectly treating tester entry paths as freeze-directory-relative; corrected to declared implementation-root-relative paths and resumed only identical already-copied hashes.",
+  "fixedCandidate": "a5b181f2417dbf39b32b526302ee5860d5100d7e8ceb078e65279190792ab21e",
+  "externalSourceVerification": {
+    "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\source",
+    "count": 373,
+    "includesGeneratedDist": 3,
+    "verified": true,
+    "copied": false
+  },
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\source-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/source-manifest.json",
+      "sha256": "580fdf44694b55bf15ec5a464f717f49ed7e5df12248ab62edc40fc1c1566a8d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\evidence-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/evidence-manifest.json",
+      "sha256": "a23072ad715e8d078ee5aee39c0dc65db45a9d16c0f287a79f1f17751eb0e2b9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\baseline-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/baseline-manifest.json",
+      "sha256": "6bf8530cf697c1633fc9d2a533c98430c120f350a9fef45c411f1fb934ff3cce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\full.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/full.patch",
+      "sha256": "0c79abbb07baccdf7588b1163acf20fa0b5bfd3870d786a5dfb35293af2a676f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\production.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/production.patch",
+      "sha256": "ffcc68e8be583d7b8ffb080746b042f5dd913bc8820853806591de86c8735e69"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\development-assets.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/development-assets.patch",
+      "sha256": "e673d77d4f9db4e3153825f599d9dba0d134abec2ca9f4669e1eca74c0363648"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\baseline-lint-maintenance.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/baseline-lint-maintenance.patch",
+      "sha256": "04c118154ffd084aae3750e1ec5b713b1732f922b3f186951a30ed5391c9bf0b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\apply-to-fixed-copy.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/apply-to-fixed-copy.ps1",
+      "sha256": "f18f9c131da9c9b49e5ac14f5fca7a4106518e978b2a46e20c1f4698e1e0f8e1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\assembly-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/assembly-check.json",
+      "sha256": "7d0b1b4838cdebcd1698735acd48587744566ff27cd2fa1020779201eabc8310"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/HANDOFF.md",
+      "sha256": "d986d88b2964dd19711a525117eda6dd713bd2e2fb7e12d60d2e67db810cb06f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\candidate\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/candidate/freeze.json",
+      "sha256": "a5b181f2417dbf39b32b526302ee5860d5100d7e8ceb078e65279190792ab21e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\run-cargo.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/scripts/run-cargo.ps1",
+      "sha256": "0f5a55070563c30ec1c5ed036a7878dfbd99062bbaa07b00427b104b6312de5f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\run-development-cases.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/scripts/run-development-cases.ps1",
+      "sha256": "080d4ae126fcbab833eb380bbfb5381cfe8da6626983f4891b747868d6a78d1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\run-final-regression.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/scripts/run-final-regression.ps1",
+      "sha256": "6f17487a47ef2854f1335dc2d55827151ff0fb41fd42db9dca41b1b919c1ea18"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\freeze-candidate.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/scripts/freeze-candidate.ps1",
+      "sha256": "67859d5692635d4020f0c3b6b858996321a453e7f41f4ea35ba0bdecfdd11cf0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\allfeatures-clippy-01-mounted.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/allfeatures-clippy-01-mounted.json",
+      "sha256": "7739bfcf5f511d4539e6b9e18ec35a6e14e77a9bcc401380a09dc9164956276f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\allfeatures-clippy-01-mounted.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/allfeatures-clippy-01-mounted.log",
+      "sha256": "8e89b510dfb09390ae8321decef489a13592088abe4810a39c439739b8855f9c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\allfeatures-clippy-02-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/allfeatures-clippy-02-final.json",
+      "sha256": "b1073accaa2a94eeb47b1de690477c867c4e8cfc178634cef9979d8b5a1d6c66"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\allfeatures-clippy-02-final.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/allfeatures-clippy-02-final.log",
+      "sha256": "56b3152ef35709d040c6ad4fd2080392e96dd1865834ec832126a9231fb7f27e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\approved-apply-eol.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/approved-apply-eol.json",
+      "sha256": "e4dcae1507777b90352d9f94902a0af06d9a769892128fc47de9b04c88684cfa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\build-01-production.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/build-01-production.json",
+      "sha256": "c2d574df7728ea70844a34595843d3c406511b4c85eada1ada3ceb05a0f648f9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\build-01-production.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/build-01-production.log",
+      "sha256": "1ba0a76284615221b70e2c7da40cf757b352d0e70e70896c8c55214161025f89"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\check-01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/check-01.json",
+      "sha256": "47ae8ae9813958e1b634b29b1f82bc78d88e8819f0b93028186ede5337d2c1ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\check-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/check-01.log",
+      "sha256": "711f069fe7ffe9b17efa2516d665e028789a3679e9cdce796aabe286f9ca70fd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\check-02-mounted.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/check-02-mounted.json",
+      "sha256": "911eaf2b3663fe2f9a947284ee833a65bddb148c5689bd32d830ce9049761370"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\check-02-mounted.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/check-02-mounted.log",
+      "sha256": "0ac108d952ed094aedce899c4b26659d16f4b0cbb3d6338b6c32510a8662c725"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\check-03-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/check-03-final.json",
+      "sha256": "1f5f0279fafec948d486d1c33c56d8eeaa30620b9c25f4676107db1f40747956"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\check-03-final.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/check-03-final.log",
+      "sha256": "95922b7855f705b70f70a1fcc6e9a5489b3c0659881d724e3444c4f355e19149"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\clippy-01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/clippy-01.json",
+      "sha256": "eab713d486d8e786a75014de7e107fb18a3a25303b63a3ada182a9ac4fb85d0a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\clippy-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/clippy-01.log",
+      "sha256": "c887e16a106b7a06ec2107837e680ea750c198a45a1ffc02f9b20f9f885b6f52"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\clippy-feature-01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/clippy-feature-01.json",
+      "sha256": "838ae6a2707bb8d8fc07dd599d0be5547f3194c6d793b879c364dbe9c1faf9aa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\clippy-feature-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/clippy-feature-01.log",
+      "sha256": "042eed9e4acc3d11765d885b7891989caef0c699d6fa151f36cc11214bda9089"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\clippy-feature-02.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/clippy-feature-02.json",
+      "sha256": "d2aef32b29d87837dbd3e2f8ca16d1874b2c81e7a1694e69aa26127eef9ab353"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\clippy-feature-02.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/clippy-feature-02.log",
+      "sha256": "c0ba61772950247e459c1b83e77a668f8efaa7f2c46481ce492e70c3dc6b6e06"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-02.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-02.json",
+      "sha256": "3707d1c8c4fbc5012f7109d93369d30fe6af021540e982bc8191898f254ff558"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-02.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-02.log",
+      "sha256": "2206b65b1c653b8cdb96222b436171c0b9d4526b13a6480cba6f769de68d7994"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-03-maintenance.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-03-maintenance.json",
+      "sha256": "f98c2ec93eb4a32c8bca72aeb71c8cf5618cf8f36cd46a324151f1f1d3254de9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-03-maintenance.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-03-maintenance.log",
+      "sha256": "b9f1f3a4f3232bb800f234a2154ae8e2e325e8ebca0085d26c8664ca48ec3ee3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-04-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-04-final.json",
+      "sha256": "2bc2ad35587d4237a6a73b7bcf81428fe89094b64bc36a8b7eb9024baf81f320"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-04-final.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-04-final.log",
+      "sha256": "12b8582d2e0604a4b825027508f92b7b7aef68cc64507c576290886addc06e15"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-05-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-05-final.json",
+      "sha256": "6e06f975d1e28f423ac3c9baa2a241a41bb50923de95efae46dea098417a1f74"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\default-clippy-05-final.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/default-clippy-05-final.log",
+      "sha256": "22d1db9d2b8a9b8054635c5b63261b972ec369c5be22ae26f3cd53924e26dfee"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\dev-compile-01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/dev-compile-01.json",
+      "sha256": "276e5c3d81b0d7e5dc92fab902e69d9f7474b407152e3fca5a340bf00e133b57"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\dev-compile-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/dev-compile-01.log",
+      "sha256": "eefa2af2b912d7d40821db79e89bb11aaa42748be1db1e828ae33a77be8754c0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\dev-compile-02-gated.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/dev-compile-02-gated.json",
+      "sha256": "a03eed00d8500bc189b623a4e27397ad98ee04da1b5723ca6ce6301ab66e1120"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\dev-compile-02-gated.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/dev-compile-02-gated.log",
+      "sha256": "20cc908fa0ba548f4110da357a8929a6d329383105a1e6667d8a20e51798fb96"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\dev-compile-03-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/dev-compile-03-final.json",
+      "sha256": "495e13a4e008096949d4b7351651d2d990a60c6c1d3ca8553364b190748bf1ae"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\dev-compile-03-final.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/dev-compile-03-final.log",
+      "sha256": "20cc908fa0ba548f4110da357a8929a6d329383105a1e6667d8a20e51798fb96"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_actual_pool_acquire_pending_is_cancellable.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_actual_pool_acquire_pending_is_cancellable.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_actual_pool_acquire_pending_is_cancellable.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_actual_pool_acquire_pending_is_cancellable.stdout.log",
+      "sha256": "6632af11bed8a5583ca9fa34867882b887a02026c1fb785f8c68518e86ad34ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_equal_identity_two_real_nodes_and_restart.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_equal_identity_two_real_nodes_and_restart.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_equal_identity_two_real_nodes_and_restart.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_equal_identity_two_real_nodes_and_restart.stdout.log",
+      "sha256": "776e8ea15e0bae82c865d406cce2ed82cbac7af90ce6a7a92adae9f0603374df"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_query_uses_its_slot_result_not_global_failure.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_query_uses_its_slot_result_not_global_failure.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_query_uses_its_slot_result_not_global_failure.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_query_uses_its_slot_result_not_global_failure.stdout.log",
+      "sha256": "c417f5177ff397b89158117e76efa805d73b0d4daad7f96e1315e6d4ba73f40a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_real_proof_clone_clock_and_replay.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_real_proof_clone_clock_and_replay.stderr.log",
+      "sha256": "25048889c7a84d6183a83bb79f95f61aab8cbba089cce2e15b92d17ccb11c113"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_real_proof_clone_clock_and_replay.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_real_proof_clone_clock_and_replay.stdout.log",
+      "sha256": "e6415a9e8c46a832e5bdda9d5333a384157bb77007111d5b926e7cf888b20abe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_revocation_rejects_new_authorization.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_revocation_rejects_new_authorization.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_revocation_rejects_new_authorization.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_revocation_rejects_new_authorization.stdout.log",
+      "sha256": "ae63f73983291221ef7daeb28081fb8181b2cfa936049e5af1ca13e4eeaf05fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_same_database_foreign_owner_rejected_before_wrap.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_same_database_foreign_owner_rejected_before_wrap.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_same_database_foreign_owner_rejected_before_wrap.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_same_database_foreign_owner_rejected_before_wrap.stdout.log",
+      "sha256": "231ccb980c8d1a99f918995301e834de0400d604e6d0ae957d021466490ba05e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_target_mapping_and_utf8_byte_boundary.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_target_mapping_and_utf8_byte_boundary.stderr.log",
+      "sha256": "07c680668e4c12e319e4de5b702584f2452cfe325d2b29923b091914ff4c58a7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\authority_dev_target_mapping_and_utf8_byte_boundary.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/authority_dev_target_mapping_and_utf8_byte_boundary.stdout.log",
+      "sha256": "7c7458af814fd2786ec548422a7feeb8b86865a523852f5a0d28109812965c4a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-01-owner\\results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-01-owner/results.json",
+      "sha256": "5fa303b88554301391016eb339dbda48c8bd5fca8322ec05e3fd6d7cdd4bdb85"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_actual_pool_acquire_pending_is_cancellable.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_actual_pool_acquire_pending_is_cancellable.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_actual_pool_acquire_pending_is_cancellable.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_actual_pool_acquire_pending_is_cancellable.stdout.log",
+      "sha256": "5c8cc0c78026922b2aa495dec0a056df92cfdeb9a058ead8f6dc56f0529f769c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_equal_identity_two_real_nodes_and_restart.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_equal_identity_two_real_nodes_and_restart.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_equal_identity_two_real_nodes_and_restart.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_equal_identity_two_real_nodes_and_restart.stdout.log",
+      "sha256": "776e8ea15e0bae82c865d406cce2ed82cbac7af90ce6a7a92adae9f0603374df"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_query_uses_its_slot_result_not_global_failure.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_query_uses_its_slot_result_not_global_failure.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_query_uses_its_slot_result_not_global_failure.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_query_uses_its_slot_result_not_global_failure.stdout.log",
+      "sha256": "c417f5177ff397b89158117e76efa805d73b0d4daad7f96e1315e6d4ba73f40a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_real_proof_clone_clock_and_replay.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_real_proof_clone_clock_and_replay.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_real_proof_clone_clock_and_replay.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_real_proof_clone_clock_and_replay.stdout.log",
+      "sha256": "95769221eb0dd1deb78505a67ec7cb7ac2c7df696bfc84efaaef9e9d2ea6d106"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_revocation_rejects_new_authorization.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_revocation_rejects_new_authorization.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_revocation_rejects_new_authorization.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_revocation_rejects_new_authorization.stdout.log",
+      "sha256": "ae63f73983291221ef7daeb28081fb8181b2cfa936049e5af1ca13e4eeaf05fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_same_database_foreign_owner_rejected_before_wrap.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_same_database_foreign_owner_rejected_before_wrap.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_same_database_foreign_owner_rejected_before_wrap.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_same_database_foreign_owner_rejected_before_wrap.stdout.log",
+      "sha256": "231ccb980c8d1a99f918995301e834de0400d604e6d0ae957d021466490ba05e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_target_mapping_and_utf8_byte_boundary.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_target_mapping_and_utf8_byte_boundary.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\authority_dev_target_mapping_and_utf8_byte_boundary.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/authority_dev_target_mapping_and_utf8_byte_boundary.stdout.log",
+      "sha256": "86e78d0b8e0f91dc2d14853bbb36b0205e4e6703770d19607e268cd2c7c59cc6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-02-gated-owner\\results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-02-gated-owner/results.json",
+      "sha256": "f4968f924f6c59990df88ac82d9efd87124d5335dde151e8df0a39269da92604"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_actual_pool_acquire_pending_is_cancellable.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_actual_pool_acquire_pending_is_cancellable.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_actual_pool_acquire_pending_is_cancellable.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_actual_pool_acquire_pending_is_cancellable.stdout.log",
+      "sha256": "6632af11bed8a5583ca9fa34867882b887a02026c1fb785f8c68518e86ad34ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_equal_identity_two_real_nodes_and_restart.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_equal_identity_two_real_nodes_and_restart.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_equal_identity_two_real_nodes_and_restart.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_equal_identity_two_real_nodes_and_restart.stdout.log",
+      "sha256": "776e8ea15e0bae82c865d406cce2ed82cbac7af90ce6a7a92adae9f0603374df"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_query_uses_its_slot_result_not_global_failure.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_query_uses_its_slot_result_not_global_failure.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_query_uses_its_slot_result_not_global_failure.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_query_uses_its_slot_result_not_global_failure.stdout.log",
+      "sha256": "c417f5177ff397b89158117e76efa805d73b0d4daad7f96e1315e6d4ba73f40a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_real_proof_clone_clock_and_replay.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_real_proof_clone_clock_and_replay.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_real_proof_clone_clock_and_replay.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_real_proof_clone_clock_and_replay.stdout.log",
+      "sha256": "f46459cfa6bb95d2d52a554c08ae41fdd705ec3941c61fc7b43689d651aef534"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_revocation_rejects_new_authorization.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_revocation_rejects_new_authorization.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_revocation_rejects_new_authorization.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_revocation_rejects_new_authorization.stdout.log",
+      "sha256": "ae63f73983291221ef7daeb28081fb8181b2cfa936049e5af1ca13e4eeaf05fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_same_database_foreign_owner_rejected_before_wrap.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_same_database_foreign_owner_rejected_before_wrap.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_same_database_foreign_owner_rejected_before_wrap.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_same_database_foreign_owner_rejected_before_wrap.stdout.log",
+      "sha256": "cdec563ac6c4d7d74f44b22e6c8b3d9934132d6a3b4a0dd50832ce77832432f2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_target_mapping_and_utf8_byte_boundary.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_target_mapping_and_utf8_byte_boundary.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\authority_dev_target_mapping_and_utf8_byte_boundary.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/authority_dev_target_mapping_and_utf8_byte_boundary.stdout.log",
+      "sha256": "f38d13e17da9b7f063ac9c0152c9fb02dc2efd664ace4f49ee2674f197c94502"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\development-03-final-owner\\results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/development-03-final-owner/results.json",
+      "sha256": "d133953458d34b033f846a310d0ddab00b8246937b2ec5adaee836c5a8aa57a4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\environment-attempts.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/environment-attempts.md",
+      "sha256": "59243d860ee02239d738da7b9b1176d71f3945f6fa3de80fe6625d139f6752e4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\final-original-regression-late-cleanup.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/final-original-regression-late-cleanup.json",
+      "sha256": "51321da91f1bd039839c56e1aa706bee0afaa8b178675a594ffdb285af8ddac7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\final-original-regression-late-observation.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/final-original-regression-late-observation.json",
+      "sha256": "a5fc00ad316fabca851cd26e59fea82459f92eb3edbfca00cf4b89967ccafa0c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\final-original-regression-owner\\original-node39.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/final-original-regression-owner/original-node39.stderr.log",
+      "sha256": "bc533d55d0f13408faa5b4658cef1c857a12ce63cfe5cabd4504510296accaef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\final-original-regression-owner\\original-node39.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/final-original-regression-owner/original-node39.stdout.log",
+      "sha256": "9d3ef5d6302d36262c353cfecfced34ba532c45aefa55f35d2cdbae00bb1722a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\final-original-regression-owner\\original-r3-owner21.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/final-original-regression-owner/original-r3-owner21.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\final-original-regression-owner\\original-r3-owner21.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/final-original-regression-owner/original-r3-owner21.stdout.log",
+      "sha256": "1f21e468163a9c1c072489ab13b77e775435e2d35bbbb980c28bff5c4a241730"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\final-original-regression-owner\\results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/final-original-regression-owner/results.json",
+      "sha256": "0be128527cf841e764618266f2a98ad77311d6d062f5a4f9349b8a4df2475b66"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\first-panic-late-cleanup.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/first-panic-late-cleanup.json",
+      "sha256": "402dd6d2b97cb6aa7a0d28203b2f88c6adbef2b076c3ebe67bdf7acdffd2b25d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\first-panic-late-resource-observation.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/first-panic-late-resource-observation.json",
+      "sha256": "48060d72a4df7bd98a92d308303f364fdbf52a4adcf12ce4e2f671b4bcdb6d08"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\fmt-01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/fmt-01.json",
+      "sha256": "faf48f564f009b4967ec6deefb7fad8f21e8322af068e404f1ce71de7c4215df"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\fmt-check-02-mounted.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/fmt-check-02-mounted.json",
+      "sha256": "b2f38da04ef85a4f1454f0d8b9e4bb980675f7f4fd4cfae2c84718590b6ede19"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\fmt-check-02-mounted.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/fmt-check-02-mounted.log",
+      "sha256": "2997f50ca4a60e2b3a04874ab8f66014f45c7040ad6b09fce6bee09b3b385784"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\fmt-check-03-mounted.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/fmt-check-03-mounted.json",
+      "sha256": "c1996f3b70c5a21a95ec81a2ad44296620da36f3b02d1965fa03320c1a7a9540"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\fmt-check-04-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/fmt-check-04-final.json",
+      "sha256": "93eb9df21fd05433c98b05500ca9f75a05e140f3a4d79454b97055b08e8208b4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\freeze-attempt1-failure.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/freeze-attempt1-failure.json",
+      "sha256": "7e101ed74ef2ea16e35db4b0c8e627c3c5a7f18d3261568f02aeca53630bfd5a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-drop-01-owner.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-drop-01-owner.json",
+      "sha256": "eeaaa14a63da8670c1ea0fc7c59d26cd50369ffba87ce9917c5dbf1f0d06a3ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-drop-01-owner.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-drop-01-owner.log",
+      "sha256": "01537dd70cfe3ef2c7d9a7acc6ec514a0f2605450a5c3c6b971b7bc8c091f958"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-policy-01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-policy-01.json",
+      "sha256": "fe777c3aa7b493122190630272a0f9aa7051728a456c86530a52eeca19ba84f6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-policy-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-policy-01.log",
+      "sha256": "c3932f0cac64dee06e242b229e2763f828234174d611fb0e8211604c894d9a26"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-policy-02-owner.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-policy-02-owner.json",
+      "sha256": "c6897460dc78e472b72b654460048023d0381721ce4f89a2427ce91b32e2158f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-policy-02-owner.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-policy-02-owner.log",
+      "sha256": "915d5dc23d19265a9837ed7eca2cf9a36fd939493dacd8d8baa634e3f68b330b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-regression-01-owner.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-regression-01-owner.json",
+      "sha256": "754bb80ab7c36d5a7b690c5c61e0a2336eb12f2869375e99c6dc3805f6c90f25"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\old-node-regression-01-owner.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/old-node-regression-01-owner.log",
+      "sha256": "7d023bc5afe71456667325af8f431c8afd3f0e35b3ecdc86e9396f49007cf630"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\protected-source-preliminary-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/protected-source-preliminary-audit.json",
+      "sha256": "fc333a2bc574abab226e034cb11faaefb6742eec3f0d737a232e73a7d3356ddb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\protected-suffix-audit.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/protected-suffix-audit.json",
+      "sha256": "867fd8c729779e11d83e839831cf4843bb319882c0dd6aeabde96a2017337ca8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\r3-owner-regression-01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/r3-owner-regression-01.json",
+      "sha256": "e2c3d85a93223a4ad5f2fe13d7d76c2f1f1d65680301e4fdb8a460f22bdef961"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\r3-owner-regression-01.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/r3-owner-regression-01.log",
+      "sha256": "ab89af79067129fbafc7f36215e2cea7fed2d7013e684cb1ff99bf4c00c4ab84"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\revision3-4-applied.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/revision3-4-applied.json",
+      "sha256": "5b247d633d5497e7a12c0b4c66c2a8fa5852783f9fdbab4610ca4326e24a6760"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-authority-implementation-v1\\runs\\revision5-applied.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/author-evidence/runs/revision5-applied.json",
+      "sha256": "2493fd69a8889ffaf7c664c2f5823fe610b8f7742ab7c142e26eb22d184226e2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-request-authority-tester\\implementation-v2\\gate-candidate\\worker.frozen.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/independent-observer-gate/gate-candidate/worker.frozen.rs",
+      "sha256": "2d9b7ac4a3b1c8f4e5c637763bfd2d861c19dc4f0364a8532d5930c8b07dca3f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-request-authority-tester\\implementation-v2\\gate-candidate\\cases.initial.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/independent-observer-gate/gate-candidate/cases.initial.rs",
+      "sha256": "4df30d39971417e3b682894efef1fa50f53e19b0817ee972159a352f24381d63"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-request-authority-tester\\implementation-v2\\gate-candidate\\node.after.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/independent-observer-gate/gate-candidate/node.after.rs",
+      "sha256": "a9d64253753f9fc0a2ee7babab0e8bd92e74d26c3f089e17950616f358446679"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-request-authority-tester\\implementation-v2\\gate-candidate\\node-mount.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/independent-observer-gate/gate-candidate/node-mount.patch",
+      "sha256": "b07be57739340e9855ec0d4f5c52c6d2758c17caedba2307421e67faaa8f027b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-request-authority-tester\\implementation-v2\\gate-candidate\\PLAN.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/independent-observer-gate/gate-candidate/PLAN.md",
+      "sha256": "86fa6aa8f4b3c68a04a13a8b1f00f8e01457a4c41370acc17e2502e5da5a8642"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-request-authority-tester\\implementation-v2\\gate-candidate\\freeze-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/independent-observer-gate/freeze-v2.json",
+      "sha256": "1a899924b1adeaff4a799d52dc4e4fa61f1b49dff0a2345bc743b63380793909"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-reviewer\\wp3-request-authority\\independent-worker-vm-receipt-and-mount-v2-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-request-authority-candidate/reviews/independent-worker-vm-receipt-and-mount-v2-gate.md",
+      "sha256": "463de368d590ec6801262289021b5245165f2d1e536e2f6d53f5d69b79f04a74"
+    }
+  ]
+}

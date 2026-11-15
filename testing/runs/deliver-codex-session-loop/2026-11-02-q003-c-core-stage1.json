@@ -1,0 +1,49 @@
+{
+  "scope": "C finite-core stage1 developer result only; implementation continuing",
+  "sourceCount": 788,
+  "changedPaths": 12,
+  "cargoCheckLib": 0,
+  "developerTests": 6,
+  "formalCasesExecuted": 0,
+  "sqlRuns": 0,
+  "dpapiRuns": 0,
+  "strictPassed": false,
+  "catalogServiceImplemented": false,
+  "applyImplemented": false,
+  "reconcileImplemented": false,
+  "rootIntegrated": false,
+  "schemaInstalled": false,
+  "verified": [
+    {
+      "name": "coder",
+      "sha256": "022a37c24dc017e9e09ee33c1dec1d7f3cfa8204c9c09b6f2194a748e16a9628",
+      "count": 810
+    }
+  ],
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-c-core-stage1/coder/freeze.json",
+      "sha256": "022a37c24dc017e9e09ee33c1dec1d7f3cfa8204c9c09b6f2194a748e16a9628"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-c-core-stage1/coder/REPORT.md",
+      "sha256": "f7bcd30927bc9a5293df9df3cc7251a174fa9da0e42ec4d7346feb90d71de1cd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-c-core-stage1/coder/BASELINE.json",
+      "sha256": "28c98eced6f8278e722e6f96bd3fcb44d7bda92744cc4b010e2502065b651c45"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-c-core-stage1/coder/changes.json",
+      "sha256": "34a1205d6384671ad6a6d1790ac6b66cf3fcfbb8b36450af1e5ab9da3c122f29"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-c-core-stage1/coder/strict-summary.json",
+      "sha256": "a70ceb90c1b641e2f7b47ec50bd0edbc936b7c044cc8ffcfb4e5de0a115e64f7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-c-core-stage1/coder/patch-verification.json",
+      "sha256": "1bef3852af1b7505953596bd00792c2f944709e16510c5f09973e462b2929b41"
+    }
+  ]
+}

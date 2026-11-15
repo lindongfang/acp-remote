@@ -1,0 +1,54 @@
+﻿[
+    {
+        "path":  "D:/Project/acp-remote/app/Cargo.toml",
+        "sha256":  "c48046e404e8d10b036eec48163295a1386aa2cbe4baeafbe479fe823638045d"
+    },
+    {
+        "path":  "D:/Project/acp-remote/app/Cargo.lock",
+        "sha256":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+    },
+    {
+        "path":  "D:/Project/acp-remote/app/src/strict_json.rs",
+        "sha256":  "2256cd608db0b60a3a9a83306781dca6258dcd4544955bd8651edb7bf91653d3"
+    },
+    {
+        "path":  "D:/Project/acp-remote/app/src/adapters/acp/model.rs",
+        "sha256":  "a14f33cf708aa1a93b8291fbf0e5d55f18627190d54f086505f4f1c883bb2b60"
+    },
+    {
+        "path":  "D:/Project/acp-remote/app/src/adapters/acp/strategy.rs",
+        "sha256":  "72ad187e25cf6ba4c530be4fb8eaa6c482fcca9bab32c3a3220b4fdd42842e4c"
+    },
+    {
+        "path":  "D:/Project/acp-remote/app/src/adapters/acp/transport.rs",
+        "sha256":  "66f92868d13b556f502cb5a5992177c96440eac1f609da629397ba5cecc42a76"
+    },
+    {
+        "path":  "D:/Project/acp-remote/app/src/adapters/acp/view_observations.rs",
+        "sha256":  "0164d462fa3bd16740a664a02407fc67a13176ddfb2b1f73dfba8e4381ee225a"
+    },
+    {
+        "path":  "D:/Project/acp-remote/app/src/adapters/acp/tool_projection.rs",
+        "sha256":  "4cf2b6d36a8a3095bed73de496d926cec871e97bc0addf431256be5a8d54b503"
+    },
+    {
+        "path":  "D:/Application/Rust/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154/Cargo.toml",
+        "sha256":  "548aafeb7c702b69b9de950033f10b59f70baf38592d275d8ca8cff19f7750c3"
+    },
+    {
+        "path":  "D:/Application/Rust/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154/src/de.rs",
+        "sha256":  "cb55666913c47d86130e7bd48a9c35081ea9a4bb0e2c45ab6429912d905629c5"
+    },
+    {
+        "path":  "D:/Application/Rust/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154/src/read.rs",
+        "sha256":  "523eec008a92c1be499978ee96bce7a8dc7d6ddff9a63b5ed404c19d01fb953a"
+    },
+    {
+        "path":  "D:/Application/Rust/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154/src/raw.rs",
+        "sha256":  "0e6ae2ade492a3c5c090dfaf31f03ff4e54123a5a47b59def5f1b3dcc035a2e3"
+    },
+    {
+        "path":  "D:/Application/Rust/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.154/src/ser.rs",
+        "sha256":  "f2b8cc0b97e30c49dbc58698fa22c14a7d56ea616cdb57b067835a59af49a75f"
+    }
+]

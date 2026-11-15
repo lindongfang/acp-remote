@@ -1,0 +1,556 @@
+{
+  "scope": "Independent Native partial follow-up only. v35 six actual Rust functions green, fmt1 and strict101 retained; SID5000 is current implementation characterization, not ACP4096 normative rule. v36 approved original PP single diagnostic red: ordinary branch complete, actual owned callerDrop same-instance close deadline failure. Source snapshots are separated observations; no inferred lock/wakeup cause. Original failed normal cleanup retained; targeted post-exit late cleanup is not join proof. Native80, product fix, Root integration and final review remain pending.",
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\check-static.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/check-static.mjs",
+      "sha256": "6df077857193fd21233bb65fbe6f0b784d803780c84cdf4a7e1e2ba984de49b0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\compile.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/compile.mjs",
+      "sha256": "e7cab9f45b09952c45bd16f69f1f3d8a189520fd133bc49df16b85e559b7102a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-after\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-after/app/src/lib.rs",
+      "sha256": "3178435381d791d37a1d1a4231fe12168ff1f23d1ae62b86d95ba64fd5fe562f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-after\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-after/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "1db8eb63b2567782fafc6739aa61907360566d3121c4a6e65f4d0ddbba214b7d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-after\\app\\tests\\native_dispatch_acceptance\\permission_protocol_edges.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-after/app/tests/native_dispatch_acceptance/permission_protocol_edges.rs",
+      "sha256": "1326af3e4593385e9d0a35d66266f006993eb27d5b356ef57c8bba4cb0b92d39"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-after\\app\\tests\\native_dispatch_acceptance\\source_permissions.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-after/app/tests/native_dispatch_acceptance/source_permissions.rs",
+      "sha256": "53be6cb8fb2b2e76f2dc554170c7a9c5320b9c92cca40a707f91ed0ede2c3f47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-before\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-before/app/src/lib.rs",
+      "sha256": "3c942a29d0ccb9597dcceba8af75051ae5b910cb59a64d76761be2dbefdbf31e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-before\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-before/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "5e66c0ef2a220e13519b09cf85b3ffe389c185f3472330477cd6aae015be60ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-before\\app\\tests\\native_dispatch_acceptance\\permission_protocol_edges.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-before/app/tests/native_dispatch_acceptance/permission_protocol_edges.rs",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery-before\\app\\tests\\native_dispatch_acceptance\\source_permissions.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery-before/app/tests/native_dispatch_acceptance/source_permissions.rs",
+      "sha256": "44273593d42e762a63ec5ad831307a76ca2d11d40167a9791a4437511d0e8602"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\delivery.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/delivery.patch",
+      "sha256": "56dffb2a0b7442ca79abe3f8e67491819807efb0a4d5655f12fde4f3c4b9e3c7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\execution-matrix.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/execution-matrix.json",
+      "sha256": "f5f6944af47912e5feecf6423031eee0b801b9ef1786841e65280697b4c7960e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\approved-scope-diff.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/approved-scope-diff.json",
+      "sha256": "69b52569317722d5fb721d90dff0155603c52c066f7505346b29d86b39e1fad9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\assembly.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/assembly.json",
+      "sha256": "3fe2dd9ae635c2188997784cf5a4a9c284c27729ce17517d2071a0716b4787a6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\lib-before-observed-mount.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/lib-before-observed-mount.rs",
+      "sha256": "3c942a29d0ccb9597dcceba8af75051ae5b910cb59a64d76761be2dbefdbf31e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\mount-maintenance.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/mount-maintenance.json",
+      "sha256": "7a8079289c86e175e328f38e71c4760cb5549b3d03d0461042f6b2f7554f50e6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\new-function-plan.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/new-function-plan.json",
+      "sha256": "1ff76416250122eb49ba46d1bfb10e9419afacb45de18957a50b6c0daaf66ab1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\new-function-plan02.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/new-function-plan02.json",
+      "sha256": "1ff76416250122eb49ba46d1bfb10e9419afacb45de18957a50b6c0daaf66ab1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\runtime-root.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/runtime-root.json",
+      "sha256": "be71ef8a4f1bf136389f455c0e0b494e3d769c003f5a53f9a4fa733c91025298"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\inputs\\sdk-session-id-basis.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/inputs/sdk-session-id-basis.json",
+      "sha256": "c67413eaf41446254e462020b2d8210a41e293da6205d505b2788ab4c780a360"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\issues.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/issues.json",
+      "sha256": "1d40a0384add37d06b21f5050d86f7d70342947dd5c6058e5a1d667efff97415"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\list-lint.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/list-lint.mjs",
+      "sha256": "7554a2375a3e9457424233dfc3c9a572f6b73f8f942a9151dc1c6ea7ef81207b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\child01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/child01.json",
+      "sha256": "8b6bf0ceae01d31ac1ac94d0acc1807b9d164be8978f39abd514d880b127f31a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\factory01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/factory01.json",
+      "sha256": "0bd425c67e9c39d1ee053408373c9e242e762be6de2740d42c0d6e2c9a2f53fc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\factory01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/factory01.stderr.log",
+      "sha256": "fe065f03b5aba2cd8b44bf2e2d3f0c537f7e92599de4738e34b3d98dcd709730"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\factory01.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/factory01.stdout.jsonl",
+      "sha256": "0b01c0b914af7765cd62e27ad9996d098067e2e705ed6f4b2f0d4a0b58382029"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\factory02.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/factory02.json",
+      "sha256": "77d6b4eef1726d2a5b4ec50dfc6aed669562c736018abff85fb07d2967f3fe4e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\factory02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/factory02.stderr.log",
+      "sha256": "dd861d7e92d0daabb1f0677cb6373240a9359bbde82b74a67421d41bb9826524"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\factory02.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/factory02.stdout.jsonl",
+      "sha256": "6fcc55031c5d0053b818ad6073cad5eddf385081f62afac5e1db76a42ad0ae59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\fmt01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/fmt01.json",
+      "sha256": "c096dc14a08e0a0df9627b8544c977f64e7e5d598423f34102d5e63ff1d87d93"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\fmt01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/fmt01.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\fmt01.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/fmt01.stdout.log",
+      "sha256": "0cf8408c048ff053174352b8cc8c7404ded999443cb45e2cedba268970286413"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\lint01.diagnostics.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/lint01.diagnostics.json",
+      "sha256": "229a9ac16d2d222f0c4b0698a9b2db5005e4c27b8bd4ed1a3ebbdcc208b570b6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\lint01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/lint01.json",
+      "sha256": "9819d6bb4e01605d9cd25088fb824269b40958b5b918605a376d0c00f4b59874"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\lint01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/lint01.stderr.log",
+      "sha256": "2b71532824d9f5991ffae0e3bce2c07bcc2709aa8ffd1b8f0983ac062694bb14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\lint01.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/lint01.stdout.log",
+      "sha256": "19c5a1b15ec3217793cdbd81526f9123cde6987924a3c12ba91c52c9a87e9b1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n06.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n06.json",
+      "sha256": "ca5a5bab44e0234e51f7b06248b1e43989cd4316a48f8d99e0e9d191e98d658f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n06.runner02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n06.runner02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n06.runner02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n06.runner02.stdout.log",
+      "sha256": "b596c4e7aa73fd2181a066e0e091f5d63d8c8a8c7f4cd74d8ac4286f7a49952c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n06.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n06.stderr.log",
+      "sha256": "c4293f2ea60aa881abe660d0096e50839c948a042664f126aa0232236895bd5f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n06.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n06.stdout.log",
+      "sha256": "8adfce33479dfee50c1ca0e2e81261662243747dfb65a695975ebc650508a0e3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n07.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n07.json",
+      "sha256": "e0ba68fb7209faa3f53484202867cdc154c2def8e2f65e2da4ad80960315a2c1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n07.runner02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n07.runner02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n07.runner02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n07.runner02.stdout.log",
+      "sha256": "811d2f8e1284479669bf29f1ba2e586c03c89471aec4e28a7328afab19462c3f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n07.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n07.stderr.log",
+      "sha256": "5d011cb59e87e8834959a8a7804d8df1ae1eef51843e8934e458580ac92d77ac"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n07.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n07.stdout.log",
+      "sha256": "1d0715190553ba58f2a2804b7b4585ab2e63551537050bf30df70c095cb07378"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n08.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n08.json",
+      "sha256": "91874fcd11012900907e3120e0f97bfc3d307a4c4e241afb30faf8247df7190c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n08.runner.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n08.runner.stderr.log",
+      "sha256": "00b1d9d35d81797812da55e88e5495a975a4c95df3436496aa339f27c542fc4a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n08.runner.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n08.runner.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n08.runner02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n08.runner02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n08.runner02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n08.runner02.stdout.log",
+      "sha256": "a7fe0161d7f48295fca9939bf78391f7d99719d001faffd16c033cda4b5fa326"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n08.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n08.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n08.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n08.stdout.log",
+      "sha256": "16bbbd80ce8861da6ed0bfc848315fe040677021ea31bf7027be24ffbec08e69"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n09.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n09.json",
+      "sha256": "7137cf8824ad1228e6b7e5063af2429a4c3e39b9121c747de85cb9e64cc6a099"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n09.runner02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n09.runner02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n09.runner02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n09.runner02.stdout.log",
+      "sha256": "17c0eb52a205c22f8d4adae7bee673e07c5f0a8c4e745262b8a210c639511e92"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n09.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n09.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n09.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n09.stdout.log",
+      "sha256": "9ac6c6279d1482c1561e5a12725bac427eb801f2b956b98f7e5e8bbd329553bb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n10.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n10.json",
+      "sha256": "aaf77013ad55b96857ee50513cf11b387af822b950fbaef29c7c1c4af95a30ac"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n10.runner02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n10.runner02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n10.runner02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n10.runner02.stdout.log",
+      "sha256": "65b1f89eb4674153d4b0ac5443a648d3c4de3fe146bde968fc7a4c21b1ed603a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n10.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n10.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n10.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n10.stdout.log",
+      "sha256": "468dad11132ab8680b0181821f392ae4d151e3ea378837a948edba415beeef78"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n11.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n11.json",
+      "sha256": "a4d88ebbca3501b1bb29f073d19ac3b802165f9c863b12792bc0a0fd039c061f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n11.runner02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n11.runner02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n11.runner02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n11.runner02.stdout.log",
+      "sha256": "336292dd8e91b9394d9490aa1e5bee1252d5d1607925b4dadcfb407d26166c25"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n11.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n11.stderr.log",
+      "sha256": "c4293f2ea60aa881abe660d0096e50839c948a042664f126aa0232236895bd5f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\logs\\n11.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/logs/n11.stdout.log",
+      "sha256": "5e31eebfe1b6205759504aeff773ca7b7304463273bd02f273a285c880cecc24"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\read-sdk.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/read-sdk.mjs",
+      "sha256": "50a37f014bd337e51f0f4644336d5265a093694c885bce735dc6039d8669d6cd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/report.md",
+      "sha256": "42034c964b53b049c2d3ec1ce8f94d7b63b39b7be67cb3b55cc2e77cc7d7380b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\restore-observed-mount.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/restore-observed-mount.mjs",
+      "sha256": "acdfc2077bac576ec8a937ddc9eb097a86c4ca3876f920c105689c9a5e0d4f39"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\run-new.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/run-new.mjs",
+      "sha256": "4d895e821f936be624f13817f45ec67ac41a76657adfe56d80d4c42429bd6f78"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\run-new02.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/run-new02.mjs",
+      "sha256": "580e0359692ab1c27c7a4ef6eec6613213eb9f1717763a4600571c35bb889395"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\run-one.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/run-one.mjs",
+      "sha256": "fb2ac225d50c2dd8e49aa7f56a63ab2d57970ca8dba5a62fbc58bf5344b117f3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\run-one02.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/run-one02.mjs",
+      "sha256": "6c75e2f304219e7203b584020f39e4b74b9602e397a48e20a0f8dde4092c5ad5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\source-factory01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/source-factory01.json",
+      "sha256": "eb421a2e7dd4521c51749ad75d0a3fa0de3f3ad1ac4706de14593c07a61a664c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\source-factory02.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/source-factory02.json",
+      "sha256": "68114cb52046f60fea7e989113185cbe3841f566185a637bf9e2dce7c121c5c2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v35-permission-edges/freeze.json",
+      "sha256": "d4407c1ef994f082427a63e976c59b67a620ce1d63b296a5fc253410c277c63a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\cleanup-own-host.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/cleanup-own-host.mjs",
+      "sha256": "d0341c9bc1432aa71e9ccabc33acacbe63797dc722aa898a743a381b42b5a09f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\cleanup-own-host02.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/cleanup-own-host02.mjs",
+      "sha256": "88bb911b3f864549891d34eda8b9e52a5f5d933a6838a96a9f63498fd4b3d272"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\cleanup-own-residual.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/cleanup-own-residual.ps1",
+      "sha256": "57acb83ddbb159a9704f73826827fd61ac6f8b6a7b14f39d6e02e3f5c9467a02"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\cleanup-own-residual02.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/cleanup-own-residual02.ps1",
+      "sha256": "acc2e6d8abcf98855750cf41ddafd66e6be858de68613e70e885515fffc8aa59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\compile.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/compile.mjs",
+      "sha256": "e7cab9f45b09952c45bd16f69f1f3d8a189520fd133bc49df16b85e559b7102a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\execution-matrix.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/execution-matrix.json",
+      "sha256": "6c17a037fe2984e25bdd4bf4488d58ff7713a878056bb369c693cdf6298aa4d3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\inputs\\assembly.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/inputs/assembly.json",
+      "sha256": "dd6fb798931b9294412235b80e0d456f649ec82d2588f0fb80a3fc59b9d3548b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\inputs\\gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/inputs/gate.md",
+      "sha256": "a0258cff0305b7a4309f60fa577d9a25f6d5d9b607e74cafe96fa330e5a015f4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\inputs\\runtime-root.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/inputs/runtime-root.json",
+      "sha256": "1362b10bd5afa045cc1ed6a575d0349db61711cffa52888a1256dd3a9f4f52a3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\issue.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/issue.json",
+      "sha256": "1b4e79c807a974eefdaec73ed9c312688289d2028b155a0ef2a2d4ac1cf889fc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\child01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/child01.json",
+      "sha256": "8b6bf0ceae01d31ac1ac94d0acc1807b9d164be8978f39abd514d880b127f31a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\factory01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/factory01.json",
+      "sha256": "8dc316bee4cac67cf9c61dcb3ef321b064dfc261489a5c5f2f0d9037f9f770ac"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\factory01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/factory01.stderr.log",
+      "sha256": "a4519bcb74d1561da1ce5cc09680d8c7baaa70508ba2b69750c1f224951df79a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\factory01.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/factory01.stdout.jsonl",
+      "sha256": "d9a1cada760a90c9906f263f60472a3bd96ed7fa38dc8a12a255219f04c81c7d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp-cleanup02-host.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp-cleanup02-host.json",
+      "sha256": "a2fe57ee3999a41142e35725e6c03ffa7ea1097f0f3385205998adc53915dafc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp-cleanup02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp-cleanup02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp-cleanup02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp-cleanup02.stdout.log",
+      "sha256": "fee9365724bd881735e5c262328cd765de646293a68f6b45135dcf94732968df"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp-evidence\\positive-false-complete.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp-evidence/positive-false-complete.json",
+      "sha256": "ae4d05a8905ee55ca03b698b7cd9ae3c0bff628b5abd7687854f262fe8221937"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp-evidence\\positive-false-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp-evidence/positive-false-first.json",
+      "sha256": "38cd1dfaf229ce06faec97bf3355d12c8c0d5ef57f017ea41dee11b20f2f716b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp-postexit-containment-cleanup.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp-postexit-containment-cleanup.json",
+      "sha256": "9808d24894a6f6271689be315e40b3d7fd01dd8328ac5d3b3023bcfc8c016d15"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp.json",
+      "sha256": "5f92b3693a93c58757ece6e29c7869d0bd9956993271cd5718fad175ef098657"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp.stderr.log",
+      "sha256": "e43664b8ffa38fc3c0c352f97a36d1472ec9d8daded951d505d0af1cc1fa9d66"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\logs\\pp.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/logs/pp.stdout.log",
+      "sha256": "278aac65c7c83ee954eb3c9d56acc9fe243ac3a7f89776f4a5ccde8a8a13ab1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\prepare-cleanup.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/prepare-cleanup.mjs",
+      "sha256": "2ed12017e9d0e38af0fa1a79798bc186ca80757fa9fe774865eaa60c7eb0d8f9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\prepare-cleanup02.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/prepare-cleanup02.mjs",
+      "sha256": "e036ba8205db4dad78381000fd57eaf3c32947d2ef2f7eb2e9e475567f7897bd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/report.md",
+      "sha256": "087d460b0cf5096ee0fe87641384a6593bc025f5224808ce6172a8f7892c11f8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\run-one.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/run-one.mjs",
+      "sha256": "e9c2ec70e4e5af46bbdaa83858d37351c877d8745ccdc295fd796e730ced699d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\source-factory01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/source-factory01.json",
+      "sha256": "4053568842471740c875dcc3495cea92a63f27874312742178e747a116bfc304"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-v35-v36-followup/implementation-v36-missingexe-display/freeze.json",
+      "sha256": "9f45f719fdd21253981a8d0ec0193e67ff71e3ede4b7333f5cf6613986084b01"
+    }
+  ],
+  "externalSources": [
+    {
+      "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v35-permission-edges\\source-frozen",
+      "count": 394,
+      "verified": true,
+      "copied": false,
+      "freezeSha256": "d4407c1ef994f082427a63e976c59b67a620ce1d63b296a5fc253410c277c63a"
+    },
+    {
+      "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v36-missingexe-display\\source-frozen",
+      "count": 393,
+      "verified": true,
+      "copied": false,
+      "freezeSha256": "9f45f719fdd21253981a8d0ec0193e67ff71e3ede4b7333f5cf6613986084b01"
+    }
+  ]
+}

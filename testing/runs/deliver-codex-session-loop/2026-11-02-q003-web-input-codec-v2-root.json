@@ -1,0 +1,38 @@
+{
+  "scope": "Web input-transfer pure codec exact three-leaf Root integration only",
+  "date": "2026-11-02",
+  "sourceCount": 639,
+  "sourceManifestSha256": "9c6143fdb9ed73291b4912b54c75d3683165c9a339dc052b37bba183c2975f9e",
+  "testedSourceManifestSha256": "9c6143fdb9ed73291b4912b54c75d3683165c9a339dc052b37bba183c2975f9e",
+  "original636Unchanged": true,
+  "newPaths": [
+    "clients/web/src/management/input-transfer.ts",
+    "clients/web/tests/input-transfer.test.ts",
+    "clients/web/tests/independent-input-transfer/acceptance.test.ts"
+  ],
+  "indexUnchanged": true,
+  "checks": {
+    "check": 0,
+    "test": 0,
+    "build": 0,
+    "testFiles": 27,
+    "tests": 558,
+    "independentDistinct": 8,
+    "developerDistinct": 4,
+    "priorTests": 546
+  },
+  "reviewerInstallationGate": "e151a684d5023e587cc53c80834503b465b7950eb5774e594bad966367badbbd",
+  "independentFreeze": "24beb55c5443d97d6ca586c003b57f3a8f670f511ccd0127c68a31cdb977d698",
+  "issue": "E1W-REV001 Fixed-static; real Allocation not dynamically reached",
+  "rootIntegrationExecuted": true,
+  "finalReviewerRootPosteriorPending": true,
+  "fullProductPass": false,
+  "clientMainIntegrated": false,
+  "realWss": false,
+  "rustChecksRerun": false,
+  "network": false,
+  "audit": false,
+  "gitCommit": false,
+  "evidenceFreeze": "711ed05d585ad4e4fe734c5294efa84f620d5883967071cba66af4cf179263b8",
+  "evidencePath": "testing/runs/deliver-codex-session-loop/q3-web-input-codec-v2-root/freeze.json"
+}

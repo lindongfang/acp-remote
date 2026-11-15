@@ -1,0 +1,96 @@
+{
+  "scope": "Actual single D observation, not a product delivery or case pass",
+  "sourceFreeze": "e7048f3bc5618cbfeb45fb369ac6bab73b60b41ea18dba1be03834f8ae0a0b1d",
+  "sourceCount": 451,
+  "protectedOriginal": 450,
+  "rootSourceUnchanged": 636,
+  "rootSourceManifest": "e127897fb5e244f8b380496fedee41d5487488974ef11f21851b48b51f5f7939",
+  "compile": 0,
+  "actualExactFunctions": 1,
+  "passed": 0,
+  "failed": 1,
+  "runtimeSeconds": 0.17,
+  "actualVersions": [
+    "V1"
+  ],
+  "v2": "not reached",
+  "secondFollowActualRejection": "InvalidStage / same_call_branch=Some(LaneWriting)",
+  "priorSnapshot": {
+    "started": 1,
+    "flushed": 1,
+    "committed": 0
+  },
+  "priorSnapshotIsNotRejectionInstant": true,
+  "twoRawBodiesRead": false,
+  "originalAssertionsPreserved": true,
+  "allNormalFirstOwnerTails": true,
+  "newFixtureResiduals": 0,
+  "windowsOwner": {
+    "actualParentProbe": "CI new-object ownership matches the process user.",
+    "toolChunk": "5d24e8",
+    "scope": "process default owner only, existing ownership not changed"
+  },
+  "actualExecutableExit": 101,
+  "powershellWrapperExit": 1,
+  "strict": "not executed; original five test lint failures remain open",
+  "realHarness": false,
+  "parentTasksSigned": false,
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/STATE.json",
+      "sha256": "6ff13b8b10ee81e838c82f51401c299302b6a66a5ea79a8f1e211889abc1a080"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/REPORT.md",
+      "sha256": "096c7d8c52d629bb43a4a129fe98e40b2508bb6a933b8aafe682aff108b87373"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/freeze.json",
+      "sha256": "e7048f3bc5618cbfeb45fb369ac6bab73b60b41ea18dba1be03834f8ae0a0b1d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/source-installed.json",
+      "sha256": "73b0e4eb6a0878c9992b5222c8a245b3119bd7dc6e8c9152ba5e90d085072954"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/installation.json",
+      "sha256": "be64583ba42733865d2595fd10b82bb2fdc778850867b994be20c8a928002df3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/compiled-executable.json",
+      "sha256": "bb6c08fde175b69ad54297ba6876a8eadb96dfe18176e1ca59c70d46872b13a8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/review-gate.md",
+      "sha256": "67bda154f9ab37ea4174fb974ac0f3463565a2233a2a3b629eef4f21c47721a7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/logs/compile.json",
+      "sha256": "495664c3dfce13ba536976905bd80e15b10485a1e609ca4995f0c487e8ec6440"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/logs/quiet-list.json",
+      "sha256": "00848936759a6510c2ff3a2b8d09451b9fcd34474bca0a3bbc18ee5ae3d9727b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/logs/quiet-list.stdout.txt",
+      "sha256": "d1761c2da11bf2954a59cac6cfb9a81dd89a13ea48fed1664722ee70835f2ef9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/logs/quiet-actual.json",
+      "sha256": "a4504b1b7ea8356f56ae39cd985b1aefa09dd61ceb222d1a06835ab64d92fe8d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/logs/quiet-actual.stdout.txt",
+      "sha256": "a31de891f14875a16f3ecb92bd75c0d9b2dad8525548a0701e5007119e397f5b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/logs/quiet-actual.stderr.txt",
+      "sha256": "e62700a1ef85272961c94d4786bbebf381e3b6e1767e5435051c58fb79e940a7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-shared-post-notice-d-observation/source/app/tests/shared_view_inflight_acceptance/transfer_cases.rs",
+      "sha256": "0f18dd02893abbf7e259dd20c8001b5a43eb0f77b3e508cc0736a6df4ff87c9c"
+    }
+  ]
+}

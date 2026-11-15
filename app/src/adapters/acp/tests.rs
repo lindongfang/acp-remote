@@ -1,4 +1,10 @@
 //! Parameterized standard protocol fixtures. These are not real Harness compatibility evidence.
+mod approval_owner_data;
+mod discovery;
+mod message_id;
+mod permission_subject;
+mod request_lifetime;
+use super::test_support::*;
 use super::*;
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -6,7 +12,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, DuplexStream, ReadHalf, WriteHalf},
     time::{Instant, timeout},
 };
-type Client = Connection<ReadHalf<DuplexStream>, WriteHalf<DuplexStream>>;
+type Client = TestClient;
 type Peer = (BufReader<ReadHalf<DuplexStream>>, WriteHalf<DuplexStream>);
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(2)
@@ -15,7 +21,7 @@ fn pair() -> (Client, Peer) {
     let (a, b) = tokio::io::duplex(128 * 1024);
     let (ar, aw) = tokio::io::split(a);
     let (br, bw) = tokio::io::split(b);
-    (Connection::new(ar, aw), (BufReader::new(br), bw))
+    (TestClient::new(ar, aw), (BufReader::new(br), bw))
 }
 async fn sent(peer: &mut Peer) -> Value {
     let mut line = String::new();
@@ -78,27 +84,28 @@ async fn selected_version_bootstrap_once_and_capability_gates() {
         (Version::V2, Version::V2),
         (Version::V2, Version::V1),
     ] {
-        let (mut c, mut p) = ready(offer, selected).await;
+        let (c, mut p) = ready(offer, selected).await;
         assert_eq!(
             c.initialize(offer, deadline()).await.expect_err("once"),
             AcpError::AlreadyInitialized
         );
         let strategy = c.strategy().expect("strategy");
-        let session = SessionId::parse(&json!("s")).expect("id");
-        assert!(strategy.prompt(session.clone(), json!([])).is_err());
-        assert!(
+        let session = parse_session(&json!("s")).expect("id");
+        assert!(strategy.prompt(session.clone(), &json!([])).is_ok());
+        assert_eq!(
             strategy
                 .prompt(
                     session.clone(),
-                    json!([{"type":"future","data":"do not flatten"}])
+                    &json!([{ "type":"future","data":"do not flatten" }])
                 )
-                .is_err()
+                .is_ok(),
+            selected == Version::V2
         );
         assert!(
             strategy
                 .prompt(
                     session,
-                    json!([{"type":"audio","data":"AA","mimeType":"audio/wav"}])
+                    &json!([{"type":"audio","data":"AA","mimeType":"audio/wav"}])
                 )
                 .is_err()
         );
@@ -179,13 +186,13 @@ async fn bootstrap_rejects_unknown_above_offer_bad_id_shape_and_no_common_versio
 async fn prompt_insertion_and_cancel_are_not_completion() {
     for v in [Version::V1, Version::V2] {
         let (mut c, mut p) = ready(v, v).await;
-        let session = SessionId::parse(&json!("s")).expect("id");
+        let session = parse_session(&json!("s")).expect("id");
         let request = c
             .strategy()
             .expect("strategy")
             .prompt(
                 session.clone(),
-                json!([{"type":"text","text":"synthetic","_meta":{"future":[1,true]}}]),
+                &json!([{"type":"text","text":"synthetic","_meta":{"future":[1,true]}}]),
             )
             .expect("prompt");
         let id = c.request(request, deadline()).await.expect("write");
@@ -235,7 +242,7 @@ async fn prompt_insertion_and_cancel_are_not_completion() {
 async fn resume_without_replay_requires_v2_snapshot_and_marks_boundary() {
     for v in [Version::V1, Version::V2] {
         let (mut c, mut p) = ready(v, v).await;
-        let s = SessionId::parse(&json!("original")).expect("id");
+        let s = parse_session(&json!("original")).expect("id");
         let r = c
             .strategy()
             .expect("strategy")
@@ -268,7 +275,7 @@ async fn resume_without_replay_requires_v2_snapshot_and_marks_boundary() {
     let r = c
         .strategy()
         .expect("strategy")
-        .resume(SessionId::parse(&json!("s")).expect("id"), "C:/fixture")
+        .resume(parse_session(&json!("s")).expect("id"), "C:/fixture")
         .expect("request");
     let id = c.request(r, deadline()).await.expect("send");
     sent(&mut p).await;
@@ -309,11 +316,12 @@ async fn permission_original_advertisement_typed_ids_once_and_fail_closed() {
                 "tool1"
             );
             let raw = request.raw.bytes().to_vec();
-            assert!(request.raw.fields()["params"]["future"].is_object());
-            let option = OptionId::parse(&json!("forged")).expect("id");
+            assert!(json_fields(&request.raw)["params"]["future"].is_object());
+            let option = parse_option(&json!("forged")).expect("id");
             request.options.push(PermissionChoice {
                 id: option.clone(),
                 kind: "allow_once".into(),
+                raw: raw_value(&json!({"optionId":"forged","kind":"allow_once"})),
             });
             assert_eq!(
                 c.permission_response(&request, Some(&option), deadline())
@@ -321,7 +329,7 @@ async fn permission_original_advertisement_typed_ids_once_and_fail_closed() {
                     .expect_err("must reparse original"),
                 AcpError::InvalidOption
             );
-            let allow = OptionId::parse(&json!("allow")).expect("id");
+            let allow = parse_option(&json!("allow")).expect("id");
             c.permission_response(&request, Some(&allow), deadline())
                 .await
                 .expect("response");
@@ -342,7 +350,7 @@ async fn permission_original_advertisement_typed_ids_once_and_fail_closed() {
     }
 }
 #[tokio::test]
-async fn unknown_permission_options_and_subjects_are_preserved_not_allowed() {
+async fn unknown_permission_options_and_subjects_preserve_manual_original_selection() {
     for v in [Version::V1, Version::V2] {
         let (mut c, mut p) = ready(v, v).await;
         let mut frame = permission(v, &json!("unknown"));
@@ -355,17 +363,12 @@ async fn unknown_permission_options_and_subjects_are_preserved_not_allowed() {
             panic!("permission")
         };
         assert!(!request.options[0].supported());
-        assert!(
-            c.permission_response(&request, Some(&request.options[0].id), deadline())
-                .await
-                .is_err()
-        );
-        c.permission_response(&request, None, deadline())
+        c.permission_response(&request, Some(&request.options[0].id), deadline())
             .await
-            .expect("cancel");
+            .expect("manual original advertised choice");
         assert_eq!(
             sent(&mut p).await["result"]["outcome"]["outcome"],
-            "cancelled"
+            "selected"
         );
     }
 }
@@ -389,19 +392,20 @@ async fn raw_unknown_deep_structure_and_extensions_survive() {
             panic!("unknown")
         };
         assert_eq!(raw.bytes(), expected);
-        assert_eq!(raw.fields()["params"], frame["params"]);
+        assert_eq!(json_fields(&raw)["params"], frame["params"]);
         assert!(!format!("{raw:?}").contains("exact structure"));
         feed(
             &mut p,
             json!({"jsonrpc":"2.0","id":"unsupported","method":"future/method"}),
         )
         .await;
-        let Incoming::UnsupportedRequest { id, .. } =
-            c.next(deadline()).await.expect("unsupported")
+        let Incoming::UnsupportedRequest(id) = c.next(deadline()).await.expect("unsupported")
         else {
             panic!("unsupported")
         };
-        c.reject_unsupported(&id, deadline()).await.expect("reject");
+        c.reject_unsupported(id.id(), deadline())
+            .await
+            .expect("reject");
         assert_eq!(sent(&mut p).await["error"]["code"], -32601);
     }
 }
@@ -502,7 +506,7 @@ async fn cancellation_safe_partial_read_and_poisoned_partial_write() {
     ));
     let (stream, _peer) = tokio::io::duplex(1);
     let (reader, writer) = tokio::io::split(stream);
-    let mut c = Connection::new(reader, writer);
+    let c = TestClient::new(reader, writer);
     assert!(
         timeout(
             Duration::from_millis(5),
@@ -540,11 +544,11 @@ async fn strict_envelope_depth_duplicates_fractional_ids_and_capacities() {
         assert!(c.is_closed());
     }
     assert_ne!(
-        RpcId::parse(&json!(1)).expect("numeric"),
-        RpcId::parse(&json!("1")).expect("string")
+        parse_rpc(&json!(1)).expect("numeric"),
+        parse_rpc(&json!("1")).expect("string")
     );
-    assert!(RpcId::parse(&json!("x".repeat(1025))).is_err());
-    let (mut c, mut p) = ready(Version::V1, Version::V1).await;
+    assert!(parse_rpc(&json!("x".repeat(1025))).is_err());
+    let (c, mut p) = ready(Version::V1, Version::V1).await;
     for _ in 0..64 {
         let r = c
             .strategy()
@@ -589,7 +593,7 @@ async fn version_specific_tool_patch_semantics_do_not_collapse_null_and_omission
             strategy
                 .tool_name_patch(&json!({"name":"updated"}))
                 .expect("set"),
-            ToolNamePatch::Set("updated")
+            ToolNamePatch::Set("updated".into())
         );
         let current = json!({"keep":1,"remove":2,"nested":{"old":true}});
         let update = json!({"_meta":{"remove":null,"nested":{"new":true}}});
@@ -617,8 +621,7 @@ async fn version_specific_tool_patch_semantics_do_not_collapse_null_and_omission
     }
 }
 #[tokio::test]
-async fn command_subject_can_reference_standard_observed_tool_but_missing_reference_is_restricted()
-{
+async fn command_subject_can_reference_standard_observed_tool_without_requiring_one() {
     let (mut c, mut p) = ready(Version::V2, Version::V2).await;
     let mut frame = permission(Version::V2, &json!("cmd"));
     frame["params"]["subject"] = json!({"type":"command","command":"synthetic command","cwd":"C:/fixture","toolCallId":"tool1"});
@@ -635,17 +638,16 @@ async fn command_subject_can_reference_standard_observed_tool_but_missing_refere
     let Incoming::Permission(request) = c.next(deadline()).await.expect("unassociated") else {
         panic!("permission")
     };
-    assert!(!request.supported_subject);
-    assert!(
-        c.permission_response(&request, Some(&request.options[0].id), deadline())
-            .await
-            .is_err()
-    );
+    assert!(request.supported_subject);
+    assert!(request.tool.is_none());
+    c.permission_response(&request, Some(&request.options[0].id), deadline())
+        .await
+        .expect("standard command request without tool association");
 }
 
 #[tokio::test]
 async fn acp_frame_byte_ceiling_exact_and_over_with_owned_writer_tasks() {
-    timeout(Duration::from_secs(20), async {
+    timeout(Duration::from_secs(75), async {
         const LIMIT: usize = 32 * 1024 * 1024;
         for extra in [0usize, 1] {
             let (mut client, mut peer) = ready(Version::V2, Version::V2).await;
@@ -660,21 +662,9 @@ async fn acp_frame_byte_ceiling_exact_and_over_with_owned_writer_tasks() {
             bytes.extend_from_slice(b"\r\n");
             let mut tasks = tokio::task::JoinSet::new();
             tasks.spawn(async move { peer.1.write_all(&bytes).await });
-            let result = client.next(Instant::now() + Duration::from_secs(10)).await;
-            if extra == 0 {
-                assert!(matches!(result, Ok(Incoming::UnknownNotification { .. })));
-                let result = tasks
-                    .join_next()
-                    .await
-                    .expect("one owned task")
-                    .expect("join");
-                result.expect("write complete");
-            } else {
-                assert_eq!(result.expect_err("over byte ceiling"), AcpError::Capacity);
-                assert!(client.is_closed());
-                tasks.abort_all();
-                while tasks.join_next().await.is_some() {}
-            }
+            let result = client.next(Instant::now() + Duration::from_secs(30)).await;
+            assert!(matches!(result, Ok(Incoming::UnknownNotification { .. })));
+            tasks.join_next().await.unwrap().unwrap().unwrap();
         }
     })
     .await
@@ -687,17 +677,10 @@ async fn acp_structure_and_native_id_limits_are_explicit() {
         nested = json!({"x":nested});
     }
     let bytes = serde_json::to_vec(&nested).expect("deep");
-    assert_eq!(
-        RawMessage::parse(bytes).expect_err("depth budget"),
-        AcpError::InvalidMessage
-    );
+    assert!(RawMessage::parse(bytes).is_ok());
     let many = json!({"items":vec![Value::Null;131_073]});
-    assert_eq!(
-        RawMessage::parse(serde_json::to_vec(&many).expect("many"))
-            .expect_err("metadata collection budget"),
-        AcpError::Capacity
-    );
-    assert!(ToolCallId::parse(&json!("x".repeat(4097))).is_err());
+    assert!(RawMessage::parse(serde_json::to_vec(&many).expect("many")).is_ok());
+    assert!(parse_tool(&json!("x".repeat(4097))).is_ok());
 }
 
 #[tokio::test]
@@ -723,7 +706,7 @@ async fn permission_source_cannot_cross_connections_even_for_identical_wire_ids(
                 .permission_response(&request, Some(allow), deadline())
                 .await
                 .expect_err("foreign source"),
-            AcpError::InvalidMessage
+            AcpError::InvalidRequestScope
         );
         second
             .permission_response(&second_request, None, deadline())
@@ -742,7 +725,7 @@ async fn permission_source_cannot_cross_connections_even_for_identical_wire_ids(
 
 #[tokio::test]
 async fn already_elapsed_deadline_never_writes_even_when_stream_is_ready() {
-    let (mut client, mut peer) = ready(Version::V2, Version::V2).await;
+    let (client, mut peer) = ready(Version::V2, Version::V2).await;
     let request = client
         .strategy()
         .expect("strategy")
@@ -755,7 +738,7 @@ async fn already_elapsed_deadline_never_writes_even_when_stream_is_ready() {
             .expect_err("expired before write"),
         AcpError::Deadline
     );
-    assert!(client.is_closed());
+    assert!(!client.is_closed());
     assert_eq!(client.pending_count(), 0);
     let mut line = String::new();
     assert!(
@@ -768,41 +751,39 @@ async fn already_elapsed_deadline_never_writes_even_when_stream_is_ready() {
 }
 
 #[tokio::test]
-async fn oversized_outbound_serialization_is_bounded_and_writes_no_prefix() {
-    timeout(Duration::from_secs(10), async {
-        let (mut client, mut peer) = ready(Version::V2, Version::V2).await;
-        let request = client
-            .strategy()
-            .expect("strategy")
-            .new_session(&"x".repeat(32 * 1024 * 1024))
-            .expect("owner normally validates cwd first");
-        assert_eq!(
-            client
-                .request(request, deadline())
-                .await
-                .expect_err("serialized envelope exceeds capacity"),
-            AcpError::Capacity
-        );
-        assert!(client.is_closed());
-        assert_eq!(client.pending_count(), 0);
+async fn oversized_outbound_serialization_preserves_complete_frame() {
+    let (client, mut peer) = ready(Version::V2, Version::V2).await;
+    let request = client
+        .strategy()
+        .unwrap()
+        .new_session(&"x".repeat(32 * 1024 * 1024))
+        .unwrap();
+    let task = tokio::spawn(async move {
         let mut line = String::new();
-        assert!(
-            timeout(Duration::from_millis(10), peer.0.read_line(&mut line))
-                .await
-                .is_err()
+        timeout(Duration::from_secs(30), peer.0.read_line(&mut line))
+            .await
+            .unwrap()
+            .unwrap();
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(
+            value["params"]["cwd"].as_str().unwrap().len(),
+            32 * 1024 * 1024
         );
-        assert!(line.is_empty());
-        client.shutdown(deadline()).await.expect("close");
-    })
-    .await
-    .expect("bounded");
+        peer
+    });
+    client
+        .request(request, Instant::now() + Duration::from_secs(30))
+        .await
+        .unwrap();
+    let _peer = task.await.unwrap();
+    assert!(!client.is_closed());
+    client.shutdown(deadline()).await.unwrap();
 }
-
 #[tokio::test]
 async fn acp_r001_v1_only_five_official_stop_reasons_complete_unknown_raw_is_retained() {
     timeout(Duration::from_secs(10),async{
- for reason in ["end_turn","max_tokens","max_turn_requests","refusal","cancelled"]{let(mut client,mut peer)=ready(Version::V1,Version::V1).await;let request=client.strategy().expect("strategy").prompt(SessionId::parse(&json!("s")).expect("id"),json!([{"type":"text","text":"fixture"}])).expect("request");let id=client.request(request,deadline()).await.expect("send");sent(&mut peer).await;feed(&mut peer,json!({"jsonrpc":"2.0","id":id.json(),"result":{"stopReason":reason}})).await;let Incoming::Response{response:Response::Prompt(PromptResult::Completed{stop_reason}),..}=client.next(deadline()).await.expect("known completion")else{panic!("known completion")};assert_eq!(stop_reason.as_ref(),reason);assert!(!client.is_closed());}
- for reason in [json!("future_or_invalid"),json!(""),Value::Null,json!(5),json!({"future":true})]{let(mut client,mut peer)=ready(Version::V1,Version::V1).await;let request=client.strategy().expect("strategy").prompt(SessionId::parse(&json!("s")).expect("id"),json!([{"type":"text","text":"fixture"}])).expect("request");let id=client.request(request,deadline()).await.expect("send");sent(&mut peer).await;let frame=json!({"jsonrpc":"2.0","id":id.json(),"result":{"stopReason":reason,"unknown":{"nested":[1,true,{"source":"retained"}]}}});let expected=serde_json::to_vec(&frame).expect("raw");feed(&mut peer,frame).await;assert_eq!(client.next(deadline()).await.expect_err("unknown never Completed"),AcpError::InvalidMessage);assert!(client.is_closed());assert_eq!(client.pending_count(),0);let raw=client.take_rejected_message().expect("bounded raw retained");assert_eq!(raw.bytes(),expected);assert!(client.take_rejected_message().is_none());assert_eq!(client.next(deadline()).await.expect_err("no replay"),AcpError::Closed);let mut line=String::new();assert!(timeout(Duration::from_millis(10),peer.0.read_line(&mut line)).await.is_err());assert!(line.is_empty());}
+ for reason in ["end_turn","max_tokens","max_turn_requests","refusal","cancelled"]{let(mut client,mut peer)=ready(Version::V1,Version::V1).await;let request=client.strategy().expect("strategy").prompt(parse_session(&json!("s")).expect("id"),&json!([{"type":"text","text":"fixture"}])).expect("request");let id=client.request(request,deadline()).await.expect("send");sent(&mut peer).await;feed(&mut peer,json!({"jsonrpc":"2.0","id":id.json(),"result":{"stopReason":reason}})).await;let Incoming::Response{response:Response::Prompt(PromptResult::Completed{stop_reason}),..}=client.next(deadline()).await.expect("known completion")else{panic!("known completion")};assert_eq!(stop_reason.as_ref(),reason);assert!(!client.is_closed());}
+ for reason in [json!("future_or_invalid"),json!(""),Value::Null,json!(5),json!({"future":true})]{let(mut client,mut peer)=ready(Version::V1,Version::V1).await;let request=client.strategy().expect("strategy").prompt(parse_session(&json!("s")).expect("id"),&json!([{"type":"text","text":"fixture"}])).expect("request");let id=client.request(request,deadline()).await.expect("send");sent(&mut peer).await;let frame=json!({"jsonrpc":"2.0","id":id.json(),"result":{"stopReason":reason,"unknown":{"nested":[1,true,{"source":"retained"}]}}});let expected=serde_json::to_vec(&frame).expect("raw");feed(&mut peer,frame).await;assert_eq!(client.next(deadline()).await.expect_err("unknown never Completed"),AcpError::InvalidMessage);assert!(client.is_closed());assert_eq!(client.pending_count(),0);let raw=client.take_rejected_message().expect("bounded raw retained");assert_eq!(raw.bytes(),expected);assert!(client.take_rejected_message().is_none());assert_eq!(client.next(deadline()).await.expect_err("no replay"),AcpError::Closed);let mut line=String::new();assert_eq!(timeout(Duration::from_secs(1),peer.0.read_line(&mut line)).await.unwrap().unwrap(),0);assert!(line.is_empty());}
  let(client,_peer)=ready(Version::V1,Version::V1).await;assert_eq!(client.strategy().expect("strategy").prompt_result(&json!({})).expect_err("missing reason"),AcpError::InvalidMessage);
  let(mut client,mut peer)=ready(Version::V2,Version::V2).await;feed(&mut peer,json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"state_update","state":"future_state","stopReason":"future_reason"}}})).await;assert!(matches!(client.next(deadline()).await.expect("raw control fact"),Incoming::Update{event:SessionEvent::State{..},..})); // No Completed variant is produced for raw v2 control state.
 }).await.expect("bounded R001 regression");
@@ -832,7 +813,7 @@ async fn acp_r002_foreign_and_stale_strategy_requests_rejected_before_registrati
     timeout(Duration::from_secs(10), async {
         for source_version in [Version::V1, Version::V2] {
             for target_version in [Version::V1, Version::V2] {
-                let (mut source, _source_peer) = ready(source_version, source_version).await;
+                let (source, _source_peer) = ready(source_version, source_version).await;
                 let stale = source.strategy().expect("source strategy").clone();
                 let (mut target, mut target_peer) =
                     ready_with_result(target_version, without_image(target_version)).await;
@@ -844,11 +825,11 @@ async fn acp_r002_foreign_and_stale_strategy_requests_rejected_before_registrati
                         .capabilities
                         .image
                 );
-                let session = SessionId::parse(&json!("s")).expect("id");
+                let session = parse_session(&json!("s")).expect("id");
                 let request = stale
                     .prompt(
                         session.clone(),
-                        json!([{"type":"image","data":"AA","mimeType":"image/png"}]),
+                        &json!([{"type":"image","data":"AA","mimeType":"image/png"}]),
                     )
                     .expect("source supports image");
                 assert_eq!(

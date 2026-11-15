@@ -1,0 +1,14 @@
+{
+  "kind": "Independent limited Trust original-connection retention coding gate",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-cleanup-trust-retention-abi-coding-gate-2026-11-03",
+  "freeze": "ddcdd85ed8b3f4229063a1fba0dac5730675fdc6cfaab630a68b8d4d8fe6fbfb",
+  "membersVerified": 2,
+  "decision": "Pass-limited coding only",
+  "maximumIdle": 1,
+  "physicalReceiptMustSurviveReuse": true,
+  "idleCycleMustBeSealedExplicitly": true,
+  "revokeIdempotentOpenTransactionMustNotRetain": true,
+  "CLDB_ACQUIRE_PERF001": "Open",
+  "CLDB_DESIGN_REV001": "Open",
+  "rootInstalled": false
+}

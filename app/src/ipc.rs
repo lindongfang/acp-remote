@@ -1,3 +1,9 @@
+#![allow(
+    clippy::struct_field_names,
+    clippy::too_many_lines,
+    dead_code,
+    reason = "Preserves existing module structure and intentional scaffolding"
+)]
 use std::{
     ffi::OsStr,
     io,
@@ -19,7 +25,14 @@ use tokio::{
 };
 
 use crate::{
+    application::request_registry::RegistryDeadline,
     claims::Id128,
+    domain::{
+        EntityId,
+        native_catalog::{
+            CatalogError, CatalogFailure, CatalogInventory, ProductTargetRecord, WorkspaceRecord,
+        },
+    },
     error::AppError,
     jws::decode_fixed_base64url,
     pairing::{
@@ -27,6 +40,7 @@ use crate::{
     },
     platform::{create_private_pipe, current_user_sid, verify_named_pipe_owner},
     random,
+    session_storage::SqliteNodeConfiguration,
     trust::{ClientPage, RevokeResult, TrustError, TrustStore},
 };
 
@@ -166,9 +180,46 @@ pub struct IpcControl {
     stop_requested: watch::Sender<bool>,
     shutdown: watch::Sender<ShutdownResult>,
     stop_responses: Arc<AsyncMutex<JoinSet<io::Result<()>>>>,
+    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+    first_revoke_error: Arc<std::sync::OnceLock<RevokeErrorObservation>>,
 }
 
 impl IpcControl {
+    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+    pub(crate) fn first_revoke_error_for_development(&self) -> Option<RevokeErrorObservation> {
+        self.first_revoke_error.get().copied()
+    }
+
+    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+    fn observe_revoke_error(&self, error: &TrustError) {
+        let observed = match error {
+            TrustError::NotFound => RevokeErrorObservation::NotFound,
+            TrustError::InvalidRequest => RevokeErrorObservation::InvalidRequest,
+            TrustError::RequestConflict => RevokeErrorObservation::RequestConflict,
+            TrustError::PublicKeyAlreadyRegistered => {
+                RevokeErrorObservation::PublicKeyAlreadyRegistered
+            }
+            TrustError::ClientIdCollision => RevokeErrorObservation::ClientIdCollision,
+            TrustError::StaleCursor => RevokeErrorObservation::StaleCursor,
+            TrustError::StorageUnavailable => RevokeErrorObservation::StorageUnavailable,
+            TrustError::CapacityExhausted => RevokeErrorObservation::CapacityExhausted,
+            TrustError::Storage(_) => RevokeErrorObservation::Storage,
+            TrustError::Database(error) => match error {
+                sqlx::Error::PoolClosed => RevokeErrorObservation::PoolClosed,
+                sqlx::Error::PoolTimedOut => RevokeErrorObservation::PoolTimedOut,
+                sqlx::Error::Io(_) => RevokeErrorObservation::DatabaseIo,
+                sqlx::Error::Database(database) => match database.code().as_deref() {
+                    Some("5") => RevokeErrorObservation::SqliteBusy,
+                    Some("517") => RevokeErrorObservation::SqliteBusySnapshot,
+                    Some("6") => RevokeErrorObservation::SqliteLocked,
+                    _ => RevokeErrorObservation::DatabaseOtherCode,
+                },
+                _ => RevokeErrorObservation::DatabaseOther,
+            },
+        };
+        let _ = self.first_revoke_error.set(observed);
+    }
+
     #[must_use]
     pub fn new(node_id: String, origin: String) -> (Self, watch::Receiver<bool>) {
         let (stop_requested, stop_rx) = watch::channel(false);
@@ -182,6 +233,8 @@ impl IpcControl {
                 stop_requested,
                 shutdown,
                 stop_responses: Arc::new(AsyncMutex::new(JoinSet::new())),
+                #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+                first_revoke_error: Arc::new(std::sync::OnceLock::new()),
             },
             stop_rx,
         )
@@ -231,13 +284,22 @@ impl IpcControl {
     }
 
     pub fn complete(&self, result: ShutdownResult) {
-        let phase = match result {
+        let phase = match &result {
             ShutdownResult::Completed => NodePhase::Stopped,
             ShutdownResult::Failed(_) => NodePhase::Failed,
             ShutdownResult::Pending => NodePhase::Stopping,
         };
-        self.phase.store(phase.as_u8(), Ordering::Release);
-        self.shutdown.send_replace(result);
+        self.shutdown.send_if_modified(|published| {
+            if !matches!(published, ShutdownResult::Pending) {
+                return false;
+            }
+            self.phase.store(phase.as_u8(), Ordering::Release);
+            if matches!(&result, ShutdownResult::Pending) {
+                return false;
+            }
+            *published = result;
+            true
+        });
     }
 
     #[must_use]
@@ -322,19 +384,107 @@ pub async fn serve(
     trust: TrustStore,
     pairing: Arc<PairingService>,
 ) -> Result<(), AppError> {
+    serve_with_catalog(first_instance, address, control, trust, pairing, None).await
+}
+
+/// Runs the owner-only local control channel with access to node catalog configuration until shutdown completes.
+///
+/// # Errors
+///
+/// Returns an error when the next pipe instance cannot be created or a connection task terminates
+/// unexpectedly.
+pub async fn serve_with_catalog(
+    first_instance: NamedPipeServer,
+    address: LocalIpcAddress,
+    control: IpcControl,
+    trust: TrustStore,
+    pairing: Arc<PairingService>,
+    catalog: Option<Arc<SqliteNodeConfiguration>>,
+) -> Result<(), AppError> {
+    serve_inner(
+        first_instance,
+        address,
+        control,
+        trust,
+        pairing,
+        catalog,
+        #[cfg(test)]
+        None,
+    )
+    .await
+}
+#[cfg(test)]
+pub(crate) struct IpcDevelopmentHooks {
+    pub(crate) child: Arc<crate::test_support::AsyncBarrier>,
+    pub(crate) accept_error_after_first: bool,
+}
+#[cfg(test)]
+pub(crate) async fn serve_development(
+    first_instance: NamedPipeServer,
+    address: LocalIpcAddress,
+    control: IpcControl,
+    trust: TrustStore,
+    pairing: Arc<PairingService>,
+    hooks: Option<Arc<IpcDevelopmentHooks>>,
+) -> Result<(), AppError> {
+    serve_inner(
+        first_instance,
+        address,
+        control,
+        trust,
+        pairing,
+        None,
+        hooks,
+    )
+    .await
+}
+#[cfg(test)]
+pub(crate) async fn serve_development_with_catalog(
+    first_instance: NamedPipeServer,
+    address: LocalIpcAddress,
+    control: IpcControl,
+    trust: TrustStore,
+    pairing: Arc<PairingService>,
+    catalog: Option<Arc<SqliteNodeConfiguration>>,
+    hooks: Option<Arc<IpcDevelopmentHooks>>,
+) -> Result<(), AppError> {
+    serve_inner(
+        first_instance,
+        address,
+        control,
+        trust,
+        pairing,
+        catalog,
+        hooks,
+    )
+    .await
+}
+async fn serve_inner(
+    first_instance: NamedPipeServer,
+    address: LocalIpcAddress,
+    control: IpcControl,
+    trust: TrustStore,
+    pairing: Arc<PairingService>,
+    catalog: Option<Arc<SqliteNodeConfiguration>>,
+    #[cfg(test)] hooks: Option<Arc<IpcDevelopmentHooks>>,
+) -> Result<(), AppError> {
     let semaphore = Arc::new(Semaphore::new(MAX_IPC_CONNECTIONS));
     let mut shutdown = control.shutdown_receiver();
     let mut stop = control.stop_receiver();
     let mut server = Some(first_instance);
     let mut connections = JoinSet::new();
 
-    loop {
+    let mut failure = None;
+    'accepting: loop {
         if *stop.borrow() || !matches!(*shutdown.borrow(), ShutdownResult::Pending) {
             break;
         }
-        let current = server.take().ok_or_else(|| {
-            AppError::Ipc("owner control channel lost its listening instance".to_owned())
-        })?;
+        let Some(current) = server.take() else {
+            failure = Some(AppError::Ipc(
+                "owner control channel lost its listening instance".to_owned(),
+            ));
+            break;
+        };
         tokio::select! {
             changed = stop.changed() => {
                 if changed.is_err() || *stop.borrow() {
@@ -350,33 +500,53 @@ pub async fn serve(
             }
             connected = current.connect() => {
                 if let Err(error) = connected {
-                    return Err(AppError::Ipc(format!(
-                        "accepting an owner control connection failed: {error}"
-                    )));
+                    failure = Some(AppError::Ipc(format!("accepting an owner control connection failed: {error}")));
+                    break;
                 }
                 let Ok(permit) = semaphore.clone().try_acquire_owned() else {
                     // Release the over-budget server before reserving the next listener.
                     drop(current);
-                    server = bind_next_available(&address, &control).await?;
+                    server = match bind_next_available(&address, &control).await {
+                        Ok(server) => server, Err(error) => { failure = Some(error); break 'accepting; }
+                    };
                     if server.is_none() { break; }
                     continue;
                 };
-                let Some(next) = bind_next_available(&address, &control).await? else { break; };
+                let Some(next) = (match bind_next_available(&address, &control).await {
+                    Ok(server) => server, Err(error) => { failure = Some(error); break 'accepting; }
+                }) else { break; };
                 server = Some(next);
                 let address = address.clone();
                 let control = control.clone();
                 let trust = trust.clone();
                 let pairing = pairing.clone();
+                let catalog = catalog.clone();
+                #[cfg(test)]
+                let child_hooks = hooks.clone();
                 connections.spawn(async move {
                     let _permit = permit;
-                    handle_connection(current, &address, &control, &trust, &pairing).await;
+                    #[cfg(test)]
+                    if let Some(hooks) = child_hooks { hooks.child.pause().await; }
+                    handle_connection(
+                        current,
+                        &address,
+                        &control,
+                        &trust,
+                        &pairing,
+                        catalog.as_deref(),
+                    )
+                    .await;
                 });
+                #[cfg(test)]
+                if hooks.as_ref().is_some_and(|hooks| hooks.accept_error_after_first) {
+                    failure = Some(AppError::Ipc("development injected IPC accept failure".into()));
+                    break;
+                }
             }
             joined = connections.join_next(), if !connections.is_empty() => {
                 if let Some(Err(error)) = joined {
-                    return Err(AppError::Ipc(format!(
-                        "owner control connection task failed: {error}"
-                    )));
+                    failure = Some(AppError::Ipc(format!("owner control connection task failed: {error}")));
+                    break;
                 }
                 server = Some(current);
             }
@@ -384,17 +554,30 @@ pub async fn serve(
     }
 
     drop(server);
-    while let Some(joined) = timeout(Duration::from_secs(2), connections.join_next())
-        .await
-        .map_err(|_| AppError::Ipc("owner control handlers did not stop in time".to_owned()))?
-    {
-        if let Err(error) = joined {
-            return Err(AppError::Ipc(format!(
-                "owner control connection task failed: {error}"
-            )));
+    while !connections.is_empty() {
+        match timeout(Duration::from_secs(2), connections.join_next()).await {
+            Ok(Some(Ok(())) | None) => {}
+            Ok(Some(Err(error))) => {
+                if failure.is_none() {
+                    failure = Some(AppError::Ipc(format!(
+                        "owner control connection task failed: {error}"
+                    )));
+                }
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
+            }
+            Err(_) => {
+                if failure.is_none() {
+                    failure = Some(AppError::Ipc(
+                        "owner control handlers did not stop in time".into(),
+                    ));
+                }
+                connections.abort_all();
+                while connections.join_next().await.is_some() {}
+            }
         }
     }
-    Ok(())
+    failure.map_or(Ok(()), Err)
 }
 
 async fn bind_next_available(
@@ -432,6 +615,7 @@ async fn handle_connection(
     control: &IpcControl,
     trust: &TrustStore,
     pairing: &Arc<PairingService>,
+    catalog: Option<&SqliteNodeConfiguration>,
 ) {
     if address.verify_peer(&pipe).is_err() {
         return;
@@ -454,7 +638,7 @@ async fn handle_connection(
         control.spawn_stop_response(pipe, request.request_id).await;
         return;
     } else {
-        let response = process_request(request, control, trust).await;
+        let response = process_request(request, control, trust, catalog).await;
         write_response(&mut pipe, response).await
     };
     let _ = result;
@@ -464,6 +648,7 @@ async fn process_request(
     request: IpcRequest,
     control: &IpcControl,
     trust: &TrustStore,
+    catalog: Option<&SqliteNodeConfiguration>,
 ) -> IpcResponse {
     if request.v != 1 || !is_request_id(&request.request_id) {
         return IpcResponse::error(request.request_id, "invalid_request");
@@ -511,7 +696,91 @@ async fn process_request(
                     serde_json::to_value(result)
                         .map_err(|_| AppError::Ipc("cannot encode the revoke result".to_owned())),
                 ),
-                Err(error) => IpcResponse::error(request.request_id, trust_error_code(&error)),
+                Err(error) => {
+                    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+                    control.observe_revoke_error(&error);
+                    IpcResponse::error(request.request_id, trust_error_code(&error))
+                }
+            }
+        }
+        "workspace.register" => {
+            if !control.is_ready() {
+                return IpcResponse::error(request.request_id, "node_stopping");
+            }
+            let Some(catalog) = catalog else {
+                return IpcResponse::error(request.request_id, "product_not_ready");
+            };
+            let payload: WorkspaceRegisterRequest = match serde_json::from_value(
+                request.payload.unwrap_or_else(|| serde_json::json!({})),
+            ) {
+                Ok(payload) => payload,
+                Err(_) => return IpcResponse::error(request.request_id, "invalid_request"),
+            };
+            let deadline = RegistryDeadline::new(TokioInstant::now() + IPC_REQUEST_TIMEOUT);
+            match catalog
+                .register_workspace_owner(&payload.path, &deadline)
+                .await
+            {
+                Ok(record) => IpcResponse::result(
+                    request.request_id,
+                    serde_json::to_value(workspace_ipc_record(&record)).map_err(|_| {
+                        AppError::Ipc("cannot encode the workspace record".to_owned())
+                    }),
+                ),
+                Err(error) => IpcResponse::error(request.request_id, catalog_failure_code(&error)),
+            }
+        }
+        "target.register" => {
+            if !control.is_ready() {
+                return IpcResponse::error(request.request_id, "node_stopping");
+            }
+            let Some(catalog) = catalog else {
+                return IpcResponse::error(request.request_id, "product_not_ready");
+            };
+            let payload: TargetRegisterRequest = match serde_json::from_value(
+                request.payload.unwrap_or_else(|| serde_json::json!({})),
+            ) {
+                Ok(payload) => payload,
+                Err(_) => return IpcResponse::error(request.request_id, "invalid_request"),
+            };
+            let Ok(source) = EntityId::decode(&payload.source_id) else {
+                return IpcResponse::error(request.request_id, "invalid_source");
+            };
+            let Ok(workspace) = EntityId::decode(&payload.workspace_id) else {
+                return IpcResponse::error(request.request_id, "invalid_configuration");
+            };
+            let deadline = RegistryDeadline::new(TokioInstant::now() + IPC_REQUEST_TIMEOUT);
+            match catalog
+                .register_target_owner(source, &payload.native_session_id, workspace, &deadline)
+                .await
+            {
+                Ok(record) => IpcResponse::result(
+                    request.request_id,
+                    serde_json::to_value(product_target_ipc_record(&record))
+                        .map_err(|_| AppError::Ipc("cannot encode the target record".to_owned())),
+                ),
+                Err(error) => IpcResponse::error(request.request_id, catalog_failure_code(&error)),
+            }
+        }
+        "catalog.inventory" => {
+            if !control.is_ready() {
+                return IpcResponse::error(request.request_id, "node_stopping");
+            }
+            if !is_empty_pair_request(request.payload.as_ref()) {
+                return IpcResponse::error(request.request_id, "invalid_request");
+            }
+            let Some(catalog) = catalog else {
+                return IpcResponse::error(request.request_id, "product_not_ready");
+            };
+            let deadline = RegistryDeadline::new(TokioInstant::now() + IPC_REQUEST_TIMEOUT);
+            match catalog.catalog_inventory_owner(&deadline).await {
+                Ok(inventory) => IpcResponse::result(
+                    request.request_id,
+                    serde_json::to_value(catalog_inventory_ipc(&inventory)).map_err(|_| {
+                        AppError::Ipc("cannot encode the catalog inventory".to_owned())
+                    }),
+                ),
+                Err(error) => IpcResponse::error(request.request_id, catalog_failure_code(&error)),
             }
         }
         _ => IpcResponse::error(request.request_id, "invalid_request"),
@@ -786,6 +1055,111 @@ pub async fn device_revoke(
     let payload = serde_json::json!({ "clientId": client_id });
     let response = request(address, "device.revoke", Some(payload)).await?;
     response.into_result("revoke result")
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkspaceIpcRecord {
+    pub workspace_id: String,
+    pub canonical_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct SourceIpcSummary {
+    pub source_id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct HarnessIpcSummary {
+    pub harness_id: String,
+    pub name: String,
+    pub source_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProfileIpcSummary {
+    pub profile_id: String,
+    pub revision: String,
+    pub harness_id: String,
+    pub source_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct TargetBindingIpcSummary {
+    pub profile_id: String,
+    pub profile_revision: String,
+    pub workspace_id: String,
+    pub launch_path: String,
+    pub observed_canonical_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct ProductTargetIpcRecord {
+    pub target_id: String,
+    pub source_id: String,
+    pub native_session_id: String,
+    pub workspace_id: Option<String>,
+    pub binding: Option<TargetBindingIpcSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct CatalogInventoryIpc {
+    pub workspaces: Vec<WorkspaceIpcRecord>,
+    pub sources: Vec<SourceIpcSummary>,
+    pub harnesses: Vec<HarnessIpcSummary>,
+    pub profiles: Vec<ProfileIpcSummary>,
+    pub targets: Vec<ProductTargetIpcRecord>,
+}
+
+/// Registers an existing absolute directory on disk as a workspace through the owner-only local channel.
+///
+/// # Errors
+///
+/// Returns an error when the node is unavailable, the directory is invalid, or the workspace cannot be committed.
+pub async fn workspace_register(
+    address: &LocalIpcAddress,
+    path: &str,
+) -> Result<WorkspaceIpcRecord, AppError> {
+    let payload = serde_json::json!({ "path": path });
+    let response = request(address, "workspace.register", Some(payload)).await?;
+    response.into_result("workspace record")
+}
+
+/// Registers a product target for an existing source and workspace through the owner-only local channel.
+///
+/// # Errors
+///
+/// Returns an error when the node is unavailable, source/workspace is invalid, or the target conflicts.
+pub async fn target_register(
+    address: &LocalIpcAddress,
+    source_id: &str,
+    native_session_id: &str,
+    workspace_id: &str,
+) -> Result<ProductTargetIpcRecord, AppError> {
+    let payload = serde_json::json!({
+        "sourceId": source_id,
+        "nativeSessionId": native_session_id,
+        "workspaceId": workspace_id,
+    });
+    let response = request(address, "target.register", Some(payload)).await?;
+    response.into_result("target record")
+}
+
+/// Reads safe catalog metadata (workspaces, sources, harnesses, profiles, targets) through the owner-only local channel.
+///
+/// # Errors
+///
+/// Returns an error when the node is unavailable or catalog metadata cannot be read.
+pub async fn catalog_inventory(address: &LocalIpcAddress) -> Result<CatalogInventoryIpc, AppError> {
+    let response = request(address, "catalog.inventory", None).await?;
+    response.into_result("catalog inventory")
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1077,6 +1451,105 @@ struct RevokeRequest {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WorkspaceRegisterRequest {
+    path: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct TargetRegisterRequest {
+    source_id: String,
+    native_session_id: String,
+    workspace_id: String,
+}
+
+fn workspace_ipc_record(record: &WorkspaceRecord) -> WorkspaceIpcRecord {
+    WorkspaceIpcRecord {
+        workspace_id: record.workspace_id.encode(),
+        canonical_path: record.canonical_path.clone(),
+    }
+}
+
+fn product_target_ipc_record(record: &ProductTargetRecord) -> ProductTargetIpcRecord {
+    ProductTargetIpcRecord {
+        target_id: record.target_id.encode(),
+        source_id: record.source_id.encode(),
+        native_session_id: record.native_session_id.clone(),
+        workspace_id: record.workspace_id.map(super::domain::EntityId::encode),
+        binding: record.binding.as_ref().map(|b| TargetBindingIpcSummary {
+            profile_id: b.profile_id.encode(),
+            profile_revision: b.profile_revision.to_string(),
+            workspace_id: b.workspace_id.encode(),
+            launch_path: b.launch_path.clone(),
+            observed_canonical_path: b.observed_canonical_path.clone(),
+        }),
+    }
+}
+
+fn catalog_inventory_ipc(inventory: &CatalogInventory) -> CatalogInventoryIpc {
+    CatalogInventoryIpc {
+        workspaces: inventory
+            .workspaces
+            .iter()
+            .map(workspace_ipc_record)
+            .collect(),
+        sources: inventory
+            .sources
+            .iter()
+            .map(|s| SourceIpcSummary {
+                source_id: s.source_id.encode(),
+                name: s.name.clone(),
+            })
+            .collect(),
+        harnesses: inventory
+            .harnesses
+            .iter()
+            .map(|h| HarnessIpcSummary {
+                harness_id: h.harness_id.encode(),
+                name: h.name.clone(),
+                source_id: h.source_id.encode(),
+            })
+            .collect(),
+        profiles: inventory
+            .profiles
+            .iter()
+            .map(|p| ProfileIpcSummary {
+                profile_id: p.profile_id.encode(),
+                revision: p.revision.to_string(),
+                harness_id: p.harness_id.encode(),
+                source_id: p.source_id.encode(),
+            })
+            .collect(),
+        targets: inventory
+            .targets
+            .iter()
+            .map(product_target_ipc_record)
+            .collect(),
+    }
+}
+
+const fn catalog_failure_code(error: &CatalogFailure) -> &'static str {
+    match error.kind() {
+        CatalogError::InvalidActor => "revoked",
+        CatalogError::InvalidSource => "invalid_source",
+        CatalogError::InvalidTarget => "invalid_target",
+        CatalogError::UnknownRequest => "unknown_request",
+        CatalogError::InvalidConfiguration => "invalid_configuration",
+        CatalogError::Conflict => "request_conflict",
+        CatalogError::CorruptState | CatalogError::Cancelled => "read_failed",
+        CatalogError::RandomUnavailable => "random_unavailable",
+        CatalogError::Allocation => "allocation_failed",
+        CatalogError::ProtectionUnavailable => "protection_unavailable",
+        CatalogError::StorageUnavailable => "necessary_storage_unavailable",
+        CatalogError::NodeStopping => "node_stopping",
+        CatalogError::CommitUnconfirmed | CatalogError::SqlCloseUnconfirmed { .. } => {
+            "commit_unconfirmed"
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct PairDecision {
     v: u8,
     request_id: String,
@@ -1090,6 +1563,28 @@ struct PairDecision {
 enum PairDecisionValue {
     Approve,
     Reject,
+}
+
+#[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RevokeErrorObservation {
+    NotFound,
+    InvalidRequest,
+    RequestConflict,
+    PublicKeyAlreadyRegistered,
+    ClientIdCollision,
+    StaleCursor,
+    StorageUnavailable,
+    CapacityExhausted,
+    Storage,
+    PoolClosed,
+    PoolTimedOut,
+    DatabaseIo,
+    SqliteBusy,
+    SqliteBusySnapshot,
+    SqliteLocked,
+    DatabaseOtherCode,
+    DatabaseOther,
 }
 
 const fn trust_error_code(error: &TrustError) -> &'static str {
@@ -1152,6 +1647,112 @@ mod tests {
         ));
         std::fs::create_dir(&path).expect("test directory");
         path
+    }
+
+    #[test]
+    fn terminal_report_preserves_first_failure() {
+        let (control, _) = IpcControl::new("terminal-node".into(), "https://localhost".into());
+        control.complete(ShutdownResult::Failed("close deadline".into()));
+        control.complete(ShutdownResult::Completed);
+        assert_eq!(
+            *control.shutdown_receiver().borrow(),
+            ShutdownResult::Failed("close deadline".into())
+        );
+        assert_eq!(control.status().state, "failed");
+    }
+
+    #[test]
+    fn terminal_report_preserves_first_failure_text() {
+        let (control, _) = IpcControl::new("terminal-node".into(), "https://localhost".into());
+        control.complete(ShutdownResult::Failed("original failure".into()));
+        control.complete(ShutdownResult::Failed("later failure".into()));
+        control.complete(ShutdownResult::Pending);
+        assert_eq!(
+            *control.shutdown_receiver().borrow(),
+            ShutdownResult::Failed("original failure".into())
+        );
+        assert_eq!(control.status().state, "failed");
+    }
+
+    #[test]
+    fn terminal_report_preserves_completed() {
+        let (control, _) = IpcControl::new("terminal-node".into(), "https://localhost".into());
+        control.complete(ShutdownResult::Completed);
+        control.complete(ShutdownResult::Pending);
+        control.complete(ShutdownResult::Failed("late report".into()));
+        assert_eq!(
+            *control.shutdown_receiver().borrow(),
+            ShutdownResult::Completed
+        );
+        assert_eq!(control.status().state, "stopped");
+    }
+
+    #[test]
+    fn terminal_report_pending_progress_can_complete() {
+        let (control, _) = IpcControl::new("terminal-node".into(), "https://localhost".into());
+        control.complete(ShutdownResult::Pending);
+        assert_eq!(
+            *control.shutdown_receiver().borrow(),
+            ShutdownResult::Pending
+        );
+        assert_eq!(control.status().state, "stopping");
+        control.complete(ShutdownResult::Completed);
+        assert_eq!(
+            *control.shutdown_receiver().borrow(),
+            ShutdownResult::Completed
+        );
+        assert_eq!(control.status().state, "stopped");
+    }
+
+    #[test]
+    fn terminal_report_notifies_existing_and_late_subscribers_once() {
+        let (control, _) = IpcControl::new("terminal-node".into(), "https://localhost".into());
+        let mut existing = control.shutdown_receiver();
+        let first = ShutdownResult::Failed("original close timeout".into());
+        control.complete(first.clone());
+        assert!(existing.has_changed().expect("live report sender"));
+        assert_eq!(*existing.borrow_and_update(), first);
+        control.complete(ShutdownResult::Completed);
+        control.complete(ShutdownResult::Pending);
+        assert!(!existing.has_changed().expect("live report sender"));
+        assert_eq!(*control.shutdown_receiver().borrow(), first);
+        assert_eq!(control.status().state, "failed");
+    }
+
+    #[test]
+    fn terminal_report_concurrent_publishers_share_one_terminal() {
+        let (control, _) = IpcControl::new("terminal-node".into(), "https://localhost".into());
+        let ready = Arc::new(std::sync::Barrier::new(3));
+        let completed_control = control.clone();
+        let completed_ready = Arc::clone(&ready);
+        let completed = std::thread::spawn(move || {
+            completed_ready.wait();
+            completed_control.complete(ShutdownResult::Completed);
+        });
+        let failed_control = control.clone();
+        let failed_ready = Arc::clone(&ready);
+        let failed = std::thread::spawn(move || {
+            failed_ready.wait();
+            failed_control.complete(ShutdownResult::Failed("concurrent close timeout".into()));
+        });
+        ready.wait();
+        completed.join().expect("completed publisher joined");
+        failed.join().expect("failed publisher joined");
+        let published = control.shutdown_receiver().borrow().clone();
+        let expected_phase = match &published {
+            ShutdownResult::Completed => "stopped",
+            ShutdownResult::Failed(message) => {
+                assert_eq!(message, "concurrent close timeout");
+                "failed"
+            }
+            ShutdownResult::Pending => panic!("both terminal publishers already joined"),
+        };
+        assert_eq!(control.status().state, expected_phase);
+        control.complete(ShutdownResult::Pending);
+        control.complete(ShutdownResult::Completed);
+        control.complete(ShutdownResult::Failed("replacement".into()));
+        assert_eq!(*control.shutdown_receiver().borrow(), published);
+        assert_eq!(control.status().state, expected_phase);
     }
 
     #[test]

@@ -1,0 +1,45 @@
+{
+  "kind": "Independent extended F first execution receipt",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-configuration-independent-execution-extended-stage3-v1",
+  "freeze": "143c365160bbd7e5b80733365cddf0bcf6283789ddfc50706360d0119618a66e",
+  "membersVerified": 842,
+  "sourceCount": 806,
+  "attempted": 17,
+  "passed": [
+    "F01",
+    "F03",
+    "F06",
+    "F07",
+    "F08",
+    "F09",
+    "F10",
+    "F13",
+    "F15",
+    "F16"
+  ],
+  "failed": {
+    "F02": "Q3-C-F02-OBS001: GateWaitPending not reached",
+    "REV002": "Q3-C-REV002-OBS001: pre-seal observation not reached",
+    "F04": "Q3-C-F-ROLE001: BeforeFinalBegin role None / arm Some(ApplyWrite)",
+    "F14": "Q3-C-F-ROLE001 and later single-poll observation still unverified",
+    "F05": "Q3-C-F05-NS001: TempPragmaView unexpectedly accepted; product fail-closed contract gap Open/P2",
+    "F11": "Q3-C-F-REARM001: second arm Conflict; recovery read not reached",
+    "F12": "Q3-C-F-REARM001: second arm Conflict; recovery read not reached"
+  },
+  "S09": {
+    "total": 51,
+    "completed": 34,
+    "Applied": 28,
+    "ConstraintRejected": 6,
+    "remainingUnreached": 17
+  },
+  "physicalTail": {
+    "ownedNodeLifecycles": 67,
+    "firstDbExclusive": "Pass all67",
+    "firstWalShm": "Absent all67",
+    "wholeDirectoryRemovalProved": false
+  },
+  "sourceUnchanged": true,
+  "fullC46Pass": false,
+  "fullProductPass": false
+}

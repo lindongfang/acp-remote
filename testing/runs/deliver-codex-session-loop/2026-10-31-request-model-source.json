@@ -1,0 +1,70 @@
+﻿[
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\requests.rs",
+        "Hash":  "74373F501D5F012FBCD643218F0AE154235D248BCAF51938DC21A88C24036CB1"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\product_requests.rs",
+        "Hash":  "0E75F0D1DFF02FA25B76F5E2FDAB5C75DD2F38E76EF63115B34E11F150F5F3EA"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\product_requests\\tests.rs",
+        "Hash":  "4D93C1D06AB586C758A452EC8648CFACCB57F42E3882C2024C0707B869349141"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\jws.rs",
+        "Hash":  "E41CF3FCE86B89E519FF4D47C04201C3E29650209D067D363725FEBB5A45A872"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\mod.rs",
+        "Hash":  "283A1C48233D6F30F0F2C667EBC44D0C95EC1514A917EE0511F8B197657596F2"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\adapters\\mod.rs",
+        "Hash":  "ACC0267CAAB5567E9512CB3AB79DB4DDDAF98E0399201173C53ACB076832AC5A"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\domain\\native.rs",
+        "Hash":  "8D01CEF25C7BA12FFD2AFF94CC78FC8BFBE41D604FEAF2312F13FE47CADF9ABD"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\claims.rs",
+        "Hash":  "3975CBFCB2F913F3FD32D11D725BDF587FB9F0B022FF6EAE3B9DC547FAD3059B"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\strict_json.rs",
+        "Hash":  "2256CD608DB0B60A3A9A83306781DCA6258DCD4544955BD8651EDB7BF91653D3"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\src\\identity.rs",
+        "Hash":  "145AFB4815E87532EDC16B5BCCCC77B5C2FAB0C48D72D581246F45C9131EBB2E"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\Cargo.toml",
+        "Hash":  "C48046E404E8D10B036EEC48163295A1386AA2CBE4BAEAFBE479FE823638045D"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\app\\Cargo.lock",
+        "Hash":  "87F27B619281B37015C79CEAE8D95471C8A4DE50F202F4DD8A6D99FA0D27E324"
+    },
+    {
+        "Path":  "D:\\Project\\acp-remote\\openspec\\changes\\deliver-codex-session-loop\\implementation-contract.md",
+        "Hash":  "F174384C25E87784D010E74DF84C399F55B7A433C46B8D914DA8A0026423D47F"
+    },
+    {
+        "Path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-tester\\request-stage-definition.md",
+        "Hash":  "1560D9D0F737B44D8CC418F83F5D65C84751E406A54F986E07E21E128FAD0DF0"
+    },
+    {
+        "Path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-tester\\probe\\Cargo.toml",
+        "Hash":  "C4AA9BA4C23D470BFDD81EBF8E7C02DAA1943BAADC8CF3DE1FEF835C904EA3E5"
+    },
+    {
+        "Path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-tester\\probe\\Cargo.lock",
+        "Hash":  "6B66C7521C0C1C63F927FF4B3D29C50642A8307608F317CBF296B3E043951CAE"
+    },
+    {
+        "Path":  "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-request-tester\\probe\\src\\lib.rs",
+        "Hash":  "DD1B71E90283C47847EF57F3CBC8E7420996A5194743F37DF01F48450C310125"
+    }
+]

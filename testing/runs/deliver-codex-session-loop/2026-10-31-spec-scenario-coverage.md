@@ -1,0 +1,114 @@
+# 逐场景覆盖映射
+
+仅定义映射，不证明已执行或语义充分；独立 reviewer 须逐项复核。
+
+| 增量规格 | Requirement | Scenario | 用例 ID |
+| --- | --- | --- | --- |
+| specs/harness-management/spec.md | 历史重放为基础接入条件 | 对端只有无重放恢复 | CL-047 |
+| specs/harness-management/spec.md | 历史重放为基础接入条件 | 标准重放无需厂商适配 | CL-048、CL-054 |
+| specs/harness-management/spec.md | 历史重放为基础接入条件 | 重连后失去重放能力 | CL-053 |
+| specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 不同厂商使用相同标准能力 | CL-032、CL-048 |
+| specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 两个版本分别接入 | CL-033、CL-034、CL-041 |
+| specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 无共同可用版本 | CL-035 |
+| specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 按规范协商回退 | CL-036、CL-058 |
+| specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 版本规范尚未核实 | CL-037 |
+| specs/harness-management/spec.md | 优先最高共同可用协议 | 双方支持高低多个版本 | CL-058、CL-060 |
+| specs/harness-management/spec.md | 优先最高共同可用协议 | 高版无共同支持时协商低版 | CL-058 |
+| specs/harness-management/spec.md | 优先最高共同可用协议 | 对端合法选择低版但未解释原因 | CL-058 |
+| specs/harness-management/spec.md | 优先最高共同可用协议 | 重连重新优先高版 | CL-059、CL-060 |
+| specs/harness-management/spec.md | 优先最高共同可用协议 | 高版业务失败不降版重试 | CL-059 |
+| specs/harness-management/spec.md | 优先最高共同可用协议 | 更高版本尚未实现 | CL-058 |
+| specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 同一 Harness 协商不同版本 | CL-033、CL-059 |
+| specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 重连后的版本改变 | CL-016、CL-059 |
+| specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 协商后收到不符版本消息 | CL-033、CL-036 |
+| specs/harness-management/spec.md | 调研证据不成为版本绑定表 | 未在原报告出现的程序版本 | CL-038、CL-048 |
+| specs/harness-management/spec.md | 不兼容由用户决策 | 接入缺少必需能力 | CL-040 |
+| specs/harness-management/spec.md | 升级复验与适配分离 | 标准兼容升级 | CL-038 |
+| specs/harness-management/spec.md | 升级复验与适配分离 | 升级造成不兼容 | CL-039 |
+| specs/harness-management/spec.md | 登记可追溯的 Harness | 能力未证实 | CL-005 |
+| specs/harness-management/spec.md | 能力准入与证据状态分开 | 新程序版本无历史报告 | CL-005、CL-048、CL-058 |
+| specs/harness-management/spec.md | 能力准入与证据状态分开 | 声明了未实现能力 | CL-005、CL-048 |
+| specs/harness-management/spec.md | 能力准入与证据状态分开 | 实际行为与声明不符 | CL-039 |
+| specs/harness-management/spec.md | 能力准入与证据状态分开 | 禁止有副作用的自动探测 | CL-048 |
+| specs/harness-management/spec.md | 历史与激活能力独立验证 | 只有恢复能力 | CL-047 |
+| specs/harness-management/spec.md | 会话工作观测与回收能力分别呈现 | 接入可交互但不能自动回收 | CL-069 |
+| specs/harness-management/spec.md | 默认继承节点环境 | 默认继承并显式覆盖 | CL-055、CL-057 |
+| specs/harness-management/spec.md | 实例由节点拥有 | 页面断开 | CL-006 |
+| specs/harness-management/spec.md | 实例由节点拥有 | 共享实例释放 | CL-007 |
+| specs/workspace-registration/spec.md | 目录登记与解析 | 目录失效 | CL-028 |
+| specs/workspace-registration/spec.md | 目录共享不建立目录锁 | 两个会话共享目录 | CL-029 |
+| specs/session-execution/spec.md | 输入受理与防重复 | 断线后重复提交 | CL-017 |
+| specs/session-execution/spec.md | 输入受理与防重复 | 请求身份冲突 | CL-018 |
+| specs/session-execution/spec.md | 请求有效期与去重保留 | 截止时间前后重试 | CL-079 |
+| specs/session-execution/spec.md | 请求有效期与去重保留 | 记录清理后重放旧请求 | CL-080 |
+| specs/session-execution/spec.md | 请求有效期与去重保留 | 有效期结束但工作未收敛 | CL-081 |
+| specs/session-execution/spec.md | 请求有效期与去重保留 | 时钟回退或请求代际失效 | CL-082 |
+| specs/session-execution/spec.md | 同会话前台执行互斥 | 并发输入 | CL-019、CL-056、CL-086 |
+| specs/session-execution/spec.md | 原生工作活动独立于平台输入记录 | Agent 自行开始前台工作 | CL-066、CL-086 |
+| specs/session-execution/spec.md | 原生工作活动独立于平台输入记录 | 前台结束仍有后台活动 | CL-066、CL-067、CL-069、CL-086 |
+| specs/session-execution/spec.md | 取消与异常结果 | 取消未完成 | CL-020、CL-033、CL-086 |
+| specs/session-execution/spec.md | 取消与异常结果 | 派发后异常退出 | CL-021、CL-046 |
+| specs/session-execution/spec.md | 空闲取消与活动前台取消分开 | v2 前台空闲时取消后台审批 | CL-072、CL-086 |
+| specs/session-execution/spec.md | 空闲取消与活动前台取消分开 | 前台空闲但输入尚未确认插入 | CL-073、CL-086 |
+| specs/session-execution/spec.md | 空闲取消与活动前台取消分开 | 取消与自然完成交错 | CL-074、CL-086 |
+| specs/session-execution/spec.md | 管理存储故障时限制危险派发并保持安全控制 | 受理或派发前写入失败 | CL-075 |
+| specs/session-execution/spec.md | 管理存储故障时限制危险派发并保持安全控制 | 原生完成后结果写入失败 | CL-076 |
+| specs/session-execution/spec.md | 管理存储故障时限制危险派发并保持安全控制 | 故障期间安全取消和关闭 | CL-077 |
+| specs/session-execution/spec.md | 异常后重新准入 | 旧执行退出后显式继续 | CL-044、CL-045、CL-046、CL-086 |
+| specs/session-execution/spec.md | 异常后重新准入 | 断线后旧执行仍可能运行 | CL-043、CL-045、CL-046、CL-086 |
+| specs/session-execution/spec.md | 命令记录不成为聊天历史 | 原生派发结果未知 | CL-021、CL-062 |
+| specs/session-execution/spec.md | Windows 与 Web 操作闭环 | 一轮完成 | CL-022、CL-030 |
+| specs/permission-approvals/spec.md | 保留审批语义 | 不支持的请求 | CL-013、CL-034 |
+| specs/permission-approvals/spec.md | 审批事实独立于聊天缓存 | 展示缓存失败时已有审批 | CL-025 |
+| specs/permission-approvals/spec.md | 唯一裁决与交付分离 | 两客户端同时审批 | CL-014 |
+| specs/permission-approvals/spec.md | 唯一裁决与交付分离 | 决定交付失败 | CL-015 |
+| specs/permission-approvals/spec.md | 决定持久化失败不授予权限 | 批准保存失败或提交未知 | CL-078 |
+| specs/permission-approvals/spec.md | 决定持久化失败不授予权限 | 已有允许决定随后协议要求取消 | CL-078 |
+| specs/permission-approvals/spec.md | 决定持久化失败不授予权限 | 已发决定但交付记录失败 | CL-078 |
+| specs/permission-approvals/spec.md | 审批关联真实原生操作上下文 | 加载审批无输入执行 | CL-065、CL-085 |
+| specs/permission-approvals/spec.md | 审批关联真实原生操作上下文 | 上下文失效后交付 | CL-068 |
+| specs/permission-approvals/spec.md | 审批关联真实原生操作上下文 | 无法证明审批归属 | CL-068 |
+| specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 恢复后批准旧请求 | CL-016 |
+| specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 前台结束后后台请求审批 | CL-067、CL-085、CL-086 |
+| specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 前台结束时后台审批仍待处理 | CL-067、CL-085、CL-086 |
+| specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 协议不区分请求的前后台归属 | CL-065、CL-067、CL-068、CL-086 |
+| specs/structured-history/spec.md | 原生会话与历史为权威 | 清除缓存后查看 | CL-027、CL-062 |
+| specs/structured-history/spec.md | 原生会话与历史为权威 | 原生历史压缩或删除 | CL-062 |
+| specs/structured-history/spec.md | 基础原生会话发现与读取 | 外部新建会话 | CL-061、CL-085 |
+| specs/structured-history/spec.md | 基础原生会话发现与读取 | 无会话列表能力 | CL-061 |
+| specs/structured-history/spec.md | 外部更新与重新校验 | 切回平台查看 | CL-063、CL-085 |
+| specs/structured-history/spec.md | 外部更新与重新校验 | 原生读取失败 | CL-063 |
+| specs/structured-history/spec.md | 结构身份与来源顺序 | 工具晚完成 | CL-023 |
+| specs/structured-history/spec.md | 结构身份与来源顺序 | 未知结构载荷 | CL-024、CL-034 |
+| specs/structured-history/spec.md | 结构身份与来源顺序 | 来源无法关联 | CL-012、CL-051 |
+| specs/structured-history/spec.md | 有界实时缓存不承担保存 | 首开无后续输出 | CL-042 |
+| specs/structured-history/spec.md | 有界实时缓存不承担保存 | 慢客户端与缓存到限 | CL-026 |
+| specs/structured-history/spec.md | 通用标准重放与可丢弃视图 | 只有标准全量重放 | CL-049、CL-054 |
+| specs/structured-history/spec.md | 通用标准重放与可丢弃视图 | 无重放能力不降级接入 | CL-047 |
+| specs/structured-history/spec.md | 重放代际与完成事实 | 重放中断或超出预算 | CL-050 |
+| specs/structured-history/spec.md | 重放代际与完成事实 | 重放缺少跨加载稳定标识 | CL-051 |
+| specs/structured-history/spec.md | 当前连接视图由节点共享管理 | 浏览器刷新或手机接入 | CL-064 |
+| specs/structured-history/spec.md | 当前连接视图由节点共享管理 | 正常回收后重新重放 | CL-064 |
+| specs/structured-history/spec.md | 当前连接视图由节点共享管理 | 缓存淘汰与读取撤销 | CL-009、CL-064 |
+| specs/structured-history/spec.md | 原生内容不获得管理页面执行权限 | 实时及重放包含主动内容 | CL-070 |
+| specs/structured-history/spec.md | 原生内容不获得管理页面执行权限 | 审批描述包含误导字符 | CL-070 |
+| specs/structured-history/spec.md | 资源引用访问独立校验 | 外链媒体指向本机或私网 | CL-071 |
+| specs/structured-history/spec.md | 资源引用访问独立校验 | 附件路径越界或含主动内容 | CL-071 |
+| specs/structured-history/spec.md | 资源引用访问独立校验 | 显示链接与实际目标不同 | CL-071 |
+| specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 多个入口访问同一会话 | CL-056、CL-057、CL-086 |
+| specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 不同来源中的相同短标识 | CL-056、CL-086 |
+| specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 接入来源未配置 | CL-056、CL-086 |
+| specs/native-session-recovery/spec.md | 原生绑定与按需恢复 | 原生状态缺失 | CL-010 |
+| specs/native-session-recovery/spec.md | 查看允许激活进程 | 查看需要加载 | CL-065、CL-085 |
+| specs/native-session-recovery/spec.md | 查看允许激活进程 | 查看触发权限请求 | CL-065 |
+| specs/native-session-recovery/spec.md | 释放确认与管理事实 | 关闭或管理记录失败 | CL-008、CL-011 |
+| specs/native-session-recovery/spec.md | 释放确认与管理事实 | 存储失败但仍需安全关闭 | CL-011、CL-077 |
+| specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 无重放恢复不是接入成功 | CL-047 |
+| specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 已准入连接选择无重放恢复 | CL-052 |
+| specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 恢复重放旧消息 | CL-012、CL-051 |
+| specs/management-audit/spec.md | 管理动作可追溯 | 释放失败审计 | CL-008 |
+| specs/management-audit/spec.md | 管理审计失败不能伪造可靠受理 | 审计容量不足 | CL-075、CL-081、CL-083 |
+| specs/management-audit/spec.md | 管理审计失败不能伪造可靠受理 | 安全控制后补记事实 | CL-084 |
+| specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 审计已可清理但去重事实仍受保护 | CL-080、CL-083 |
+| specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 保留期内达到容量上限 | CL-083 |
+| specs/management-audit/spec.md | 审计不泄漏敏感内容 | 已撤销客户端访问 | CL-009、CL-031 |

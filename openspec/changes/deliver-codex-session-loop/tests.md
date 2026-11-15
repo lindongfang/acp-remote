@@ -1,6 +1,6 @@
 # Tests
 
-2026-10-31 Q-002 独立 tester 修订候选。仅定义验收预期，不记录执行结果，不声明方案审查、产品或真实 Harness 通过。CL-001–107 的 ID 与标题逐字保留；冲突的旧标题只作历史追踪，当前正文取代其旧行为；CL-108–116 补充连接累计寿命及失败挂起/新输入优先/继续恢复。用户原始确认见 proposal.md，当前八份 specs 为行为依据。
+2026-11-02 用户三项修订的独立 tester 候选。仅定义验收预期，不记录执行结果，不声明方案审查、产品或真实 Harness 通过。CL-001–123 的 ID 与级别保留；CL-037/038/039/040 的标题按本轮标准能力直接使用/直接报错语义更正，其余标题不变。其他冲突旧标题仍只作历史追踪，以当前正文为准；Q-001/Q-002 及非成功结束增量的原规则保持。用户确认由 proposal.md 追溯，当前八份 specs 为行为依据。
 
 ## 共用执行安排
 
@@ -23,13 +23,15 @@
 | CL-026/049/050/054/064 的有界缓存、淘汰、预算超限 | acp-platform-constraints、structured-history：删除输入正文、输出、实体、视图、快照的旧内容门槛。CL-049/050/054标题只保留历史追踪，不再以旧容量拒绝或淘汰。 |
 | CL-013/034 的未知审批一律禁选，CL-068的actor撤销阻断交付 | permission-approvals：未知主题/选项提示可安全通用展示并人工选择原optionId；真实请求有效、唯一决定先保存。已保存决定由节点交付，不重验原审批者。 |
 | CL-017/018/053/059/079–082 的每动作签名、24小时期限、回退水位 | session-execution：节点登记身份与处理事实去重，无统一输入期限/回退锁定。CL-079保留标题但现在验证无期限；CL-080/081仍保护旧ID与责任，不沿用10000默认门槛。 |
-| CL-075/081/083 的附加审计满额全局阻断 | management-audit：仅附加审计失败告警继续，必要状态失败停止相关动作；批准决定严格保存。90天/100000条附加审计默认保留仍适用，不能驱逐受保护事实。 |
+| CL-075/081/083 的附加审计满额全局阻断 | management-audit：仅附加审计失败告警继续，必要状态失败停止相关动作；批准决定严格保存。新管理审计默认至少30天、最多100000条，不能驱逐受保护事实。 |
+| CL-005/037–040/048/058 的平台兼容准入、复验阻断或等待用户裁决 | harness-management：直接复用已实现 ACP 标准能力与实际响应；Harness 不支持直接报错，平台未实现明确归属平台。证据追溯不作运行时门槛；最高共同协议、禁止业务失败降版重发和各自权限/去重/真实请求/资源安全规则仍保留。 |
+| CL-023 的工具晚完成与多次更新 | structured-history：可靠同一工具的状态/结果始终更新首次原位置，后文字正文及相对顺序不变，不移到完成处/末尾、不重复追加；来源不足不猜合并。 |
 | CL-004/056/082 的旧schema目标、request_epoch时间资格 | design Migration Plan：当前源码/schema4只作快照事实，新迁移合同未冻结；保留旧身份/管理/正文，不预设新schema号、不自动删除历史列，不再让旧时间字段驱动输入期限。 |
 | CL-091等失败后新输入也须继续、所有4096上限混称 | Q-002、session-execution、acp-platform-constraints：仅挂起失败前旧队列，新输入可按条件直接优先；旧项只经继续恢复。删除ACP连接累计已见请求次数上限，不删除其他同数值限制，不放宽重复ID、真实来源、单次回复及同时未决保护。 |
 
 ## 逐 Requirement / Scenario 需求关联
 
-下表使用当前八份增量规格的实际Requirement/Scenario名称，共67个Requirement、124个Scenario。名称及ID机械关联不代表覆盖质量已由reviewer确认或功能已执行。Q-002以当前proposal/specs/design/plan为依据；正常、拒绝、取消、竞态及恢复分支见每例步骤。
+下表使用当前八份增量规格的实际Requirement/Scenario名称，共68个Requirement、130个Scenario。名称及ID机械关联不代表覆盖质量已由reviewer确认或功能已执行。Q-002以当前proposal/specs/design/plan为依据；正常、拒绝、取消、竞态及恢复分支见每例步骤。
 
 | 增量规格 | Requirement | Scenario | 用例 ID |
 | --- | --- | --- | --- |
@@ -57,12 +59,13 @@
 | specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 重连后的版本改变 | CL-016、CL-059 |
 | specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 协商后收到不符版本消息 | CL-033、CL-036 |
 | specs/harness-management/spec.md | 调研证据不成为版本绑定表 | 未在原报告出现的程序版本 | CL-038、CL-048 |
-| specs/harness-management/spec.md | 不兼容由用户决策 | 接入缺少必需能力 | CL-040 |
+| specs/harness-management/spec.md | 不支持的标准操作直接报错 | 接入缺少必需能力 | CL-040 |
 | specs/harness-management/spec.md | 升级复验与适配分离 | 标准兼容升级 | CL-038 |
 | specs/harness-management/spec.md | 升级复验与适配分离 | 升级造成不兼容 | CL-039 |
 | specs/harness-management/spec.md | 登记可追溯的 Harness | 能力未证实 | CL-005 |
 | specs/harness-management/spec.md | 能力准入与证据状态分开 | 新程序版本无历史报告 | CL-005、CL-048、CL-058 |
 | specs/harness-management/spec.md | 能力准入与证据状态分开 | 声明了未实现能力 | CL-005、CL-048 |
+| specs/harness-management/spec.md | 能力准入与证据状态分开 | Harness 不支持标准能力 | CL-005、CL-040、CL-048 |
 | specs/harness-management/spec.md | 能力准入与证据状态分开 | 实际行为与声明不符 | CL-039 |
 | specs/harness-management/spec.md | 能力准入与证据状态分开 | 禁止有副作用的自动探测 | CL-048 |
 | specs/harness-management/spec.md | 历史与激活能力独立验证 | 只有恢复能力 | CL-047、CL-106 |
@@ -75,6 +78,7 @@
 | specs/management-audit/spec.md | 必要管理状态与附加审计分开 | 安全控制后补记事实 | CL-084 |
 | specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 审计已可清理但去重事实仍受保护 | CL-080、CL-083 |
 | specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 保留期内达到容量上限 | CL-083、CL-094 |
+| specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 默认保留期边界 | CL-083 |
 | specs/management-audit/spec.md | 审计不泄漏敏感内容 | 已撤销客户端访问 | CL-009、CL-031 |
 | specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 多个入口访问同一会话 | CL-056、CL-057、CL-086 |
 | specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 不同来源中的相同短标识 | CL-056 |
@@ -124,6 +128,9 @@
 | specs/session-execution/spec.md | 执行失败暂停队列 | 失败后等待用户 | CL-091、CL-110、CL-115 |
 | specs/session-execution/spec.md | 执行失败暂停队列 | 失败后新输入插队 | CL-110、CL-111、CL-113、CL-114 |
 | specs/session-execution/spec.md | 执行失败暂停队列 | 显式继续后旧项重新排队 | CL-112、CL-114、CL-115 |
+| specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 达到上限或拒绝后等待继续 | CL-117、CL-119、CL-120、CL-121、CL-123 |
+| specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 普通取消保留停止原因 | CL-118、CL-119、CL-120、CL-121、CL-123 |
+| specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 立即发送的中断按已选项继续 | CL-122、CL-123 |
 | specs/session-execution/spec.md | 取消与异常结果 | 派发后异常退出 | CL-021、CL-046 |
 | specs/session-execution/spec.md | 插入确认与前台终态分别关联 | 终态早到且交错自发工作 | CL-073、CL-100 |
 | specs/session-execution/spec.md | 空闲取消与活动前台取消分开 | 取消与自然完成交错 | CL-072、CL-074 |
@@ -139,6 +146,7 @@
 | specs/structured-history/spec.md | 外部更新与重新校验 | 切回平台查看 | CL-063、CL-085 |
 | specs/structured-history/spec.md | 外部更新与重新校验 | 原生读取失败 | CL-063 |
 | specs/structured-history/spec.md | 结构身份与来源顺序 | 工具晚完成 | CL-023 |
+| specs/structured-history/spec.md | 结构身份与来源顺序 | 同一工具多次更新 | CL-023 |
 | specs/structured-history/spec.md | 结构身份与来源顺序 | 未知结构载荷 | CL-024、CL-034 |
 | specs/structured-history/spec.md | 结构身份与来源顺序 | 来源无法关联 | CL-012、CL-051 |
 | specs/structured-history/spec.md | 实时缓存不承担保存 | 首开无后续输出 | CL-042 |
@@ -192,8 +200,8 @@
 ### CL-005 能力未证实
 
 - 用例级别：L5
-- 操作步骤：登记 Harness 与目录后分别提供缺协议恢复依据、平台未实现能力、仅缺程序历史报告但标准与安全条件满足的组合；查看定义、当前协商、证据状态及原生调用。
-- 预期结果：真正缺能力/安全条件时相应操作拒绝且不创建替代会话；仅缺该程序实测报告不拒绝已实现标准路径，证据仍未实测。登记不自动运行有副作用探针，不泄露配置凭据。
+- 操作步骤：登记 Harness 与目录；当前身份权限、请求去重、真实原生请求及资源安全条件满足时，分别给出仅缺程序实测报告但标准能力可用、Harness 明确声明不支持、标准调用返回不支持错误，以及平台尚未实现协议版本或操作的组合；查看实际 ACP 声明、调用与错误归属。另保安全条件不满足的拒绝对照。
+- 预期结果：仅缺该程序实测报告不阻止已实现标准路径，证据仍标未实测；Harness 不支持直接呈现 ACP 声明或实际错误，平台未实现则明确报平台尚不支持并保留对端声明，不混称 Harness 不支持。不另建平台能力准入矩阵、兼容验证或等待用户决定流程，不私有兜底、不创建替代会话、不伪报成功；权限、去重、真实请求及资源安全仍独立执行，不冒额外 ACP 能力证明。登记不自动运行有副作用探针，不泄露配置凭据。
 
 ### CL-006 页面断开
 
@@ -300,8 +308,8 @@
 ### CL-023 工具晚完成
 
 - 用例级别：L5
-- 操作步骤：依原生顺序提供工具开始、后续文字、工具晚完成及重放重读；观察视图条目、位置及来源。
-- 预期结果：更新原工具位置而非按类型重排；来源可关联才更新，无依据说明限制，不复制为新回复。
+- 操作步骤：在实际版本与可证明的同一来源/身份内，依原生顺序提供工具 T 开始、后续文字 A/B、T 的进度更新、文字 C、T 的再次更新及最终状态/结果；逐次比较 T 首次位置和身份、A/B/C 的正文及相对顺序、条目数量，再重放重读。另给来源不足以证明同一工具的对照。
+- 预期结果：每次进度、状态及最终结果都更新首次出现位置的同一 T；A/B/C 正文与原相对顺序保持，不把 T 移到完成处或列表末尾、不按类型重排、不追加同一工具的重复完成条目。有可靠来源关联才更新或避免重读重复；来源不足时明确限制、不猜测合并，也不复制为新回复。
 
 ### CL-024 未知结构载荷
 
@@ -381,29 +389,29 @@
 - 操作步骤：核验合法高版 offer→低版 selected 的响应 ID/schema，另给未知/超 offer 选择、错响应 ID、错 selected 形状和网络/业务失败。
 - 预期结果：仅规范允许的协商结果生效，按 selected 解析并绑定连接；错误不重新试发副作用，不按厂商猜版本，不将网络/认证/业务失败作为降版证据。
 
-### CL-037 版本规范依据与未验证门禁
+### CL-037 版本规范依据与平台未支持说明
 
 - 用例级别：L5
-- 操作步骤：核对官方规范修订、真实标识、稳定/草案及实测状态；缺其中依据时尝试宣称已验证。
-- 预期结果：不将 SDK 或 JSON-RPC 号当 ACP 版本，缺证据明确说明；草案不等于无规范，协商不等于真实执行通过，不擅自降低双版目标。
+- 操作步骤：核对实际协议版本标识及平台已实现范围，分别给尚未实现的版本、无法按标准识别当前版本，以及只有程序历史实测证据缺失但标准路径可用的情况；另检查官方规范修订、稳定/草案与实测结果的呈现归属。
+- 预期结果：未实现版本报平台协议不支持，无法识别报协商或协议错误；不把 SDK 或 JSON-RPC 号当 ACP 版本，不进入等待用户决定兼容方案的流程。缺历史实测证据如实说明但不额外阻断已实现标准操作；草案不等于无规范，协商不等于真实执行通过，不擅自降低双版目标。
 
-### CL-038 兼容升级只更新配置与证据
-
-- 用例级别：L5
-- 操作步骤：保留旧报告，登记未在报告中的兼容升级程序，重新协商并按影响复验，分开查看标准准入与程序实测状态。
-- 预期结果：当前标准处理/能力/安全条件满足可操作，不仅因缺程序历史报告禁用；未复验范围如实标注，旧报告不冒充新版通过，不强制改厂商代码。
-
-### CL-039 不兼容升级保留旧证据并阻断
+### CL-038 兼容升级沿标准路径且证据分版本
 
 - 用例级别：L5
-- 操作步骤：升级后让当前必要能力/语义失配，尝试操作与借用旧报告；保留其他兼容连接。
-- 预期结果：停用受影响操作并给版本/缺口/影响/脱敏依据，未知不重发；旧证据保持旧归属，不永久按厂商禁全部实例。
+- 操作步骤：保留旧报告，登记未在报告中的兼容升级程序，按 ACP 重新协商并直接请求其已实现标准能力；请求前不提供平台兼容复验结论或用户兼容裁决，再独立记录开发/验收按影响复验的版本与范围。
+- 预期结果：当前 ACP 标准能力及各自安全条件满足即沿标准路径使用，不因缺程序历史报告或平台兼容复验而先禁用，不强制增加厂商实现。旧报告只属原版本，未复验范围如实标注；标准调用结果不冒完整兼容性验收，证据追溯不成为运行时能力门槛。
 
-### CL-040 私有桥接与降级须用户决定
+### CL-039 升级后的不支持或协议错误如实报告
 
 - 用例级别：L5
-- 操作步骤：对必需恢复或执行语义缺失、需私有桥接的目标请求受影响操作，用户未决定；另给仅无重放但输入/审批已满足条件的对照。
-- 预期结果：真正缺口报告版本、影响及可选方案，受影响操作等用户决策，不自行私有适配；仅无重放不阻止独立能力，显示历史不完整/缓存丢失无法补回，其他兼容目标不受牵连。
+- 操作步骤：升级后的连接分别返回 Harness 不支持当前标准操作、与声明不符的业务错误和协议错误；尝试借用旧报告宣称新版通过，保留同连接的其他可用标准操作及其他兼容连接，并对照可能已有副作用但结果未知。
+- 预期结果：如实呈现实际不支持或错误；协议错误按该版处置，可能已发生的副作用不自动重发。一次操作不支持不自动停用其他标准操作，不另建按厂商/程序版本停用能力的补偿规则、私有兜底或等待用户决定兼容方案的流程；旧证据保持原版本归属，不以旧报告伪称新版成功。
+
+### CL-040 标准操作不支持直接报错且无平台兜底
+
+- 用例级别：L5
+- 操作步骤：对平台已实现的恢复或其他标准操作，分别给 Harness 声明不支持和实际返回不支持错误，检查立即响应及原生调用；另给仅无重放但输入/审批满足标准与安全条件的连接，并对照平台尚未实现该协议或操作。
+- 预期结果：Harness 不支持则直接报告 ACP 所表达的不支持或实际错误，不等待用户兼容裁决、不另建平台准入/复验流程、不私有桥接、不改走替代会话、不伪报成功；平台未实现则明确报平台尚不支持，保留实际声明。其他标准能力独立使用；仅无重放提供当前连接模式及历史不完整/缓存丢失无法补回提示，权限、请求和资源安全规则仍成立。
 
 ### CL-041 版本矩阵不以模拟冒充真实
 
@@ -450,8 +458,8 @@
 ### CL-048 相同标准能力共用路径且不设程序白名单
 
 - 用例级别：L5
-- 操作步骤：两不同名称/程序版本的合同对端满足相同已实现协议/标准重放/安全条件但无程序历史报告；对照声明未实现能力与协议必备方法未额外广告。
-- 预期结果：满足条件共用标准路径，不要求版本白名单或多余标志；报告程序未实测，未实现明确拒绝，不以有副作用探针核实。
+- 操作步骤：两不同名称/程序版本的合同对端在当前身份权限、请求去重、原生请求和资源安全条件满足时，提供相同已实现协议/标准能力且无程序历史报告；对照协议必备方法未额外广告、Harness 声明或响应不支持，以及对端声明平台尚未实现的能力。检查实际标准调用和未提供副作用探针。
+- 预期结果：可用标准能力共用 ACP 路径，不要求程序版本白名单、额外平台能力准入矩阵/验证流程或协议未要求的可选标志；证据仅说明未实测范围。Harness 不支持直接报实际错误，平台未实现明确报平台尚不支持并保原声明；不私有兜底、不等待兼容裁决、不以输入/批准/删除等副作用探测能力，也不把安全条件包装为额外 ACP 能力证明。
 
 ### CL-049 完整历史流式传输与所有保留缓冲有界
 
@@ -510,8 +518,8 @@
 ### CL-058 新连接优先高版并如实呈现合法协商结果
 
 - 用例级别：L5
-- 操作步骤：合同入口平台高低版均实现并验证，分别给共同高版、规范允许低版、合法低版无原因、未知未来版、仅未来版及网络/认证失败；旧报告/缓存仅低版，核对高版独有已实现结构。
-- 预期结果：新连接优先最高已实现版，合法选择遵守规范并分开展示 offer/selected/依据或原因未提供；高版能力不压低版交集，无共同版本拒绝；不因缺程序报告固定低版，不以网络/认证失败降版。
+- 操作步骤：合同入口平台具有高低版已实现处理，分别给共同高版、规范允许低版、合法低版无原因、未知未来版、仅未来版及网络/认证失败；旧报告/缓存仅低版或当前程序无历史报告，核对实际发起/选择版本和高版独有已实现结构。
+- 预期结果：新连接优先最高已实现版，合法选择遵守规范并分开展示 offer/selected/依据或原因未提供；高版能力不压低版交集，无共同版本明确拒绝。平台未实现的协议明确报平台尚不支持而非伪称 Harness 不支持；不因缺程序报告额外拦截或固定低版，不以网络/认证失败降版。
 
 ### CL-059 重连重新优先且高版失败不降版重发
 
@@ -660,8 +668,8 @@
 ### CL-083 审计保留期限容量与去重保护分开
 
 - 用例级别：L5
-- 操作步骤：在测试库用节点时间构造至少90天保留及100000条默认容量边界；无可清理附加审计时请求动作，对照必要状态失败、可删审计但去重/资源责任未收敛与参数调整。
-- 预期结果：附加审计满额告警并继续条件满足的动作，不删未到期项或受保护事实，不把批准决定当日志。审计清理不复活旧ID、不删原生数据/身份/撤销，必要状态失败另行阻止；真实清理未实现如实记未执行。
+- 操作步骤：在测试库按节点时间和新管理审计默认策略构造未满30天、恰满30天和超过30天的记录，对照到期但仍不能安全独立删除的附加审计及相关必要去重/审批交付/资源责任；分别达到99999、100000条并尝试写第100001条附加审计。30天内满100000且无安全清理候选时请求条件满足的动作，另对照必要状态失败；如已有合法参数入口再测参数调整，不用调整掩盖默认边界。
+- 预期结果：默认新管理审计至少保留30天、最多100000条；未满30天不删，恰满或超过保留期只对可安全独立删除的附加审计清理，不把到期等同必要责任已收敛。满额无可清理项报告附加审计受限且不伪报新审计保存，必要状态可靠时操作可继续；不为容量提前驱逐未到期项或必要事实，不把批准决定当日志、不新增容量优先于保留期的政策。清理不复活旧ID、不删原生数据/身份/撤销，必要状态失败另行阻止；真实清理未实现如实记未执行。
 
 ### CL-084 故障安全控制补记不伪造原始落库
 
@@ -860,3 +868,128 @@
 - 用例级别：L5
 - 操作步骤：后续在实际认证节点和真实SQLite、审批owner及ACP连接上使用受控Harness对端，连续产生并处理超过4096个不同真实请求；混入当前支持的其他Harness请求路径，在边界后由Web A/B裁决有效权限请求并再中断/查询，另发已见ID和失效原请求。
 - 预期结果：节点连接和审批处理不因累计次数失效；真实来源、唯一决定/单响应、失效抑制及当前读取/操作验权仍成立。累计寿命端口改动不能替代此节点集成；节点/owner未实现则记未执行，协议对端不是真实Harness验收。
+
+## 非成功结束增量验收
+
+2026-10-31。CL-117–123 为用户确认非成功结束处置后的新增定义；CL-001–116 的 ID、标题及既有定义保持原文。本增量的单一行为来源为 `specs/session-execution/spec.md` 的“非成功结束保留原因并暂停队列”及其五个 Scenario，并交叉核对该规格的“同会话前台执行互斥”“插入确认与前台终态分别关联”“中断与立即发送”“执行失败暂停队列”和“受理授权由节点接管”。各例只定义可观察断言，不记录执行结果、不重新定义产品规则。
+
+共用安排沿用本文前述隔离、固定源码/协议、清理和证据规则。L4 子范围必须经真实自有 SQLite、实际队列 owner 和实际 ACP reader/writer，协议对端可以是明确标记的受控夹具；L5 另须真实认证节点入口及相应客户端，不能以 L4 替代。CL-123 的 Windows/Web/Harness/适配器及资源树均须真实。全部新增用例当前未执行；接口、环境或真实原因无法产生的分支分别记未执行/受阻，不转 LX、不假定 Harness 能力已验证。
+
+### CL-117 达到上限与拒绝的原因及停止结果
+
+- 用例级别：L4、L5
+- 操作步骤：先经实际 SQLite/队列 owner/ACP IO 的 L4 路径，再经真实认证节点 L5 路径，分别协商 v1/v2；正常队列有 X/Y，当前前台按该版真实终态依据分别给出 `max_tokens`、`max_turn_requests`、`refusal`。v1 用原 prompt RPC 响应，v2 用真实新前台区间的 idle/原因并单独记录插入；有可靠 Run 关联和无可靠 Run 关联分别对照。检查原原因、Run/会话视图、队列及实际 writer；refusal 还检查共享读取保留该版声明的后续上下文影响。
+- 预期结果：按负责 Requirement 显示实际停止原因；可靠关联的 Run 为已停止而非成功或失败，不能因 RPC 成功或 `Completed` 枚举名改写。X/Y 保留暂停且不自动发送；无可靠关联只保原生事实与未知范围，不按最近 Run 猜归属。拒绝的后续上下文语义不丢失，实际未验证的显示路径如实记录。
+
+### CL-118 普通取消确认与取消通知分开
+
+- 用例级别：L4、L5
+- 操作步骤：对活动前台及已有 X/Y 的会话执行普通中断，先只让取消通知实际写入并保持前台 active/unknown 或输入待插入，随后才按 v1 原 RPC/v2 新前台终止报告可靠 `cancelled`。交错重复通知、旧工作回报和新资源代际；另保有效原生审批请求，检查该版规定的权限取消响应。
+- 预期结果：仅取消通知写出不形成 Run 已停止或放行依据；可靠普通取消后保留取消原因、暂停旧队列，按负责 Requirement 等有权继续。活动、插入和资源未核验仍阻新派发；旧回报不结算新工作。原生权限请求取消仍按该版实际范围处理，不把普通队列暂停规则改写成默认允许、遗漏安全响应或全部后台停止证明。
+
+### CL-119 非成功早终态与迟插入独立协调
+
+- 用例级别：L4、L5
+- 操作步骤：实际 v2 帧顺序为 running、idle/非成功原因、迟到的原 prompt `messageId` 响应，旧队列有 X/Y；原因逐一覆盖三种限额/拒绝及普通取消。分别令真实 transport flush 先后完成，对照 idle 后又新 running、snapshot/repeated idle 携旧原因、插入响应始终未知，以及无可靠输入因果；不再提供第二 idle。
+- 预期结果：早终态不清待插入，迟到插入只确认原输入，不把会话原因猜成某 Run 已停止。原输入确认、最新前台、transport 及必要资源事实满足时能协调解除相应阻挡，不永久等第二 idle；已暂停旧项仍待显式继续，新 running/插入未知仍阻新派发。快照或重复旧原因不再次暂停后来新输入。
+
+### CL-120 已停止后的新输入优先与显式继续
+
+- 用例级别：L4、L5
+- 操作步骤：可靠限额、拒绝或普通取消后保三旧项 X/Y/Z 暂停；前台/插入/资源条件满足时由有权 B 提交新 D 并成功结束，期间及之后分别点击继续、重试原继续身份，检查队列顺序/项身份/实际派发数。对照不能即派的新 D、仅读取或撤销后的继续操作者、已受理旧项原提交者后来撤销。
+- 预期结果：按负责 Requirement 及既有挂起路径处理 D、名额和继续，不把已停止误作成功自动恢复 X/Y/Z；D 成功也不恢复旧项。继续为新操作独立验权，不复制或重新受理旧正文、不重验原提交者；原相对顺序、三等待名额和当前前台互斥不被绕过，重复继续不重复派发。
+
+### CL-121 成功失败未知与已停止结果不混同
+
+- 用例级别：L4、L5
+- 操作步骤：相同初始队列下对照 v1 原 RPC 的 `end_turn`、本增量三种非成功原因及普通取消；v2 对照新前台区间 `end_turn`、明确 `error`、非成功原因、未知/缺省/null/错误类型的原因。另给仅 Written、仅 inserted、仅新握手、RPC 错误而副作用未核验，以及跨 scope/无法可靠 Run 归属的结果，观察后续 writer 与结果字段。
+- 预期结果：各分支分别沿负责规格的成功推进、可靠失败暂停、已停止暂停及未知核验规则；未知不伪装已停止/成功/失败，不自动重发。v2 聚合成功/失败也不凭空完成某 Run，v1 RemoteError 不推零发送或可靠前台失败；原始原因和实际证据层次可区分。
+
+### CL-122 立即发送所选项的取消结束例外
+
+- 用例级别：L4、L5
+- 操作步骤：正常队列 X/Y/Z，B 按“中断与立即发送”选择已有 Y，实际旧前台可靠取消结束后检查 Y 和余项；对照仅取消通知已写、旧前台未知、Y 被先行编辑/取消导致版本失效、资源换代、中断失败及满额未入队新草稿。Y 派发后分别以后继成功、失败和普通取消结束，再交付旧取消回报；全程核对 X/Z 是否被自动派发或恢复。
+- 预期结果：旧工作保取消原因，只允许原已选且仍有效的 Y 在全部围栏满足后派发一次；X/Z 保持原相对顺序及暂停状态。仅取消通知、旧前台未知或中断失败不派发，保留 Y 并明确提示未进入派发；Y 版本失效、资源换代或中断未确认时不派发且不回退到 X/Z，保留 Y 或失效选择对应的剩余项并提示选择已失效。Y 后继成功、失败或取消均不自动恢复 X/Z，余项仍须有权用户显式继续。满额新草稿不获第四等待位，本例不把例外扩大到普通中断或其他队列项。
+
+### CL-123 真实非成功结束与继续操作闭环
+
+- 用例级别：L6
+- 操作步骤：固定真实 Windows 节点、可信 Web A/B、SQLite、Harness/适配器及专用原生来源，实际可产生时分别取得 token 上限、请求轮数上限、拒绝和普通取消的可靠结束，保留原始协议原因和 Run 关联依据；验证旧项停止暂停、新输入优先及手动继续，再执行已有项立即发送的中断例外。复用同版有效成功/失败对照证据或实际执行，关闭并核完整自有 Job 树及共享会话隔离。
+- 预期结果：真实结果/原因、队列和原生调用符合 CL-117–122 的相应分支；受控协议夹具不代签。程序不能真实产生的原因、早终态或未知组合分别保留未执行范围，不为本例安装升级、访问凭据或用模拟结果补齐真实证据；未执行必需分支不宣布完整闭环通过。
+
+## ACPI 输入上传真实路由增量验收（v10 候选）
+
+本节完整定义已合入活动 change 的 ACPI-R01—R10 增量验收，合同见[管理输入上传子合同](management-input-upload-contract.md)；截至 2026-11-10 独立 tester/reviewer 已接受定义与编码门，但产品用例尚未执行，不记录产品通过结果。行为来源为 `specs/management-input-upload/spec.md`（本change新增候选）：服务原子可用、唯一连接所有权、四命令JSON、文本错误、ACPI/ACK顺序、Binary关闭优先、撤销封存和异步取消八项Requirement，按下列用例共同覆盖。旧CL-001—123不改。
+
+共用安排：L5 经真实 Node 生产 factory、SQLite、TLS/WSS 认证与原单 writer；Harness 对端可以受控，不能声称真实 Harness。使用现有 `queue_management/development_tests.rs` `Case` 的真实 Node/peers/clients/target(2)，增加真实 WS Binary send 和有序 next-message helper；helper 保留 Text/Binary/Close 顺序，不能跳过不匹配帧。每分支新连接、固定源摘要、隔离数据/端口、自有 Job 并记录原任务 join；候选实现固定后由独立 tester 按同一源摘要执行并逐 R01—R10 保存原始 TLS/WSS 输出、断言、join 分类、permit 计数及日志索引，独立 reviewer 对同一源摘要复核且不继承 coder 对话。超时仅作失败 deadline。用例使用合同定义的新窄 test-only barrier/被动观察接口；需由编码前 reviewer 接受并在允许写集内实现。缺失入口、无法按 barrier 复现、超时或只调用 owner 单测一律未执行/失败，不代签真实 WSS。barrier 与一次性故障 receipt 均 RAII 释放，失败也释放并清理自有资源。主执行根据 v8/v9 独立 tester 报告修正候选，新增定义仍须新的独立 tester 接收。
+
+### ACPI-R01 服务安装、四命令和真实 ACK
+
+- 用例级别：L5
+- 操作步骤：固定生产服务bundle，真实WSS begin(target(2),purpose=submit)，校验结果仅uploadId；状态应receiving/nextOffset="0"。发送ACPI v1 Data：magic ACPI，direction1，reserved0，同upload原16字节ID，big-endian offset0，payload为有效prompt JSON。读取下一帧ACK并确认`status.ready=false`；随后以原uploadId发送finish，轮询同一status至`ready=true`且非空bodyId。再用该target和bodyId执行既有真实input.register/consume，并验证`input.queue`仍使用原队列读取/管理实例。另以独立连接发送非法purpose/多余字段/数字totalBytes对照。以测试安装API重复安装同bundle及外节点bundle，断言拒绝且原bundle的上传、队列读取和队列管理三条路径继续工作。关闭清理。
+- 预期结果：ACK恰32字节：ACPI、version1、direction2、reserved0、原ID和big-endian累计offset；ACK后status offset等于payload字节数且尚未ready；finish后同一status最终ready并返回唯一bodyId，原register/consume路径可关联该身份，不能只以Data ACK代替正文完成。success/error均关联原requestId；语法错invalid_request；重复/foreign安装拒绝，不发布半服务且上传、队列读取和队列管理仍可用。begin/ACK/finish不是入队或执行成功。
+
+**既有回归同步：**`app/src/node/session_services/queue_read_development_tests.rs`
+中的 `queue_read_upload_and_view_success_are_distinct_from_invalid_payloads` 必须与
+R01 同步：合法 `input.upload.begin` 成功且返回 uploadId；合法 `view.open`
+（`targetId=target(2)`、`reason=first_open`）进入真实路由并断言冻结的
+`view.opened`、`streamId`、`viewEpoch`、十进制字符串 `snapshotRevision`、
+`capabilities.opaqueChunks=1` 和封闭 `status`；数字 `targetId` 仍为
+`invalid_request`，合法但不存在的 target 仍为 `invalid_target`。不得删除
+“真实成功/语法错误/目标不存在”的区分，也不得用 coder 临时预期替代 tester 定义。
+
+### ACPI-R02 同块重试与偏移冲突
+
+- 用例级别：L5
+- 操作步骤：begin后发offset0数据块P读ACK，再原样重发最后一块P，读第二ACK并查询status；另起独立连接分别发同offset不同payload、跳过累计offset、已finish后再发Data，各自保留owner被动观察和完整WS输出。
+- 预期结果：原样重试返回相同累计offset，正文不重复附加；冲突/错误状态零ACK、零JSON，唯一4400 Close；冲突前owner offset不因拒绝帧推进，连接结束receiving清理。仅承诺最后已接收块重试，不把更旧任意offset视为成功。
+
+### ACPI-R03 准备阶段、失败和字段投影
+
+- 用例级别：L5
+- 操作步骤：经现有 FactoryTestHooks.body 注入原 CPU worker 的 CpuEntered 一次性 barrier。WSS 上传有效 prompt JSON 并 finish，等 CPU entered；读取 finish 结果后发 status，必须 preparing/nextOffset 为总字节，bodyId/error 均省略。释放 worker，轮询真实 status 至 ready，确认 bodyId 且无 error。另以单字节 `[` 上传并按原 worker 解析，轮询至 failed。长度不符 case 期望文本 invalid_upload_state 与原 receiving 状态，不应假设它创建 receipt。需要 join 证据时直接调用现有 `storage.prompt_preparation_receipt().join()`，只接受返回报告中 `observation().all_joined()` 为 true；CPU receipt 的 `observe().identity()` 必须与进入 CPU 时相同。deadline 只报告挂死。
+- 预期结果：finish仅返回原uploadId，不宣称ready；真实解析成功才ready，畸形JSON经原worker失败后error=invalid_request且无bodyId；长度不符invalid_upload_state，不夺走原buffer；ready不是队列受理或Harness已执行。原 preparation shutdown report完成实际 join，ready 或状态轮询不能替代 join。
+
+### ACPI-R04 释放、未知身份和双连接隔离
+
+- 用例级别：L5
+- 操作步骤：A/B两个authenticated socket各begin；A release自己的upload，结果固定released=true，再status/重复release；分别对未知随机ID及B使用A的ID发送status/release。另用新A upload让B发送Data，记录Close；A连接仍保留时发自身合法Data，再验证第三个有效连接。最后建立 A2 upload并记录ID，正常关闭A2；以新认证连接A3分别发送该ID的status、release和Data，并通过原连接观察记录确认旧owner已seal，不使用同时存活的B代替断线证据。
+- 预期结果：释放真实改变原条目；release后status为body_unavailable，重复release沿原owner幂等接受released=true；未知/foreign文本为body_unavailable（有效actor下，不泄漏归属）；foreign Binary零ACK/JSON、4400，只关闭B；A及其他有效连接可继续。A2关闭后新连接不能复用旧upload所有权：status/release为body_unavailable，Data零ACK/JSON、4400。
+
+### ACPI-R05 ACPI/ACPV分类、格式和上限
+
+- 用例级别：L5
+- 操作步骤：在现有 `queue_management/development_tests.rs` `Case` 的生产 Node 上新增独立认证 socket。连接前调用现有`ManagementService::observe_next_document_socket_for_test()`取得`DocumentSocketEndpoint`；pair/auth后由其identity-bound client建立与`socket_development::source_raw`同类型的cfg(test)模块source/read，并调用新增test-only`DocumentSocketEndpoint::attach_shared_read(&read)`注册到同一个原attachment。上传、队列读取、队列管理仍取生产bundle。用`TransferHeader::credit(stream.id(),0).encode(&[])`发送合法ACPV credit，等待原`stream.ready()`为true并记录upload dispatch计数零。每个坏帧用独立认证连接：四字节ACPI、31字节ACPI头、version错、reserved非零、direction2 ACK反发、0 payload、16385字节payload、offset溢出；另发非ACPI非法binary及32769字节binary。另起上述生产Node fixture的独立认证连接 begin，发送精确16384字节有效prompt JSON Data（helper构造并断言长度，不靠空格截断破坏JSON），读ACK、finish并轮询status至ready/bodyId。endpoint只复用原attachment注册方法，不公开attachment或service handle。测试记录分类计数与完整有序输出。
+- 预期结果：合法 ACPV credit 使原 stream ready 且upload dispatch计数零；以完整ACPI magic起始的坏帧不进入ACPV；各ACPI格式/方向错误零ACK/JSON、4400，非ACPI非法控制沿原4400；大于32KiB使用4429。精确16384字节有效Data得到一个32字节ACK，finish/status真实ready；不新增总正文大小限额。
+
+### ACPI-R06 可取消边界、停止优先级与原任务收敛
+
+**R06 取消来源澄清：**PendingReads future 暂停期间，同一原 reader 不会再次轮询 `receive_frame`，因此不得通过 peer Close 解除该暂停；取消统一由真实 Node stop 触发。Before/After-call transfer 和 InputAcceptedBeforeAck 均为一次性、无业务锁暂停点；测试触发 Node stop、等 control 非 ready 与原 future Drop 后释放 barrier，再由 `NodeProcessOwner::join_actual()` 读原 owner 结束。AfterCall finish 还要先用 preparation observer 确认真实 receipt 已 Registered，停止后释放 CPU barrier，并以 `storage.prompt_preparation_receipt().join()` 的 report 判实际 join。
+
+- 用例级别：L5
+- 操作步骤：每分支独立 Node fixture，四命令分别在 PendingReads 的 BeforeCall 和 AfterCall 一次性 barrier 暂停（无 owner/actor/lifetime 锁）；触发真实 Node stop，等 control 非 ready、原 connection 进入终止，释放 barrier，再确认 future drop、owner seal 和 connection/writer join，不出现取消后的后台补执行。finish BeforeCall 分支无 preparation receipt；AfterCall 分支用原 preparation observer 确认唯一 receipt 已 Registered，并暂停原 CPU；Node stop 后释放 CPU barrier，用 `storage.prompt_preparation_receipt().join()` 的 report 等待同一 task 实际 join，不再从旧 socket 查询。accept_data 返回后在 InputAcceptedBeforeAck 暂停，触发 Node stop；该 await 由原 ConnectionStop 取消，确认零 ACK、1001 与 owner 最终 seal。stop优先分支：在活 socket 先发送坏 ACPI，等 BeforeInputDispatch entered（已接收未 decode），触发真实 Node stop并等 control非 ready，释放barrier；确认处理前 lifecycle复核、dispatch次数0和唯一1001，不向已关闭连接发送第二帧。反向对照：不触发 stop，先让坏帧 dispatch并观察4400，随后停止Node。另由测试仅 seal 原 owner、保持 Node运行，分别发 status 与 Data，观察文本 product_not_ready 和 Binary 4400。
+- 预期结果：取消不补执行、不重放、不伪造成功；BeforeCall零新增条目/receipt，AfterCall以真实原事实处理，结束后receiving=0、sealed=true；已移交内容仅有一个原receipt，observer取消不等于worker join。stop先于dispatch复核时1001、decode/owner dispatch次数零，不向已关闭socket再发帧；格式先被处理分支4400且只一个Close。运行中owner单独sealed时文本product_not_ready、Binary4400；Node/连接所有自有原任务实际join或明确unknown，不能以pending=0代签。
+
+### ACPI-R07 FIFO、背压和精确预算回收
+
+- 用例级别：L5（byte饱和分支另明确使用测试资源占用，不冒充网络自然填满）
+- 操作步骤：FIFO 分支在 begin响应排空后设置原 `pause_next_write`（writer 已取出下一帧、actor gate前），发 Data 并等 writer entered，确认 ACK 已被取出：byte-used=32、queued=0、in-flight=1；发送 status 并等其 enqueue count 增加，释放 writer，以有序 helper 恰好读到 ACK 后 status 文本，等 send/drop 计数及预算归零。frame饱和独立 case 保持同一个首 ACK 在 writer pause 中，对最近块做256次真实幂等 Binary 重试，等每次 enqueue 观察累计达到 1 in-flight+256 queued，再发一次真实重试触发4429；随后释放 writer，断言 close ready 优先，已取出的 ACK可发送，未发送 queued ACK全部 drop且 permit归还。byte饱和独立 case 同样先暂停 writer，由 fixture 暂持原 byte semaphore 的 `MAX_OUTBOUND_BYTES - 31` permits（无假业务帧、无容量调整），WSS 发合法 Data 使32-byte ACK预算获取失败，观察4429；RAII释放 fixture permits，不要求伪造已发 ACK。
+- 预期结果：FIFO分支只承诺成功 enqueue 的 ACK在后续文本前发送；byte permit包括in-flight并在send/drop后归还，writer取出时queued slot归还。frame分支证明1 in-flight+256 queued后下一次申请失败并close=4429；释放后因close优先不保证257个ACK均送达，queued ACK实际drop且预算回收。byte分支证明32-byte申请失败走4429，不外推自然慢网络已耗尽1MiB。两分支不另开sink，发送关闭都由原writer。
+
+### ACPI-R08 撤销、目标校验和其他actor隔离
+
+- 用例级别：L5
+- 操作步骤：使用现有真实 Case 的有效 A/B actor 和 target(2)，分别以格式合法但不存在 target(99) begin 期望 invalid_target，以语法不可解析的 target 字符串 begin 期望 invalid_request；不虚构逐 target ACL。A begin 并排空文本结果后设置 `pause_next_write`；A 发 Data，等 writer 取出 ACK、但尚未取得发送前 actor gate 的 entered barrier（in-flight=1、queued=0、byte-used=32）。B 通过真实 revoke 入口撤销 A 并等待事务 commit；commit 返回不作为 seal 证据。释放 writer，以有序 WSS helper 读到 A 唯一4410 Close；等原 protocol 结束、同 attachment 原 UploadOwner sealed 且 receiving=0，再等原 connection owner 实际 join。B 随后在自己的连接 begin/Data/status 成功。反向 case 不在持 actor gate 的 WriteLocked barrier 暂停时等待 commit：让已经取得 gate 的发送先返回，再由 B commit，记录发送先于撤销的线性顺序。
+- 预期结果：COMMIT先于writer gate复核的case无A ACK，4410，最终sealed且entries/receiving=0；B ACK/status仍正常。writer gate先于COMMIT的对照允许该次原发送完成，不谎称撤销追回已发送字节；此后A操作均拒绝。目标校验不被连接认证替代，不同actor/socket不串owner；事务返回前不强求同步seal，但原协议结束后必须seal。
+
+### ACPI-R09 认证失败来源与 typed 错误边界
+
+- 用例级别：L5
+- 操作步骤：使用 `NodeInputUploads::arm_route_fault_for_test(client, fault)` 建立的 connection-bound 一次性故障 receipt。每格在新真实认证连接上先成功 begin 并取得uploadId；随后 arm `ActorRevoked`、`ActorStorageUnavailable` 或 `UploadStorageUnavailable`，按固定3×2矩阵向同一连接的 typed `status(uploadId)` 或 typed `accept_data(uploadId,合法ACPI Data)` 发一次请求，不重试。arm 的调用点是 typed status/Data 共用的 `Owner::typed_entry_guard`：完成 connection/owner/client 校验后、读取上传表或再次访问认证存储前消费一次。记录 receipt 原子命中数、完整有序 WSS 帧、owner observation 与协议/connection owner join。另起连接证明同一 receipt 不影响另一 connection；业务 offset conflict 仍为零ACK/JSON的唯一4400。
+- 预期结果：receipt 每格恰命中1次，消费后的重复请求不再注入。`ActorRevoked` 的status与Data均返回唯一4410 Close，零JSON/ACK；`ActorStorageUnavailable` 均返回唯一4500 Close，不出现invalid_request/necessary_storage_unavailable/ACK；`UploadStorageUnavailable` 的status返回唯一`necessary_storage_unavailable`文本且无ACK，Data返回唯一4400 Close且零ACK/JSON。撤销/认证存储两类关闭及上传存储的Data关闭后，原SocketLifetime结束时同一attachment的Owner `sealed=true`、entries与receiving均为0，原protocol/connection owner实际join；上传存储的status文本不伪造连接关闭，自行关闭后仍须封存清理。三类来源不得串码，失败后再次成功请求不能改写已发生的帧和命中事实。
+
+### ACPI-R10 原子发布、启动顺序和四命令 control-only
+
+- 用例级别：L5
+- 操作步骤：使用原生产 factory 的 BeforeServices 暂停点确认此时 HTTPS listener 尚未创建，`TcpStream::connect` 到已固定的目标地址返回连接失败；释放后确认同一 bundle 同时支撑上传、队列读取和队列管理。设置 `FactoryTestHooks.reject_services` 使完整服务对象构造后、router/listener 创建前返回 startup error；`NodeProcessOwner::ready()` 必须失败，随后固定地址仍不可连接，并从仍由 lifecycle resources 持有的 storage 调用 `prompt_preparation_receipt().join()`，最后调用原 `NodeProcessOwner::join_actual()`。另在独立 fixture 调用现有 `NodeRuntime::start_control_only_for_test(area.config(fixed_address), FakeProtector)`；该方法经 `NodeProcessOwner::begin_control_only_for_test` 跳过 session-services 构造/安装，但保留真实TLS/WSS。使用与常规用例相同的pair/auth helper连接后，分别以合法形状发送begin，以及对固定16字节ID发送finish/status/release；重连旧身份操作复用R04的A2/A3步骤。重复与foreign bundle安装仍拒绝，已有完整bundle不被部分替换。
+- 预期结果：正常入口只在完整bundle发布后开放；首次构造后的注入失败使Node ready失败、HTTPS不监听，preparation shutdown report实际`all_joined()`且原lifecycle owner `join_actual()`成功，不以pending=0代签。`start_control_only_for_test`启动的真实认证WSS中，begin/finish/status/release四命令均返回`product_not_ready`、result为null且无uploadId/ACK；重连不能恢复旧上传所有权。重复/foreign安装失败时上传、队列读取及队列管理三条路径继续使用原bundle。

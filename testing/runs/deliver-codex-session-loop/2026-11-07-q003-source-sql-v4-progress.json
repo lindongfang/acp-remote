@@ -1,0 +1,149 @@
+{
+  "updatedAt": "2026-11-07T22:25:00+08:00",
+  "change": "deliver-codex-session-loop",
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "status": "Source SQL v4 compile passed; exact-list invocations all exited 0 but discovered 0 tests, so no independent entrypoint was proven; program gate review requested, no dynamic run or Root installation",
+  "baselineCandidate": {
+    "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-source-sql-repair-v2",
+    "baselineSourceSha256": "f0fc282ac308daf70df774e366939f8d40d2517a0895b01802d69082f62e7446",
+    "currentSourceSha256": "8c6a799614e4d95f425e40323d47ff63bdd95a5dc88a63e9fc70ece1efac353f",
+    "members": 945,
+    "v4PatchPaths": [
+      "app/src/application/native_dispatch/source_sessions/operations.rs",
+      "app/src/application/native_dispatch/source_sessions/reconciliation.rs",
+      "app/src/application/native_dispatch/source_sessions/sql_inventory.rs",
+      "app/src/node/source_sessions/development_tests.rs"
+    ],
+    "rootInstalled": false
+  },
+  "boundedDevelopmentEvidence": {
+    "candidateCargoCompile": {
+      "cargoExitCode": 0,
+      "compilerSupervision": "owned descendants required cleanup after root exit; original supervision failure retained"
+    },
+    "exactSqlReconciliationFault": {
+      "test": "source_session_sql_pending_original_close_blocks_source_claim_release_after_producers_join",
+      "exitCode": 0,
+      "jobNaturalZero": true,
+      "sourceSha256": "8c6a799614e4d95f425e40323d47ff63bdd95a5dc88a63e9fc70ece1efac353f",
+      "binarySha256": "8e8bd9d8aa163d27d37c3edc52df2cb40a30ca6f932df238d72586df3776f455"
+    },
+    "additionalV4Regressions": {
+      "catalog": {
+        "exitCode": 0,
+        "jobNaturalZero": true
+      },
+      "p1ManagementSocket": {
+        "exitCode": 0,
+        "jobNaturalZero": true
+      },
+      "sourceRegistrationQueryReceipts": {
+        "exitCode": 0,
+        "jobNaturalZero": true
+      },
+      "normalSourceSession": {
+        "exitCode": 0,
+        "jobNaturalZero": true
+      },
+      "document": {
+        "exitCode": 0,
+        "jobNaturalZero": true
+      },
+      "factory": {
+        "exitCode": 0,
+        "jobNaturalZero": true
+      }
+    }
+  },
+  "independentWork": {
+    "review": "completed static posterior; v4 source has no newly observed SQL reconciliation gap, but SSF-SQL-RECONCILIATION001 remains P1 Open and merge is not authorized",
+    "acceptance": "v4 reviewer authorized compile/exact-list only. compile-v4-01 exited 0 with PE SHA 9ce7649e5238064bf6fa9dd7662b367bfc6978d48f5f637a627733b788554e7a; source snapshot unchanged. Sixteen per-selector exact-list invocations each exited 0 and source unchanged, but every stdout was `0 tests, 0 benchmarks`, so exact-list did not discover an entrypoint and is not counted as acceptance. This is preserved as a program/selector wiring defect; dynamic run remains prohibited pending reviewer diagnosis and a fresh gate.",
+    "findingClosed": false,
+    "reviewReport": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-session-recovery-review-v4/SOURCE-CODE-REVIEW-v4.md",
+    "reviewReportSha256": "acbebe19827e7927b5acde9df4e378c06e0983fb9dfbcdfd09ae18357240b762",
+    "reviewIdentitySha256": "8c6a799614e4d95f425e40323d47ff63bdd95a5dc88a63e9fc70ece1efac353f",
+    "reviewerConclusion": "static v4 source review did not reproduce the v2/v3 missing-slot/reconcile/claim-gate gap; dynamic evidence is absent and v4 compile supervision still has a VCTIP forced-cleanup exception",
+    "acceptancePreparation": {
+      "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2",
+      "executionManifestSha256": "cd6179def8bc6df57d67f0f1d0948251c5e6de5e41395e60c5246b41d612a4b7",
+      "programManifestSha256": "bb6bb5af1bf15f1ec96f8623c9af5d3324b0a935caca5d97bd51028dd8ea83e5",
+      "programFreezeSha256": "6094f7656ec846e3616dd6f0d48d4a5a6b75a049086e8a179080eb5bcc2b8561",
+      "programFiles": 9,
+      "executionSourceEntries": 945,
+      "executionSourceVerifier": "allVerified=true",
+      "programDrift": 0,
+      "deltaSha256": "091e4ab012b519c37360e84f20c83dd16aea31d4a562b2669240f5388e1170f2",
+      "sourceManifestSha256": "8c6a799614e4d95f425e40323d47ff63bdd95a5dc88a63e9fc70ece1efac353f",
+      "reportSha256": "a87ec5266a43185d2cd5bb078207d00f50440f01d03af63f3d08087d5055894a",
+      "pe": "PENDING_COMPILE_AFTER_REVIEWER_V3_GATE",
+      "dynamicStatus": "NOT RUN",
+      "mappedCoverage": "13 stable core entrypoints plus three SQL faults; registration/query cancellation specified but not implemented and explicitly uncovered",
+      "programGateReview": {
+        "previousV1Decision": "read-only review; compile/list/run not authorized due shared v1 target and missing independent v4 execution copy",
+        "v2Decision": "authorized compile and exact list only; dynamic run prohibited",
+        "v2ReportSha256": "d83b25d69f3469c350db98628565fbfa823258bfb4cbe2c82c489f87d89c2ec4",
+        "v2CompileAttempt": "preflight rejected because run.ps1 passed ProgramManifest to verifier, which expects a liveMembers freeze; no Cargo invocation",
+        "nextGate": "repair and re-freeze test program; obtain reviewer re-review before another compile/list",
+        "requestedScope": "compile/exact list only; dynamic run prohibited",
+        "cancellationCoverage": "Register and Query cancellation not implemented; must remain out of any limited authorization",
+        "v3CompileAttempt": {
+          "label": "compile-v3-01",
+          "cargoExitCode": 101,
+          "cause": "Cargo.toml not found in execution-v2/app or parents; actual manifest is nested at execution-v2/app/app/Cargo.toml",
+          "candidateRustCompilation": false,
+          "ownedJobNaturalZero": true,
+          "sourceUnchanged": true,
+          "peCreated": false,
+          "nextAction": "stop under current gate; preserve first result; no retry/list/dynamic run"
+        },
+        "v4CompileAttempt": {
+          "label": "compile-v4-01",
+          "cargoExitCode": 0,
+          "candidateRustCompilation": true,
+          "binarySha256": "c37545ec61d48d31bdefce53280ecab61c4ea54eaace372fac6a0316c6e165d9",
+          "peSha256": "9ce7649e5238064bf6fa9dd7662b367bfc6978d48f5f637a627733b788554e7a",
+          "ownedJobNaturalZero": false,
+          "forcedOwnedCleanup": true,
+          "remainingOwnedNames": [
+            "vctip"
+          ],
+          "sourceUnchanged": true
+        },
+        "v4ExactList": {
+          "invocations": 16,
+          "allExitCodes": 0,
+          "allSourceUnchanged": true,
+          "discoveredTests": 0,
+          "stdout": "0 tests, 0 benchmarks",
+          "dynamicRun": "NOT AUTHORIZED",
+          "resultLogs": "source-sql-v4-acceptance-v2/logs/list-v4-01..16.*"
+        },
+        "v5Diagnosis": {
+          "decision": "COMPILE_VALID; EXACT_LIST_NOT_PROVEN; DYNAMIC_RUN_PROHIBITED",
+          "reportSha256": "8397bae24faa6301d45aa490f737a5052910d5925c805a9203dc8c46640128bf",
+          "cause": "tester execution copy node::tests lacks independent_source_acceptance module attachment; not selector typo",
+          "requiredRepair": "new tester-owned overlay/program revision bound into manifest/freeze/snapshot/verifier; fresh reviewer gate; compile plus 16 exact-list only",
+          "reviewerFindingClosed": false
+        },
+        "v5Preparation": "Acceptance author has begun a new program-v5 and tester-owned overlay in a fresh directory; v4/execution-v2 remain immutable. No compile/list/run before fresh gate."
+      }
+    }
+  },
+  "notVerified": [
+    "independent dynamic Source SQL acceptance; exact-list discovered zero tests",
+    "program module/selector wiring diagnosis and fresh reviewer gate",
+    "Register/Query cancellation (specified but not implemented)",
+    "full seven-risk independent acceptance and reviewer posterior",
+    "complete vendor Harness behavior and CL-061",
+    "external SID history when no existing target is available",
+    "full WP3/WP4/CL-030/031 and complete change acceptance",
+    "whole-project strict clippy and security/supply-chain review"
+  ],
+  "npmAudit": "not run per user instruction; no package metadata was sent",
+  "committed": false,
+  "pushed": false,
+  "archived": false
+}

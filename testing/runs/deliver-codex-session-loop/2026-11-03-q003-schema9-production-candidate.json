@@ -1,0 +1,35 @@
+{
+  "kind": "Actual schema9 production migration implementation candidate",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-schema9-production-implementation-v1",
+  "freeze": "23335fc068ef54e79ed9b98693eb2aca6b19d74996ffdf588ea15205c24bf65c",
+  "members": 882,
+  "sourceCount": 805,
+  "modified": 3,
+  "added": 2,
+  "preserved": 800,
+  "paths": [
+    "app/src/session_storage/mod.rs",
+    "app/src/session_storage/node_catalog_schema.rs",
+    "app/src/session_storage/node_catalog_schema/tests.rs",
+    "app/src/session_storage/schema.rs",
+    "app/src/storage.rs"
+  ],
+  "patch": "24bc6b79398b576bf9a1453666d1ba223249301e66cb583644172bd888dca194",
+  "sourceManifest": "6b979844490552f5ddc618d574b664b6a6ae3ab7bac80e4213c98b1383ac17d5",
+  "developerPassed": 8,
+  "checkExit": 0,
+  "fmtExit": 0,
+  "applyCheckExit": 0,
+  "strict": {
+    "exit": 101,
+    "before": 687,
+    "after": 683,
+    "added": 0,
+    "removed": 4
+  },
+  "formalHistoryAcceptanceExecuted": false,
+  "exactTempHookInstalled": false,
+  "currentSchemaHeadOracleMaintained": false,
+  "rootInstalled": false,
+  "fullProductPass": false
+}

@@ -1,0 +1,96 @@
+{
+  "schema": "deliver-codex-session-loop-q003-source-sql-v11-acpi-v2-status-v1",
+  "date": "2026-11-08",
+  "sourceSql": {
+    "candidate": "strict4R-v11-scopebound-20261108-r1",
+    "directory": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/strict4R-dynamic-gate-v11-scopebound-20261108",
+    "scope": {
+      "modes": [
+        "compile",
+        "list"
+      ],
+      "selectors": [
+        "node::tests::source_session_development::source_session_register_caller_cancel_keeps_admitted_original_sql_owner",
+        "node::tests::source_session_development::source_session_register_cancel_before_sql_slot_keeps_explicit_none"
+      ],
+      "test": "disabled"
+    },
+    "approval": "fresh review required; not authorized",
+    "dynamicCommandsRun": false,
+    "frozenFiles": [
+      {
+        "path": "gate-config.json",
+        "bytes": 2597,
+        "sha256": "b41b8779c005cbd1515fd9fdc40f16befd8cf3a7b6a16897a53186dc3498d4c6"
+      },
+      {
+        "path": "PROGRAM-MANIFEST-v11.json",
+        "bytes": 3502,
+        "sha256": "b6055a977d674c8d86dde3a1fa7c022c028b8990ec4274f7793884cb52a5c703"
+      },
+      {
+        "path": "PROGRAM-FREEZE-v11.json",
+        "bytes": 1913,
+        "sha256": "8e52c44d00b8aaa2b32a5d85e8f7e8d9efac16f843466f95d29ba594f789d6be"
+      },
+      {
+        "path": "verify-static.mjs",
+        "bytes": 11563,
+        "sha256": "233da287207b22e2d011014f99291d0cd18b82e4ca5a22d316df55baf0d632ca"
+      },
+      {
+        "path": "run-gate.ps1",
+        "bytes": 16607,
+        "sha256": "2771340952628fd32d8c6922e47e311ee9ac062d32940890ac422e417346fba7"
+      },
+      {
+        "path": "REPORT-v11.md",
+        "bytes": 3143,
+        "sha256": "a78ebc6a38b49b0532bb04aa974e306b7f721d86e6e4846dfc6ee9be00d66eea"
+      }
+    ],
+    "authorStaticCrossBinding": "candidate author reported matched; independent review rejected",
+    "independentReview": {
+      "outcome": "REJECT before verifier/Cargo/list/test",
+      "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/strict4R-dynamic-gate-v11-review-v2/REPORT.md",
+      "sha256": "dafef9f046b73bc19f789c0dd12c59e414c439900cae3d8eb27188185f6808e4",
+      "findings": [
+        "Frozen runner hash/size does not match the active runner bytes; the separate v11 runner is not the frozen entry path",
+        "Active runner reads the unapproved fresh-review-required config with empty report binding; approved config is not read by that runner",
+        "Frozen verifier identity does not bind the v11 verifier; the separate v11 verifier has duplicate top-level scopePath declaration and is not valid as written"
+      ],
+      "dynamicCommandsRun": false,
+      "next": "preserve v11 and prepare a new immutable revision with one exact frozen active runner/config/verifier chain, then obtain fresh independent review"
+    },
+    "priorRejectedRevisionsPreserved": true,
+    "p1": "SSF-SQL-RECONCILIATION001 remains open"
+  },
+  "acpiRoute": {
+    "contract": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p3b-acpi-route-pre-review-v1/ACPI-ROUTE-IMPLEMENTATION-CONTRACT-v2.md",
+    "sha256": "30358d3f187b82e45e48a4c29d88126e77fa949c39fcd8fc570c66e0107100f6",
+    "bytes": 21398,
+    "scope": "static implementation-contract candidate; independent coding-gate review pending",
+    "productSourceModified": false,
+    "cargoRun": false
+  },
+  "overall": {
+    "openspecTrackedProgress": "6/25",
+    "npmAudit": "not run per user instruction",
+    "gitIndexModified": false,
+    "committedOrPublished": false
+  },
+  "acpiRouteReview": {
+    "outcome": "BLOCK before coding",
+    "report": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-p3b-acpi-route-pre-review-v1/ACPI-ROUTE-CODING-PRE-REVIEW-v2-INDEPENDENT.md",
+    "sha256": "83270d508c17fad1c2b02159ca2176759428beccd1697f7ca627f2b0b0a1369a5",
+    "findings": [
+      "Binary NodeStopping close-code conflict: 4400 versus 1001",
+      "Command schemas and binary error semantics not yet in authoritative OpenSpec requirements",
+      "Dual service installation atomicity not selected",
+      "R03/R06/R07/R08 lack reproducible barrier, fixture, and observation steps",
+      "Actor revoke to lifetime seal behavior not stated as an observed contract"
+    ],
+    "productSourceModified": false,
+    "cargoRun": false
+  }
+}

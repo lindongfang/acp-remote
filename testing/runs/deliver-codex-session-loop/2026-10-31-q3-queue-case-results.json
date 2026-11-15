@@ -1,0 +1,252 @@
+﻿{
+    "definitionSHA":  "9e1c407e6d000b827b03bcd02482fe3d217cde18a2c75d7f83e2cbe0d966d93c",
+    "contractSHA":  "61987328a83927c414fba8a2b085f0796f05792a8072ae9ad11d6187d8e1c466",
+    "testSHA":  "07f19cd4a090ed936f6abda444fd228c31bbc8fd0a806464434141e411ba2fdd",
+    "sourceManifestSHA":  "4c126414df06228f62e954aa2d7d3eabdaabfbca7f054fcba6c79d5356d85ee1",
+    "caseCount":  39,
+    "testCount":  39,
+    "actualPassed":  39,
+    "missing":  [
+
+                ],
+    "extra":  [
+
+              ],
+    "assertionCounting":  "Direct macro call sites only; helper assertions and loop repetitions are additional; runtime assertion total not instrumented",
+    "cases":  [
+                  {
+                      "id":  "CL-087.API01",
+                      "test":  "cl087_api01_capacity_last_slot_orders_and_normal_ready_queues",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  4
+                  },
+                  {
+                      "id":  "CL-087.API02",
+                      "test":  "cl087_api02_preparation_stays_in_three_waiting_slots",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  3
+                  },
+                  {
+                      "id":  "CL-087.API03",
+                      "test":  "cl087_api03_targets_and_same_key_instance_token_fence",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  7
+                  },
+                  {
+                      "id":  "CL-088.API01",
+                      "test":  "cl088_api01_edit_identity_version_and_all_stale_mutations_unchanged",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  13
+                  },
+                  {
+                      "id":  "CL-088.API02",
+                      "test":  "cl088_api02_cancel_releases_slot_without_second_cancel_effect",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  4
+                  },
+                  {
+                      "id":  "CL-089.API01",
+                      "test":  "cl089_api01_fifo_and_active_blocking_with_independent_waiting_slots",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  7
+                  },
+                  {
+                      "id":  "CL-090.API01",
+                      "test":  "cl090_api01_priority_waits_for_ready_and_preserves_other_relative_order",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  5
+                  },
+                  {
+                      "id":  "CL-090.API02",
+                      "test":  "cl090_api02_priority_change_and_edit_invalidate_old_preparations",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  8
+                  },
+                  {
+                      "id":  "CL-090.API03",
+                      "test":  "cl090_api03_last_priority_then_cancel_clears_selection",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  2
+                  },
+                  {
+                      "id":  "CL-090.API04",
+                      "test":  "cl090_api04_normal_full_draft_and_priority_cannot_bypass_active",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  3
+                  },
+                  {
+                      "id":  "CL-092.API01",
+                      "test":  "cl092_api01_dispatch_has_no_original_actor_or_gate_argument",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  5
+                  },
+                  {
+                      "id":  "CL-095.API01",
+                      "test":  "cl095_api01_nonclone_nondebug_structured_body_moves_without_loss",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  3
+                  },
+                  {
+                      "id":  "CL-095.API02",
+                      "test":  "cl095_api02_over_32mib_body_and_edit_still_count_as_one_slot",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  8
+                  },
+                  {
+                      "id":  "CL-096.API01",
+                      "test":  "cl096_api01_node_processing_order_has_no_clock_input",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  2
+                  },
+                  {
+                      "id":  "CL-097.API01",
+                      "test":  "cl097_api01_observation_and_blocked_prepare_do_not_expire_items",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  5
+                  },
+                  {
+                      "id":  "CL-098.API01",
+                      "test":  "cl098_api01_fresh_instance_is_empty_after_old_instance_drop",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  3
+                  },
+                  {
+                      "id":  "CL-099.API01",
+                      "test":  "cl099_api01_cancel_before_begin_and_begin_before_cancel_or_edit",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  9
+                  },
+                  {
+                      "id":  "CL-099.API02",
+                      "test":  "cl099_api02_edit_before_begin_requires_current_revision",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  5
+                  },
+                  {
+                      "id":  "CL-099.API03",
+                      "test":  "cl099_api03_begin_rechecks_blocked_and_every_epoch_component",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  6
+                  },
+                  {
+                      "id":  "CL-099.API04",
+                      "test":  "cl099_api04_release_keeps_position_and_old_tokens_are_not_reused",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  7
+                  },
+                  {
+                      "id":  "CL-099.API05",
+                      "test":  "cl099_api05_clone_settles_once_and_foreign_tokens_cannot_read_or_settle",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  12
+                  },
+                  {
+                      "id":  "CL-110.API01",
+                      "test":  "cl110_api01_full_suspension_direct_new_work_and_advance_keeps_old_suspended",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  8
+                  },
+                  {
+                      "id":  "CL-110.API02",
+                      "test":  "cl110_api02_edit_observe_and_prioritize_do_not_resume_old_items",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  6
+                  },
+                  {
+                      "id":  "CL-111.API01",
+                      "test":  "cl111_api01_waiting_new_item_gets_last_slot_and_dispatches_before_suspended",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  6
+                  },
+                  {
+                      "id":  "CL-111.API02",
+                      "test":  "cl111_api02_new_failure_suspends_all_remaining_items_without_requeueing_failed_input",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  7
+                  },
+                  {
+                      "id":  "CL-112.API01",
+                      "test":  "cl112_api01_resume_retries_do_not_duplicate_or_preempt_active_new_input",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  9
+                  },
+                  {
+                      "id":  "CL-112.API02",
+                      "test":  "cl112_api02_resume_places_existing_runnable_d_before_old_xy",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  4
+                  },
+                  {
+                      "id":  "CL-112.API03",
+                      "test":  "cl112_api03_resume_invalidates_prepared_d_without_changing_new_first_order",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  5
+                  },
+                  {
+                      "id":  "CL-113.API01",
+                      "test":  "cl113_api01_two_linear_orders_only_one_direct_owner_and_no_fourth_waiting_slot",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  4
+                  },
+                  {
+                      "id":  "CL-113.API02",
+                      "test":  "cl113_api02_blocked_full_and_existing_runnable_or_prepared_item_forbid_direct_bypass",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  1
+                  },
+                  {
+                      "id":  "CL-113.API03",
+                      "test":  "cl113_api03_direct_active_is_retained_when_last_transport_conditions_change",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  3
+                  },
+                  {
+                      "id":  "CL-115.API01",
+                      "test":  "cl115_api01_other_editor_cancel_and_resume_during_active_new_input",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  13
+                  },
+                  {
+                      "id":  "CL-115.API02",
+                      "test":  "cl115_api02_resumed_cancel_send_order_and_stale_revision_keep_state",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  7
+                  },
+                  {
+                      "id":  "CL-087.API04",
+                      "test":  "cl087_api04_duplicate_waiting_or_active_id_precedes_full_and_returns_new_input",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  5
+                  },
+                  {
+                      "id":  "CL-088.API03",
+                      "test":  "cl088_api03_equal_body_edit_advances_version_and_mutation_errors_are_ordered",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  14
+                  },
+                  {
+                      "id":  "CL-099.API06",
+                      "test":  "cl099_api06_busy_and_stale_precede_blocked_then_epoch_error",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  7
+                  },
+                  {
+                      "id":  "CL-112.API04",
+                      "test":  "cl112_api04_resume_complete_noop_preserves_prepared_token",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  10
+                  },
+                  {
+                      "id":  "CL-099.API07",
+                      "test":  "cl099_api07_explicit_zero_send_settle_returns_content_without_requeue",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  13
+                  },
+                  {
+                      "id":  "CL-095.API03",
+                      "test":  "cl095_api03_debug_redacts_body_without_requiring_debug_generic_parameter",
+                      "status":  "passed",
+                      "directStaticAssertionSites":  4
+                  }
+              ]
+}

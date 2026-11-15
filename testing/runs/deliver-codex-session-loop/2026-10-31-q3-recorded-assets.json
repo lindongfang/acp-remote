@@ -1,0 +1,58 @@
+{
+  "entries": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-spec-impact.md",
+      "sha256": "561058a70e0dbb5408dea41dde89cfdc6258c46663b7658e6813a887cfbe50c8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-queue-planning-review.md",
+      "sha256": "52809fafe6edd30457b46ed60379dc7ad16e5136c17a4e042d9b4cf31a139275"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-queue-planning-inputs.json",
+      "sha256": "6471894fe509fc53eef1934c118c3fb523ef863e99395bf2f1078b03513e2ede"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-queue-test-definition.md",
+      "sha256": "753ee4746e2ff578c28322ab907eb87fbd519e425e134e19800d47a737c59867"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-queue-api-definition.md",
+      "sha256": "9e1c407e6d000b827b03bcd02482fe3d217cde18a2c75d7f83e2cbe0d966d93c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-full-check.txt",
+      "sha256": "2792fe316de54a13347f5d4668af01f241422ba20496e14dccaa5adb81c282f5"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-full-build.txt",
+      "sha256": "fa2bd9aff090365a57d2c4574bda0bc24ed84d70db7a7f62e8bf6bdb69dcbef6"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-full-exit.json",
+      "sha256": "9cc64c02d40d866d40346a045701d80eda9c3567d7d02fb0102556edff9479a8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-baseline-check.txt",
+      "sha256": "97334a3acdef6b296bf3993f98ca7b5cf752301391aa76bf0c5095bcde923645"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-baseline-owner-check.txt",
+      "sha256": "82961324215c2e726b14d9a4cf3df49ea49cbd7fb8a40c8c55439a6ad85a7f14"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-baseline-owner-exit.json",
+      "sha256": "5ab53d9144ee15f4529e12b99a9daf1151a5654b4ad5afdaae5cdb5539d1584f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-queue-dev.txt",
+      "sha256": "1e3991f418a3ef379cb7386731ac437364210ce5d68fbe460c5a364332435e69"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-10-31-q3-queue-clippy.txt",
+      "sha256": "caf2009274e2cdda4a760dedc5615f59345b312625c648283b1b33776c7896f2"
+    }
+  ],
+  "sourceEntriesChecked": 122,
+  "sourceMismatches": []
+}

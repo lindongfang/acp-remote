@@ -1,0 +1,68 @@
+{
+  "scope": "Independent coding gate only; no implementation or test pass claimed",
+  "baseSource": "393f19c89323137c75acdeded3e628dff5dc3aa27b8f146e6158a913e517b113",
+  "baseSourceCount": 448,
+  "designMembersVerified": 468,
+  "independentDefinitionMembersVerified": 51,
+  "groups": "PA01-08 not-run",
+  "coder": "management_candidate, new isolated workspace",
+  "productionPaths": [
+    "app/src/adapters/acp/prompt_input.rs",
+    "app/src/adapters/acp/mod.rs",
+    "app/src/adapters/acp/strategy.rs"
+  ],
+  "developerLeaf": "app/src/adapters/acp/prompt_input/tests.rs",
+  "independentMount": "Real two independent leaves and lib.rs three cfg(test) lines only after actual leaves exist",
+  "noRootTransplantAllowed": true,
+  "nodeWssHarness": false,
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/design/freeze.json",
+      "sha256": "ccf6e531d1ff165008303b7b33bbea29e1ede4663634b321824fd1884f407159"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/design/CONTRACT.md",
+      "sha256": "273739bc120ce981315a96ec33f4a6e6b194c91d967f9d6c028a0adac3acad63"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/design/BEFORE-AFTER.md",
+      "sha256": "098c826769f4d9705017b62242624f4774ef671840c288c3715ad4891a222c3c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/design/CONSUMERS.md",
+      "sha256": "28814aa6b80c908e8298e9c8241b0aa4bcd99779bf23c2c00a86c723de244b04"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/design/ACCEPTANCE-INPUTS.md",
+      "sha256": "0c3274079621c2d668ffd06db5f0787b3f81bf1bc1368fb17837b25c6efb6e24"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/design/before-hashes.json",
+      "sha256": "b487ca78a07ef8ee1e9d578d39fd869572d2c36d1bd1ae37d40bc20066bff863"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/independent/freeze.json",
+      "sha256": "442e6da8756f348b746fad6712f2348f916892c149864ca43a56aca41fdad445"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/independent/DEFINITION.md",
+      "sha256": "e42d20cd95dd375784db0e316577d5c37e040f9d259747a6a6db747d8f23efc1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/independent/MOUNT-PROPOSAL.md",
+      "sha256": "9cd151c392bb37dddf9d0caeea36d9c05a383330332d2e39c30e3d860dd6e241"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/independent/REPORT.md",
+      "sha256": "6cafff43d2fa791e596889821d94cb1a8d6fbccaaf715499e896e317aadc13b0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/review/coding-gate.md",
+      "sha256": "777b2fae9e9efcee3c513f18cb693b5cc41e46bb719b3adbc6f4536a83f765f3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-prompt-adapter-a-coding-gate/review/verification.json",
+      "sha256": "ecfa658edf075e30de6bc390d39a3971815b2081118abe48c6d0f588927226cb"
+    }
+  ]
+}

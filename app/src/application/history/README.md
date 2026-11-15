@@ -1,6 +1,10 @@
 # 历史保存开发接口
 
-实现依据是 [session-contract §5–6](../../../../openspec/changes/deliver-codex-session-loop/session-contract.md)。本文说明开发接口，不替代行为规格。当前只有应用、领域和真实SQLite模块；OutputControl测试端口不能证明真实Harness已停。
+本文保留先前部分实现的开发记录，所述永久正文、500ms/64KiB保存和强刷链路已被新规格取代，禁止接入新会话入口。当前实现依据见[implementation-contract](../../../../openspec/changes/deliver-codex-session-loop/implementation-contract.md)及structured-history规格；现存旧数据保留，不由新视图自动删除。
+
+本模块当前仅cfg(test)编译用于旧回归；正常库及节点构建不导出该保存服务。
+
+以下仅说明基于已停用[session-contract §5–6](../../../../openspec/changes/deliver-codex-session-loop/session-contract.md)的历史开发接口，不是当前产品规则。OutputControl测试端口不能证明真实Harness已停。
 
 ## 两种计量口径
 

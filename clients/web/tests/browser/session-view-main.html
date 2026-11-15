@@ -1,0 +1,24 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Production main shared-view DOM fixture</title>
+  </head>
+  <body>
+    <aside id="fixture-controls" aria-label="测试夹具控制">
+      <h1>生产 main 共享视图夹具</h1>
+      <p>仅用于专用 HTTPS 测试 origin；认证、main、DOM 和 ACPV 收帧路径使用真实实现。</p>
+      <nav aria-label="运行 WV 用例">
+        <a href="?case=WV13">运行 WV-13 乱序 open/close</a>
+        <a href="?case=WV14">运行 WV-14 首 credit 失败</a>
+        <a href="?case=WV15">运行 WV-15 DOM 状态保留</a>
+        <a href="?case=WV16">运行 WV-16 来源操作与只读视图</a>
+      </nav>
+      <output id="fixture-result" aria-live="polite">正在准备合成同源身份…</output>
+    </aside>
+    <div id="app" aria-live="polite"></div>
+    <script type="module" src="./session-view-main.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "kind": "Independent Rust E1 finite codec/buffer static and evidence posterior",
+  "safe_final": true,
+  "members": [
+    {
+      "path": "EVIDENCE-VERIFICATION.json",
+      "bytes": 44386,
+      "sha256": "585bd46edfec44a0effecc1571e8bb9b2d76b37c2a733d777dafae93f941931c"
+    },
+    {
+      "path": "INPUT-VERIFICATION.json",
+      "bytes": 773214,
+      "sha256": "db39b978d5f5bab78615400a34dc203c4afaeb50a755535e5ad04dfa27c956c9"
+    },
+    {
+      "path": "REVIEW.md",
+      "bytes": 8541,
+      "sha256": "86ddd68922ce2a1046fa81ef8d1a9d4825d42a9aea77990919f1df7ddcf183fd"
+    },
+    {
+      "path": "summary.json",
+      "bytes": 1660,
+      "sha256": "2415008e330c6b39e220022598e8bdfba9c0b8da9deb57404d2830a5c1754e2d"
+    }
+  ]
+}

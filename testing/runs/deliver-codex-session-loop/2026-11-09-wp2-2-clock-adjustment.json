@@ -1,0 +1,44 @@
+{
+  "schema": "deliver-codex-session-loop-wp2-2-clock-adjustment-v1",
+  "date": "2026-11-09",
+  "scope": "Queue-owner development verification for node wall-clock adjustment",
+  "toolchain": {
+    "rust": "1.98.1-x86_64-pc-windows-msvc",
+    "locked": true,
+    "offline": true,
+    "targetDir": ".tmp/wp22-clock-target-20261109"
+  },
+  "results": [
+    {
+      "scope": "Node clock advances by one day and then moves backwards while accepted queue items remain ordered and admitted",
+      "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --lib registry_node_clock_adjustment_does_not_expire_or_reorder_queue -- --test-threads=1",
+      "exitCode": 0,
+      "passed": 1,
+      "failed": 0,
+      "ignored": 0,
+      "runner": "authorized local Windows owner identity"
+    },
+    {
+      "scope": "Complete queue-owner development regression group",
+      "command": "cargo test --manifest-path app/Cargo.toml --locked --offline --lib application::queue_owner::tests:: -- --test-threads=1",
+      "exitCode": 0,
+      "passed": 25,
+      "failed": 0,
+      "ignored": 0,
+      "runner": "authorized local Windows owner identity"
+    }
+  ],
+  "covered": [
+    "Node wall-clock movement does not expire accepted queue items",
+    "Node wall-clock movement does not reorder accepted queue items",
+    "Admission remains usable after a backwards clock adjustment",
+    "Queue capacity rejection remains a queue fact rather than a clock-lock result"
+  ],
+  "notCovered": [
+    "Real management WSS approval-waiting plus concurrent edit/cancel/prioritize/resume",
+    "Client clock skew across independent sockets",
+    "Independent tester or reviewer acceptance",
+    "Full WP2.2 acceptance and real Codex Harness behavior"
+  ],
+  "taskStatus": "WP2.2 remains open"
+}

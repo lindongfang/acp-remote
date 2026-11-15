@@ -1,0 +1,45 @@
+{
+  "status": "implementation-frozen-awaiting-independent-acceptance",
+  "files": [
+    {
+      "path": "app/src/adapters/acp/view_observations.rs",
+      "sha256": "1e38ef176b4c2d505d05cc84aa506817952a91148e79b7e50d6b2574926f0dec"
+    },
+    {
+      "path": "app/src/adapters/acp/view_observations/tests.rs",
+      "sha256": "8ee000b6b6451a953a14c61fb70cbd3384c5c3b7af08e1fcbe9568d11149554b"
+    },
+    {
+      "path": "app/src/adapters/acp/mod.rs",
+      "sha256": "b517c73348626f9ac82b2341417cd3057d9c0ca450b5245fff0de7b73eaa9fb4"
+    },
+    {
+      "path": "app/src/adapters/acp/README.md",
+      "sha256": "7929e5816a411efd14b342de353649a6248a7ea3ae53f41564bc3625a0ce1448"
+    },
+    {
+      "path": "app/src/adapters/acp/strategy.rs",
+      "sha256": "72ad187e25cf6ba4c530be4fb8eaa6c482fcca9bab32c3a3220b4fdd42842e4c"
+    },
+    {
+      "path": "app/src/adapters/acp/transport.rs",
+      "sha256": "93bd37e419387eefbb5f5a8819bbbf9c678f44a0baccec89b9edfc61d34f535b"
+    },
+    {
+      "path": "app/src/domain/views.rs",
+      "sha256": "a22bb6e5e9a0e7fdca3b66e9e3dc18025a37ab57832ea95b44e509d189255f26"
+    },
+    {
+      "path": "app/src/domain/views/staging.rs",
+      "sha256": "d2a2a6ec3756777a5758d05ffd51e7a78f9f62fb5158283545854c77b00b0f09"
+    },
+    {
+      "path": "app/Cargo.lock",
+      "sha256": "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/p1-raw-observations-contract.md",
+      "sha256": "a071335b22ed7b028323f1e629d9df3460e858b1434b0adf43aa76d3659f1f3a"
+    }
+  ]
+}

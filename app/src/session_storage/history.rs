@@ -500,4 +500,5 @@ pub(super) async fn write_fault(
     Ok(())
 }
 #[cfg(test)]
+#[path = "history/tests.rs"]
 mod tests;

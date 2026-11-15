@@ -1,0 +1,25 @@
+{
+  "scope": "Q003 planning consistency only. No new product acceptance or code integration. User authorized apply after spec correction.",
+  "outputs": [
+    {
+      "source": "session-loop-q003-reviewer/wp3-specs/q003-three-corrections-planning-consistency-review.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-user-three-spec-correction/review/q003-three-corrections-planning-consistency-review.md",
+      "sha256": "f74bd8856be1a1f4ede87bfdcc37eb6da655dd5b7d71bf26c662a9e6e683834b"
+    },
+    {
+      "source": "session-loop-q003-reviewer/wp3-specs/q003-three-corrections-independent-verification.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-user-three-spec-correction/review/q003-three-corrections-independent-verification.json",
+      "sha256": "1a6235e96878bee09354ff4c86e5c6f1f1868e3533e3c484ff0bf95d931911db"
+    },
+    {
+      "source": "session-loop-q003-user-spec-correction-2026-11-02/tests-integration.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-user-three-spec-correction/review/tests-integration.json",
+      "sha256": "d1e167bf999cae2aff2bcddf032d5ae3049fc5f6685498503b1c05d07c8db0e3"
+    },
+    {
+      "source": "session-loop-q003-user-spec-correction-2026-11-02/current-source-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-user-three-spec-correction/review/current-source-check.json",
+      "sha256": "0387e6e167c907a41d23e7280766b0483a0f11980219e80b0186e40efbc3555e"
+    }
+  ]
+}

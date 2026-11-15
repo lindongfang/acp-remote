@@ -1,0 +1,1942 @@
+[
+  {
+    "id": "RAW-LEGACY-TOOL-V1-name-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-name-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-name-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-name-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":\"n\",\"name\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-name-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":\"n\",\"name\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-name-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":\"n\",\"\\u006eame\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-title-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-title-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Uninterpreted",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-title-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-title-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":\"n\",\"title\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-title-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":\"n\",\"title\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-title-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":\"n\",\"\\u0074itle\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-kind-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-kind-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Uninterpreted",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-kind-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-kind-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":\"read\",\"kind\":\"read\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-kind-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":\"read\",\"kind\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-kind-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":\"read\",\"\\u006bind\":\"read\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-status-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-status-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Uninterpreted",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-status-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-status-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":\"completed\",\"status\":\"completed\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-status-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":\"completed\",\"status\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-status-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":\"completed\",\"\\u0073tatus\":\"completed\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-content-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-content-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Uninterpreted",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-content-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-content-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":[],\"content\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-content-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":[],\"content\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-content-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":[],\"\\u0063ontent\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-locations-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-locations-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Uninterpreted",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-locations-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-locations-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":[],\"locations\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-locations-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":[],\"locations\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-locations-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":[],\"\\u006cocations\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawInput-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawInput-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawInput-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Deferred raw false",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawInput-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawInput-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawInput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawInput-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"\\u0072awInput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawOutput-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawOutput-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawOutput-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Deferred raw false",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawOutput-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawOutput-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawOutput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-rawOutput-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"\\u0072awOutput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-_meta-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-_meta-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Uninterpreted",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-_meta-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-_meta-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}},\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-_meta-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}},\"_meta\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-_meta-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}},\"\\u005fmeta\":{\"opaque\":{\"a\":1,\"a\":2}}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-toolCallId-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-toolCallId-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-toolCallId-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-toolCallId-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-toolCallId-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-toolCallId-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"\\u0074oolCallId\":\"t\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-name-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-name-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "KnownAbsent/code0",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-name-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-name-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":\"n\",\"name\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-name-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":\"n\",\"name\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-name-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"name\":\"n\",\"\\u006eame\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-title-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-title-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "KnownAbsent/code0",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-title-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-title-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":\"n\",\"title\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-title-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":\"n\",\"title\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-title-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"title\":\"n\",\"\\u0074itle\":\"n\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-kind-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-kind-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Ok(Some(ToolPatch)); Assignment::Set(knowledge=Known,code=0); no span claim",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-kind-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-kind-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":\"read\",\"kind\":\"read\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-kind-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":\"read\",\"kind\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-kind-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"kind\":\"read\",\"\\u006bind\":\"read\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-status-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-status-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Ok(Some(ToolPatch)); Assignment::Set(knowledge=Known,code=0); no span claim",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-status-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-status-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":\"completed\",\"status\":\"completed\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-status-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":\"completed\",\"status\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-status-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"status\":\"completed\",\"\\u0073tatus\":\"completed\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-content-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-content-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "KnownEmpty",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-content-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-content-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":[],\"content\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-content-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":[],\"content\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-content-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"content\":[],\"\\u0063ontent\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-locations-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-locations-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "KnownEmpty",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-locations-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-locations-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":[],\"locations\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-locations-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":[],\"locations\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-locations-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"locations\":[],\"\\u006cocations\":[]}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawInput-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawInput-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "KnownAbsent",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawInput-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Deferred raw false",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawInput-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawInput-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawInput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawInput-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawInput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"\\u0072awInput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawOutput-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawOutput-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "KnownAbsent",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawOutput-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Deferred raw false",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawOutput-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawOutput-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"rawOutput\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-rawOutput-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"rawOutput\":{\"x\":1,\"x\":2,\"n\":1e9999},\"\\u0072awOutput\":{\"x\":1,\"x\":2,\"n\":1e9999}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-_meta-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "Keep",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-_meta-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "KnownEmpty",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-_meta-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-_meta-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}},\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-_meta-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}},\"_meta\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-_meta-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"opaque\":{\"a\":1,\"a\":2}},\"\\u005fmeta\":{\"opaque\":{\"a\":1,\"a\":2}}}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-toolCallId-missing",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-toolCallId-null",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-toolCallId-wrong",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":false}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-toolCallId-duplicate-same",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-toolCallId-duplicate-different",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":null}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-toolCallId-duplicate-escaped",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"\\u0074oolCallId\":\"t\"}}}",
+    "steps": [
+      "Construct a consistent baseline SessionEvent from actual Strategy::update on a separate unique valid raw notification",
+      "Call private actual tool_projection::tool_patch with Incoming::Update{event,origin=Live,raw=current input}; no Received or authorization token constructed",
+      "Check real ToolPatch assignments/id or typed error, then compare retained raw bytes"
+    ],
+    "expected": "ProjectionError::MalformedUpdate; no ToolPatch published",
+    "source": "tool_projection.rs:558-623,631-720"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-tool_call-NO-TITLE",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Call actual tool_patch with matching typed baseline event; compare exact result and retained raw"
+    ],
+    "expected": "MalformedUpdate (required initial title missing)",
+    "source": "tool_projection.rs:577-585,645-653"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-tool_call-TITLE",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"t\",\"title\":\"T\"}}}",
+    "steps": [
+      "Call actual tool_patch with matching typed baseline event; compare exact result and retained raw"
+    ],
+    "expected": "Ok(Some(ToolPatch)); name KnownAbsent",
+    "source": "tool_projection.rs:577-585,645-653"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-tool_call-NO-TITLE",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Call actual tool_patch with matching typed baseline event; compare exact result and retained raw"
+    ],
+    "expected": "UnsupportedAnchorKind",
+    "source": "tool_projection.rs:577-585,645-653"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V1-tool_call_content_chunk-NO-TITLE",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_content_chunk\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Call actual tool_patch with matching typed baseline event; compare exact result and retained raw"
+    ],
+    "expected": "UnsupportedAnchorKind",
+    "source": "tool_projection.rs:577-585,645-653"
+  },
+  {
+    "id": "RAW-LEGACY-TOOL-V2-future-NO-TITLE",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"future\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Call actual tool_patch with matching typed baseline event; compare exact result and retained raw"
+    ],
+    "expected": "Ok(None)",
+    "source": "tool_projection.rs:577-585,645-653"
+  },
+  {
+    "id": "RAW-DERIVED-legacy_tool_patch-CHUNK-SCOPED-META",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_content_chunk\",\"toolCallId\":\"t\",\"content\":{\"type\":\"future\",\"u\":{\"x\":1,\"x\":2}},\"_meta\":{\"x\":1,\"x\":2}}}}",
+    "steps": [
+      "Invoke real named private helper with actual baseline event when required",
+      "Keep a current stored metadata fixture outside call and prove no metadata patch was applied by chunk parsing",
+      "Compare original raw bytes and output knowledge/error; no Map projection"
+    ],
+    "expected": "content Deferred; stored metadata field/assignment Keep; chunk _meta is scoped opaque, not stored-metadata patch",
+    "source": "schema v2 ToolCallContentChunk._meta; shared_view_projection.rs:192-203; tool_projection.rs:592-601"
+  },
+  {
+    "id": "RAW-DERIVED-legacy_tool_patch-CHUNK-CONTENT-TYPE-DUP",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_content_chunk\",\"toolCallId\":\"t\",\"content\":{\"type\":\"future\",\"type\":\"future\"}}}}",
+    "steps": [
+      "Invoke real named private helper with actual baseline event when required",
+      "Keep a current stored metadata fixture outside call and prove no metadata patch was applied by chunk parsing",
+      "Compare original raw bytes and output knowledge/error; no Map projection"
+    ],
+    "expected": "ProjectionError::MalformedUpdate",
+    "source": "schema v2 ToolCallContentChunk._meta; shared_view_projection.rs:192-203; tool_projection.rs:592-601"
+  },
+  {
+    "id": "RAW-DERIVED-legacy_tool_patch-CHUNK-META-PARENT-DUP",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_content_chunk\",\"toolCallId\":\"t\",\"content\":{\"type\":\"future\"},\"_meta\":{},\"_meta\":{}}}}",
+    "steps": [
+      "Invoke real named private helper with actual baseline event when required",
+      "Keep a current stored metadata fixture outside call and prove no metadata patch was applied by chunk parsing",
+      "Compare original raw bytes and output knowledge/error; no Map projection"
+    ],
+    "expected": "ProjectionError::MalformedUpdate",
+    "source": "schema v2 ToolCallContentChunk._meta; shared_view_projection.rs:192-203; tool_projection.rs:592-601"
+  },
+  {
+    "id": "RAW-DERIVED-V1-legacy_tool_patch-TOOL-META-OPAQUE",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 1,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"x\":1,\"x\":2,\"nested\":{\"a\":1,\"a\":2}}}}}",
+    "steps": [
+      "Invoke actual named helper without applying Strategy metadata patch",
+      "Assert single _meta field is retained as raw span/Deferred assignment and original bytes unchanged",
+      "Separately metadata patch cases define whether applying those top-level duplicate keys fails; do not conflate retention with patch success"
+    ],
+    "expected": "Ok with _meta Deferred raw; internal opaque members preserved; no patch success claimed",
+    "source": "V1 ToolCallUpdate._meta opaque; shared_view_projection.rs:211-229; tool_projection.rs:609-618"
+  },
+  {
+    "id": "RAW-DERIVED-V2-legacy_tool_patch-TOOL-META-OPAQUE",
+    "level": "L3",
+    "operation": "legacy_tool_patch",
+    "version": 2,
+    "recorded": true,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"_meta\":{\"x\":1,\"x\":2,\"nested\":{\"a\":1,\"a\":2}}}}}",
+    "steps": [
+      "Invoke actual named helper without applying Strategy metadata patch",
+      "Assert single _meta field is retained as raw span/Deferred assignment and original bytes unchanged",
+      "Separately metadata patch cases define whether applying those top-level duplicate keys fails; do not conflate retention with patch success"
+    ],
+    "expected": "Ok with _meta Deferred raw; internal opaque members preserved; no patch success claimed",
+    "source": "V1 ToolCallUpdate._meta opaque; shared_view_projection.rs:211-229; tool_projection.rs:609-618"
+  }
+]

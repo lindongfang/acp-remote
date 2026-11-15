@@ -1,0 +1,158 @@
+{
+  "scope": "Actual final root checks/build all six commands exit0; independent integrated closure pending",
+  "sourceBefore": {
+    "path": "testing/runs/deliver-codex-session-loop/2026-11-01-q3-acp-final2-source-before.json",
+    "sha256": "fa004a9042c0ade9ba835a3f061f0568707c40d354f2f83b4d472f4464aeed88"
+  },
+  "sourceAfter": {
+    "path": "testing/runs/deliver-codex-session-loop/2026-11-01-q3-acp-final2-source-after.json",
+    "sha256": "f01458de3d6aef7d96caafeee73e77094d518f6fddcac0609f4c58365052e8b0"
+  },
+  "permissionCompile": {
+    "positive": 1,
+    "expectedNegative": 9,
+    "allPassed": true
+  },
+  "entries": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/full-check.txt",
+      "sha256": "74eb329fb6beb05d2ef399f10f75095ebda3790e5b8ec5024d4f6ee7c597cecc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/fixture-clippy.txt",
+      "sha256": "0adcc0cc89a3d98f1bfc3247a2f73cb10564b63633a2263c2d204003e40f76bf"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/restart.txt",
+      "sha256": "cf8e7ea4f7847d53d160db817116f9db427f2003c04b06126fa50a06af067fbd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/owned-pipe.txt",
+      "sha256": "8085b640e45996b4e753c69dde08d4120368281fffab99a8f7e67d2ab4ca168d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes.txt",
+      "sha256": "f96233ca207602bac0fda4384574937805d96ce041799f8cde6eb80847409c5c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/full-build.txt",
+      "sha256": "9f4bb56e8e6dedd6bdde414e710d3811ffa10b778965cbd2e10dd6e77eced532"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/exit.json",
+      "sha256": "50a67f471bc0d0195d0598fb86ea2359ecfa05bf19d84ca0a6db4f404825f3b1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/toolchain-owner.txt",
+      "sha256": "80b2b0be952c8cc6c21daf5707051993640fac1f75df759b89519bc208a6f422"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/run-owner.ps1",
+      "sha256": "1fda8f1e865414f0f858c8853df4656b307970302df76fff176c31c55f9f3990"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/integration.json",
+      "sha256": "33b700f802ac733689df751bcbefaac6935bab0a172854985f28d479e98b4a00"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/preimage.json",
+      "sha256": "f2bad6bb1a59a60899bb70cf132e002109e0ac90653df31085f54edfac30dae8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/precheck.json",
+      "sha256": "5fe134c3ac91e8fcaf20885c705d5efc2278a4f6666a31f0ff9654a691a67188"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/choice_literal.jsonl",
+      "sha256": "d296be78ab5b0012b08da6779f1c5372f55ad10acdb3427ce93cf32bd97de687"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/choice_literal.stderr",
+      "sha256": "9e00570c26c461b10e7ffc32dc8c16fbf56188004519684efc77ea0d8ae40b71"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/id.jsonl",
+      "sha256": "18fab2552469e28ef649a42f83860fb6086f3c94ae489a35b67e9091f168f3a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/id.stderr",
+      "sha256": "b64dc0b4a5e64ce7d3925636df22496a3f1951236073aa09ae6c5e540f583212"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/kind.jsonl",
+      "sha256": "d94cabc3efe6ff86e3385ad91de5d110133cacf4af55fe6c7fd05a8cbdb0fe5e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/kind.stderr",
+      "sha256": "99a2fa44e10dca1917d7f7c6a8028ef8eb8310089e2f95174c6e93ca47517647"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/options_clear.jsonl",
+      "sha256": "cbff0992b6c92f397d654a6447452d47948c5c050fb8510275f49ce5e44e03dc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/options_clear.stderr",
+      "sha256": "af857af7143868a7d0f6e86544f538855897bc778d2111a6cb72758a551bf300"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/options_push.jsonl",
+      "sha256": "b10ce64b44258b7d4af987bb52683ff279f9dd42d9edd1b6b67e4215e7459e0c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/options_push.stderr",
+      "sha256": "21152280c6f6df8c58f15e180887d2f5073231d8d239ddc5cc0955ea63209e29"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/positive.jsonl",
+      "sha256": "2d37572fe402862b5b39cd3c2a2e99e0a9d6ddc9821cf4d38159d1c96d45ab51"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/positive.stderr",
+      "sha256": "d01288747269a87f47f4b4c94be11cffdac8953023e6fd79ea50930125c2206f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/raw_swap.jsonl",
+      "sha256": "23383ba3c1b1fa6c8b0f5cec0c52852b47d5a774c9eda66e66d574b3ec866f1d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/raw_swap.stderr",
+      "sha256": "e5d1a6b5cab4d8d8834c7bf25fd8bf6999b8728ededf24740526ecc27cf1abc7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/results.json",
+      "sha256": "d6e3a042afea717c1b66d44e39d23b1c04664c31e4fee0476f8c3f2deeb85176"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/session.jsonl",
+      "sha256": "1135163f6c9e78ee6d8d352cd9bf2b7ead0af7390364b0b57dd1d16f40e84540"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/session.stderr",
+      "sha256": "d82f1603229ba2994f43671205044689bf5e8ac600856027e98f8ffafd8970b4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/supported.jsonl",
+      "sha256": "d89a4f74a1f99ba0fd01fff193f0fd36bf304052eb14fe5dd4e122d474335821"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/supported.stderr",
+      "sha256": "4286d402e62fd5c21522afbae9848fcbbeba851bca22b961c2782bd2344dffdd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/tool.jsonl",
+      "sha256": "82d47b88995c67731a48d576a84169d62c0f6c42a123da3b375f67c458824b7c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/tool.stderr",
+      "sha256": "4668a217d9051aceb25eea0b9b5005f29729b327a7caea21caf4ee03373a7ed5"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/permission-probes/toolchain.txt",
+      "sha256": "c45e612575abeef05e99e88eb1e7aea52cddab9ad70d4f65ad20eaa65e92a9cf"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-acp-final2-root/delivery-review.md",
+      "sha256": "5d374d2e2f5ae10b21b76dfc59718d5677b7597e53feccc5ba68e16d73a2484c"
+    }
+  ]
+}

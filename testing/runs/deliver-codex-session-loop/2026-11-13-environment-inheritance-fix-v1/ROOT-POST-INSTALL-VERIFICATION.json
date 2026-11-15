@@ -1,0 +1,28 @@
+{
+    "verifiedAt":  "2026-11-13T09:55:47.4835146+08:00",
+    "verifiedRootLeaves":  514,
+    "sourceManifestSha256":  "f1f96636ed110b6786523ccd2f7a0ff50f2ebb442c5465fb5e6b305308beb90a",
+    "result":  "root-post-install-v1/RESULT.json",
+    "tests":  {
+                  "processOwner":  13,
+                  "nativeRelease":  7,
+                  "platformOwner":  13
+              },
+    "fmtExit":  0,
+    "binaries":  [
+                     {
+                         "path":  "debug/deps/acp_remote-e75360741b1915fc.exe",
+                         "sha256":  "d6320c0db13bee45186694341c10a53d0854048ecd3089a4f556b5cac4835d9b"
+                     },
+                     {
+                         "path":  "debug/deps/platform_owner-b7dedd8b2e7b6a61.exe",
+                         "sha256":  "a73b5182764b1adb876e4c1e64e9a4d46a2a33105650bf62f58c232fe5378f50"
+                     },
+                     {
+                         "path":  "debug/native_dispatch_dev_child.exe",
+                         "sha256":  "2bcf2efe3eb8bd1b95e42cb6b821cca208b0a2fb0fac74a0e904d898654ef978"
+                     }
+                 ],
+    "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "scope":  "Root recompiled regression; independent candidate evidence remains separately identified; no whole-task acceptance"
+}

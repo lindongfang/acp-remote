@@ -1,0 +1,43 @@
+{
+  "scope": "First physical cleanup failure diagnostic",
+  "productionFix": false,
+  "issue": "Q3-COMP-CLEANUP001",
+  "state": "Open",
+  "modulePassed": 28,
+  "moduleFailed": 1,
+  "firstRemoveRawOsCode": 32,
+  "date": "2026-11-02",
+  "externalPackage": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-first-cleanup-error-diagnostic-v1",
+  "freezeSha256": "2900a73d9cb6e495f95d03bb070318f85c12889339d21309b8994f54fb7262d9",
+  "verifiedFrozenMembers": 799,
+  "records": [
+    {
+      "path": "q3-first-cleanup-os-diagnostic/freeze.json",
+      "sha256": "2900a73d9cb6e495f95d03bb070318f85c12889339d21309b8994f54fb7262d9"
+    },
+    {
+      "path": "q3-first-cleanup-os-diagnostic/NOTE.md",
+      "sha256": "b455048f172f0905c8440d6c622f5ac2e0c757546418824d89f4cac60e04883b"
+    },
+    {
+      "path": "q3-first-cleanup-os-diagnostic/workspace/app/src/shared_view_test_support.rs",
+      "sha256": "b5ba1698d8f8d7f1c0fd62f0cfcbbe0a4367ce41b2f3926565369c30c36d7b1a"
+    },
+    {
+      "path": "q3-first-cleanup-os-diagnostic/logs/transfer-module-01.json",
+      "sha256": "75c136ac2e2688daa0f36dc03da20550a4ecce27c2cb91a26289578cc1806f6e"
+    },
+    {
+      "path": "q3-first-cleanup-os-diagnostic/logs/transfer-module-01.stderr.log",
+      "sha256": "98e22dbdd498618432783ab98bdf11fe9a5c7c81a2900029bc9b0eee6bc92008"
+    },
+    {
+      "path": "q3-first-cleanup-os-diagnostic/logs/transfer-module-01.stdout.jsonl",
+      "sha256": "53b92686115cd98dce8390feafef278ba03fc65133abafe3aa10039152aed78a"
+    },
+    {
+      "path": "q3-first-cleanup-os-diagnostic/logs/partial-header-01.json",
+      "sha256": "b5827eaefb81bb4580b55cfefe7327cf77df56d749e06d768e732867dad77e30"
+    }
+  ]
+}

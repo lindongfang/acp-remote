@@ -1,0 +1,34 @@
+{
+  "scope": "C independent minimal F proposal only",
+  "installed": false,
+  "executed": 0,
+  "original46Executed": 0,
+  "privateFixtureOnly": true,
+  "productionSchema9": false,
+  "date": "2026-11-02",
+  "externalPackage": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-configuration-independent-acceptance-v1",
+  "freezeSha256": "d4b58627cb16d008bd9bd46ce7450db4ad1b3f455b8cecabd244b9ba413eaa15",
+  "verifiedFrozenMembers": 1623,
+  "records": [
+    {
+      "path": "q3-c-independent-f-proposal/freeze.json",
+      "sha256": "d4b58627cb16d008bd9bd46ce7450db4ad1b3f455b8cecabd244b9ba413eaa15"
+    },
+    {
+      "path": "q3-c-independent-f-proposal/F-GATE-REQUEST.md",
+      "sha256": "3b5026fd4f993bed34f9418e787666725ee07414ce292462797cdd2d0262940f"
+    },
+    {
+      "path": "q3-c-independent-f-proposal/F-MINIMAL-PROPOSAL.patch",
+      "sha256": "c01522bb79fcfe05ff35092534b127576d1a1973639ead4c4df162e38fecad28"
+    },
+    {
+      "path": "q3-c-independent-f-proposal/REGRESSION-DEFINITIONS.json",
+      "sha256": "7367aaddc75acd987e8b211872c63e8988870dc4c707f766bf01cbe89156e746"
+    },
+    {
+      "path": "q3-c-independent-f-proposal/REPORT.md",
+      "sha256": "f5bca7fd6944675b28e74d2ec157e3eba3f436db9c0d131ebf37dee84e9aa6ab"
+    }
+  ]
+}

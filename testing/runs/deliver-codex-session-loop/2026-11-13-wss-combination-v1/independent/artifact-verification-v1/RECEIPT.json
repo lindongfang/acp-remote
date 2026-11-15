@@ -1,0 +1,212 @@
+{
+    "verifiedAt":  "2026-11-13T13:36:30.7563175+08:00",
+    "status":  "artifacts_fixed_read_only",
+    "buildSupervisionStatus":  "failed_open",
+    "originalBuildResult":  {
+                                "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\RESULT.json",
+                                "bytes":  6931,
+                                "sha256":  "a6f21abeeb07f47a99e449e8f9f2e67e0bd4783727c36f5b5f5272de84dcddc9"
+                            },
+    "sourceManifest":  {
+                           "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\COVERAGE-SOURCE-v4.json",
+                           "bytes":  95244,
+                           "sha256":  "1422fe684b4db7accfbb1089a41b75ca9f597030382a05cda9c23abfcaf0fdeb"
+                       },
+    "before":  {
+                   "own":  {
+                               "leaves":  515,
+                               "canonicalSha256":  "5c7c0aeff9a94a213ffb8b81184ebdb9b8fffd16051bcc9836f7f2f11231921f",
+                               "exactTree":  true,
+                               "leafBytesAndHashesMatch":  true
+                           },
+                   "rootFrozenSubset":  {
+                                            "leaves":  515,
+                                            "canonicalSha256":  "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+                                            "exactTree":  false,
+                                            "leafBytesAndHashesMatch":  true
+                                        },
+                   "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+               },
+    "after":  {
+                  "own":  {
+                              "leaves":  515,
+                              "canonicalSha256":  "5c7c0aeff9a94a213ffb8b81184ebdb9b8fffd16051bcc9836f7f2f11231921f",
+                              "exactTree":  true,
+                              "leafBytesAndHashesMatch":  true
+                          },
+                  "rootFrozenSubset":  {
+                                           "leaves":  515,
+                                           "canonicalSha256":  "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+                                           "exactTree":  false,
+                                           "leafBytesAndHashesMatch":  true
+                                       },
+                  "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+              },
+    "artifacts":  [
+                      {
+                          "label":  "library",
+                          "path":  "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\deps\\acp_remote-b3a1437b8d58da8c.exe",
+                          "bytes":  66147840,
+                          "sha256":  "2a32f001240f70fa1232edbffd30003aecea9bb5ea8d2cc1815e62d2e42ebf7e",
+                          "lastWriteTimeUtc":  "2026-11-13T04:48:59.6926496Z",
+                          "compilerArtifact":  {
+                                                   "reason":  "compiler-artifact",
+                                                   "package_id":  "path+file:///D:/Project/acp-remote/testing/runs/deliver-codex-session-loop/2026-11-13-wss-combination-v1/independent/workspace/app#acp-remote@0.0.0",
+                                                   "manifest_path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\workspace\\app\\Cargo.toml",
+                                                   "target":  {
+                                                                  "kind":  [
+                                                                               "lib"
+                                                                           ],
+                                                                  "crate_types":  [
+                                                                                      "lib"
+                                                                                  ],
+                                                                  "name":  "acp_remote",
+                                                                  "src_path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\workspace\\app\\src\\lib.rs",
+                                                                  "edition":  "2024",
+                                                                  "doc":  true,
+                                                                  "doctest":  true,
+                                                                  "test":  true
+                                                              },
+                                                   "profile":  {
+                                                                   "opt_level":  "0",
+                                                                   "debuginfo":  2,
+                                                                   "debug_assertions":  true,
+                                                                   "overflow_checks":  true,
+                                                                   "test":  true
+                                                               },
+                                                   "features":  [
+
+                                                                ],
+                                                   "filenames":  [
+                                                                     "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\deps\\acp_remote-b3a1437b8d58da8c.exe",
+                                                                     "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\deps\\acp_remote-b3a1437b8d58da8c.pdb"
+                                                                 ],
+                                                   "executable":  "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\deps\\acp_remote-b3a1437b8d58da8c.exe",
+                                                   "fresh":  true
+                                               },
+                          "cargoBuildFinished":  {
+                                                     "reason":  "build-finished",
+                                                     "success":  true
+                                                 },
+                          "cargoExitCode":  0,
+                          "supervisionCleanupInvoked":  false,
+                          "supervisionActiveBeforeCleanup":  0,
+                          "supervisionActiveAfterCleanup":  0
+                      },
+                      {
+                          "label":  "child",
+                          "path":  "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\native_dispatch_dev_child.exe",
+                          "bytes":  689152,
+                          "sha256":  "676e1b1dd09093e9f35e3a9683265383dbde25c0b9c860de70c1fb9b87b8aecc",
+                          "lastWriteTimeUtc":  "2026-11-13T05:07:24.1143332Z",
+                          "compilerArtifact":  {
+                                                   "reason":  "compiler-artifact",
+                                                   "package_id":  "path+file:///D:/Project/acp-remote/testing/runs/deliver-codex-session-loop/2026-11-13-wss-combination-v1/independent/workspace/app#acp-remote@0.0.0",
+                                                   "manifest_path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\workspace\\app\\Cargo.toml",
+                                                   "target":  {
+                                                                  "kind":  [
+                                                                               "bin"
+                                                                           ],
+                                                                  "crate_types":  [
+                                                                                      "bin"
+                                                                                  ],
+                                                                  "name":  "native_dispatch_dev_child",
+                                                                  "src_path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\workspace\\app\\dev-fixtures\\native_dispatch_dev_child.rs",
+                                                                  "edition":  "2024",
+                                                                  "required-features":  [
+                                                                                            "native-dispatch-dev-fixtures"
+                                                                                        ],
+                                                                  "doc":  true,
+                                                                  "doctest":  false,
+                                                                  "test":  false
+                                                              },
+                                                   "profile":  {
+                                                                   "opt_level":  "0",
+                                                                   "debuginfo":  2,
+                                                                   "debug_assertions":  true,
+                                                                   "overflow_checks":  true,
+                                                                   "test":  false
+                                                               },
+                                                   "features":  [
+                                                                    "native-dispatch-dev-fixtures"
+                                                                ],
+                                                   "filenames":  [
+                                                                     "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\native_dispatch_dev_child.exe",
+                                                                     "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\native_dispatch_dev_child.pdb"
+                                                                 ],
+                                                   "executable":  "D:\\Project\\acp-remote\\.tmp\\wss-coverage-20261113\\debug\\native_dispatch_dev_child.exe",
+                                                   "fresh":  false
+                                               },
+                          "cargoBuildFinished":  {
+                                                     "reason":  "build-finished",
+                                                     "success":  true
+                                                 },
+                          "cargoExitCode":  0,
+                          "supervisionCleanupInvoked":  true,
+                          "supervisionActiveBeforeCleanup":  1,
+                          "supervisionActiveAfterCleanup":  0
+                      }
+                  ],
+    "inputs":  [
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\COVERAGE-SOURCE-v4.json",
+                       "bytes":  95244,
+                       "sha256":  "1422fe684b4db7accfbb1089a41b75ca9f597030382a05cda9c23abfcaf0fdeb"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\COVERAGE-BASELINE.json",
+                       "bytes":  94597,
+                       "sha256":  "24ddfad53ca6860377feeefb46d13e53651fd45f0ad8824657e5438ba080fb89"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\RESULT.json",
+                       "bytes":  6931,
+                       "sha256":  "a6f21abeeb07f47a99e449e8f9f2e67e0bd4783727c36f5b5f5272de84dcddc9"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\library\\PROCESS.json",
+                       "bytes":  1171,
+                       "sha256":  "60caa2f8b33a262c82eb470757fe2eafc1deba165e04ec0adda8c39857599746"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\library\\stdout.txt",
+                       "bytes":  431337,
+                       "sha256":  "7c2b27f6bc899ada68e918a5a1fba86eaa19c9c913553d8f4795305822e074d9"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\library\\stderr.txt",
+                       "bytes":  73,
+                       "sha256":  "5e5f0453450ade966f7fb2d529ca8e11377bdc9fc9b545fb5b52ae8375cabcc6"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\child\\PROCESS.json",
+                       "bytes":  1545,
+                       "sha256":  "29049d9fb55f73f30f777715e119bf0d3f53b0cdac5674c33c90d6a02a70c740"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\child\\stdout.txt",
+                       "bytes":  470718,
+                       "sha256":  "d42c55b0ebfd885813e78a21f62d4f8e1bbf70f681d880ecd1c61e6445d6ff46"
+                   },
+                   {
+                       "path":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\build-execution-v6\\child\\stderr.txt",
+                       "bytes":  224,
+                       "sha256":  "714c1e24d65c37e058e9094dbd07f40299aa31d8644db0f113ee1aa156ae32ba"
+                   }
+               ],
+    "verifierSha256":  "e093cdac581654e254a88dafe0a0adbc28dd96d4047be33cf56eb7cc38cd8cc5",
+    "noProcessesExecuted":  true,
+    "noBuildRun":  true,
+    "noTestsRun":  true,
+    "diagnosticArtifactConsumed":  false,
+    "bindingBasis":  "Original v6 compiler-artifact manifest/src/path/profile/features and build-finished success + Cargo exit0; same fixed 515 source leaves and exclusive target; actual PE bytes/hash fixed now, source/index and PE checked before/after. This is not reproducible-build proof or a retrospective hash at original compile time.",
+    "limitations":  [
+                        "v6 child Cargo0 but owned unknown residual PID36716 required cleanup; original build supervision remains failed/open.",
+                        "Original compiler-artifact JSON does not contain PE SHA256; current hash cannot prove historical bytes solely from that JSON.",
+                        "Fresh handle child diagnostic did not recompile and is not upgraded or consumed as a build pass.",
+                        "No accepted ARTIFACTS.json from v6; this separate read-only receipt may only be used after an explicit limited test gate.",
+                        "Old PID12616/36716 identities remain unknown; no allowlist or supervision relaxation.",
+                        "No library/child execution, list or nineteen tests was performed by this verifier."
+                    ],
+    "npmAuditRun":  false
+}

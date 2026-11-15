@@ -1,0 +1,108 @@
+{
+  "scope": "Design-only v2 receipt-context precision; inherited failure-segment ABI is not implemented or executed",
+  "created": "2026-10-31T23:17:19.330Z",
+  "members": [
+    {
+      "path": "input-snapshot/prior-v1/contract.md",
+      "sha256": "04f0f254b475c5d446e2e5382d58818166a157777458d2fa2764259f0cdf22cd"
+    },
+    {
+      "path": "input-snapshot/prior-v1/cases.md",
+      "sha256": "70b373af5d9ab0aea5b2eaf7660f10257328407abf50f63ab4825b5fedc1a0bd"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/read-and-source-api.md",
+      "sha256": "8422edfd377f4171b30985c0a513297b02978a69f63fbb427eb7593ac90954f5"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/send-and-credit-api.md",
+      "sha256": "ea8a3ab7f9da7642b23c9760d6bc15814600adc58883aa1ba94e53ddd20ea26e"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/engineering-contract.md",
+      "sha256": "e54ee9755a4bbf62b2999f9846a41d69a7db6a2ca400faad6e3ebc3382a77aeb"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/native-assembly.md",
+      "sha256": "e0ea8a3b753bb23b54376dc0abf30832296937b28691316147036144b0e4b6d4"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/prior-v1-engineering.md",
+      "sha256": "eee353d81eb018c32a694ff3e9c59f3dd60222602ca2c1e70002ef649f5868ad"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/narrow-review.md",
+      "sha256": "5f8bd7bc50f0913ce8f3da7bf7ce57634590fb64e758b8e4d24577132dd48678"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/same-read-gate.md",
+      "sha256": "6b5b5711b83b35773449b4b3529f289c3f1b25cd2845980b2562c404d1e1f852"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/same-read-contract.md",
+      "sha256": "3594608dc90cdc54b50151532ffd7b635b530f9876c6371a29dad04804866d4d"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/same-read-notice.md",
+      "sha256": "c6a106bdc8da170c46671a15b6d4c37be315d290e08bed1da79ca1e9b5d10557"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/original83.md",
+      "sha256": "d2eaac1ff350dcc88c4c7bbeadf19f5fb2b674babf724a502437ef23c73bc717"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/authority/wip5-manifest.json",
+      "sha256": "a22bdc038ed689dee45cf391e068c4f249f75fc53fed9a88859ce81e86e4bc8d"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/adapters/acp/transport.rs",
+      "sha256": "39d7ee6051088c924993d35ef72c701faead954779324efde635f4b691d88349"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/adapters/acp/transport/reader.rs",
+      "sha256": "079bc49ca20015e6d66254d0a33d2d4612bfd60bfc709db3d7a533e5e5b58c7f"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/adapters/acp/transport/state.rs",
+      "sha256": "ad2a555522350e697b5d2f6098c993a3abc1ec1d6f620cd4fa1df8dd3dbb136c"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/adapters/acp/shared_view_capture.rs",
+      "sha256": "dbca66c1520c3d6714af5158a00bf46e4c0376c5e1d990fcf916fc8696ab2640"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/adapters/acp/shared_view_read.rs",
+      "sha256": "b992fc63d9b106f2266880171d049a839d8d182a25a30e901e3be12f9322086d"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/adapters/acp/shared_view_module/history.rs",
+      "sha256": "708953636664b6fae58d3f4ff4045cffea476d389a1708f33f3f13cf32d3d61b"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/application/shared_views/source.rs",
+      "sha256": "c0a5eda36a36c0b3cd40bd8690853f8d8e38f8da77eb2ce6dc1d5edd2798ad0a"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/application/shared_views/reader.rs",
+      "sha256": "052fc9eaaf399fd0573dbdf1270ce0863b7f744509c87117f861a154de3fe4c6"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/application/shared_views/read_control.rs",
+      "sha256": "77b9b1a9b6fcb0905f59f35b3769102f3402622b278d7d15573f94e87ead2fc0"
+    },
+    {
+      "path": "input-snapshot/prior-v1/input-snapshot/code/app/src/application/shared_views/ingress.rs",
+      "sha256": "8d5c0ea7b6556273c4c1a6bb17bdb1680b07d4ed3a4ab3b56eea46bf266d1cb5"
+    },
+    {
+      "path": "input-snapshot/prior-v1/freeze.json",
+      "sha256": "a4242a6213c184d99c269f04c2d67b4e50e4a470fadc4d718601b0c5f736e882"
+    },
+    {
+      "path": "receipt-context-precision.md",
+      "sha256": "ac4c57adb13a7de84d7453e32916922bb83a475b26077059c1eeabbed8399ee8"
+    }
+  ],
+  "execution_count": 0,
+  "original83_changed": false
+}

@@ -60,4 +60,6 @@ pub fn protect_private_file(_path: &std::path::Path) -> Result<(), PlatformError
 }
 
 #[cfg(windows)]
+pub mod native_source;
+#[cfg(windows)]
 pub mod process_owner;

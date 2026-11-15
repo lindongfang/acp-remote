@@ -1,0 +1,1 @@
+{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"q003-tool-original-session","update":{"sessionUpdate":"future_tool_status","toolCallId":"q003-original-tool-T","status":"failed","title":"Synthetic T"}}}

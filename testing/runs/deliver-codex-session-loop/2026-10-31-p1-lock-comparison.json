@@ -1,0 +1,24 @@
+﻿[
+    {
+        "crate":  "p1-probe",
+        "rootPackages":  261,
+        "resolvedPackages":  238,
+        "ownLocalPackage":  "p1-observations-independent",
+        "unexpected":  [
+
+                       ],
+        "allOtherPackagesExactRootSeed":  true,
+        "tokio":  "1.54.1"
+    },
+    {
+        "crate":  "p1-negative",
+        "rootPackages":  261,
+        "resolvedPackages":  238,
+        "ownLocalPackage":  "p1-observations-negative",
+        "unexpected":  [
+
+                       ],
+        "allOtherPackagesExactRootSeed":  true,
+        "tokio":  "1.54.1"
+    }
+]

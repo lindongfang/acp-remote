@@ -1,0 +1,32 @@
+{
+  "kind": "Independent actual minimal F execution receipt",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-configuration-independent-execution-minimal-stage3-v1",
+  "freeze": "7bcb7b2b9be57653e6a61f2ba2fe81e70eb8af93256aac283c7b69a03206532f",
+  "membersVerified": 815,
+  "sourceCount": 798,
+  "typecheckExit": 0,
+  "listedEntryCount": 3,
+  "outsideSandbox": {
+    "passed": 2,
+    "failed": 1,
+    "F01": "Pass",
+    "F02": "Fail: GateWaitPending observation not reached; not yet product gate defect",
+    "F03": "Pass"
+  },
+  "totalAttempts": {
+    "passed": 2,
+    "failed": 2,
+    "reason": "first sandbox F01 failed DPAPI before business; authorized external retry passed"
+  },
+  "physicalTail": {
+    "outsideSandboxAttempts": 3,
+    "firstDbExclusiveOpen": "Pass all3",
+    "walShmFirstCheck": "Absent all3",
+    "wholeDirectoryRemovalProved": false
+  },
+  "stableIssue": "Q3-C-F02-OBS001",
+  "state": "Open",
+  "sourceUnchanged": true,
+  "formalC46Pass": false,
+  "fullProductPass": false
+}

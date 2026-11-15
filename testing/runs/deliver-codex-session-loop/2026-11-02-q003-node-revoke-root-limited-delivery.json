@@ -1,0 +1,60 @@
+{
+  "scope": "Actual Root636 two-path NRV limited delivery accepted by original independent reviewer; broader Node resource cleanup remains Open",
+  "sourceInputs": 636,
+  "sourceManifest": "859dab0a8a8353fd59b0c2737681b8e1facd6a88e0b078957749064da44a0143",
+  "actualTrustFunctionsPassed": 11,
+  "actualNodeBusinessFunctionsPassed": 39,
+  "newNrvFirstPhysicalFixturesPassed": 2,
+  "nodeGroupPhysicalPassed": false,
+  "nodeGroupResidualDirectories": 2,
+  "ownedProcessObservation": {
+    "measured": false,
+    "processes": null
+  },
+  "fmt": 0,
+  "libCompilation": 0,
+  "defaultAllTargetStrict": 0,
+  "build": 0,
+  "defaultSchema": 5,
+  "web340Unchanged": true,
+  "full526LibraryRun": false,
+  "fullSessionLoop": false,
+  "parentTasksSigned": false,
+  "precision": {
+    "originalCheckpointRecords": 19,
+    "reviewTextSays": 20,
+    "reportUnmodified": true,
+    "reviewerNotified": true,
+    "explanation": "Checkpoint SHA is exact; count wording differs. No extra member claimed or reconstructed."
+  },
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/reviews/node-revoke-actual-root636-limited-delivery-review.md",
+      "sha256": "4a9b49735351c8e753bd730578d1ee844295cbf64e59f5cb05d300ce0e1236e2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/reviews/actual-root-verification.json",
+      "sha256": "354338284f04c1b4eb5703b61b46a3da02f70ebc8ffd204ccb826728f61c302f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/reviews/actual-root-precision.json",
+      "sha256": "1f2e53174f2bdcbcb2997a55238841c56e50c108f0dae66bdc0d4bdac8159162"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/2026-11-02-q003-node-revoke-root-checkpoint.json",
+      "sha256": "255e7dd5d6bdaeb23ac337b7ad6ae304415bea8c54db18fa93cb0b46f4bcc86f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/inventory-project-config.json",
+      "sha256": "486653172e5658f4554d53823e3f0bbdddcbb604b998ad231d03c16779381e53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/post-doc-checks-observed.json",
+      "sha256": "8f41cd36fb8e0ac89bee3c94edbdd34ecfe698e56e83296b5c0d2f39c3201e43"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/owned-process-after.json",
+      "sha256": "071f413ed861297a2563d74de7e077705f5db30e8493ad6877d21ae95b6c0999"
+    }
+  ]
+}

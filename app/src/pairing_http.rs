@@ -769,16 +769,25 @@ mod tests {
         claims::{PairClaim, PairStatus, verify_claim_result},
         identity::NodeIdentity,
         jws::{JwsType, sign},
-        storage::Storage,
     };
 
     const TEST_ORIGIN: &str = "https://node.example.test";
     static FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-    struct Fixture {
+    struct FixtureRoots {
         directory: PathBuf,
         identity: Arc<NodeIdentity>,
-        storage: Storage,
+    }
+    impl std::ops::Deref for Fixture {
+        type Target = FixtureRoots;
+        fn deref(&self) -> &FixtureRoots {
+            &self.roots
+        }
+    }
+    struct Fixture {
+        roots: Arc<FixtureRoots>,
+        scope: crate::sqlite_fixture_scope::SqliteFixtureScope,
+        storage: crate::sqlite_fixture_scope::FixtureStorage,
         pairing: Arc<PairingService>,
         router: Router,
     }
@@ -795,10 +804,20 @@ mod tests {
                 std::process::id(),
             ));
             std::fs::create_dir(&directory).expect("test directory");
-            let storage = Storage::open(&directory.join("node.db"))
-                .await
-                .expect("test storage");
             let identity = Arc::new(NodeIdentity::for_test([7_u8; 32]));
+            let roots = Arc::new(FixtureRoots {
+                directory,
+                identity: identity.clone(),
+            });
+            let scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+                &roots.directory.join("node.db"),
+                roots.clone(),
+            );
+            let storage = scope.open().await.expect("test storage");
+            assert!(
+                Arc::ptr_eq(&roots.identity, &identity),
+                "original identity resource is retained"
+            );
             let pairing = Arc::new(
                 PairingService::new(
                     identity.clone(),
@@ -811,8 +830,8 @@ mod tests {
                 IpcControl::new(identity.node_id().to_owned(), TEST_ORIGIN.to_owned());
             let router = router(pairing.clone(), TEST_ORIGIN.to_owned(), control);
             Self {
-                directory,
-                identity,
+                roots,
+                scope,
                 storage,
                 pairing,
                 router,
@@ -821,17 +840,17 @@ mod tests {
 
         async fn close(self) {
             let Self {
-                directory,
-                identity,
+                roots,
+                scope,
                 storage,
                 pairing,
                 router,
             } = self;
             drop(router);
             drop(pairing);
-            drop(identity);
             storage.close().await;
-            std::fs::remove_dir_all(directory).expect("test cleanup");
+            scope.stop_and_observe().await;
+            std::fs::remove_dir_all(&roots.directory).expect("test cleanup");
         }
     }
 

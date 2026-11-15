@@ -1,0 +1,45 @@
+{
+  "date": "2026-11-02",
+  "scope": "Native+A candidate with six precise Root preserved fixes",
+  "externalPackage": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-native-preserved-fixes-composition-v1",
+  "freezeSha256": "dcb2f657f8250dd231cea71993ba4a424dba8801bac2e6973a1725e58c1dffd0",
+  "verifiedFrozenMembers": 1621,
+  "mismatches": [],
+  "sourceCount": 787,
+  "productionInstalled": false,
+  "fullProductPass": false,
+  "records": [
+    {
+      "path": "q3-native-a-preserved-fixes-composition/freeze.json",
+      "sha256": "dcb2f657f8250dd231cea71993ba4a424dba8801bac2e6973a1725e58c1dffd0"
+    },
+    {
+      "path": "q3-native-a-preserved-fixes-composition/RESULT.json",
+      "sha256": "119a5976d1810e8aa8d16116ba819c934e9d68ca5f0701f8c27e86cafe913e33"
+    },
+    {
+      "path": "q3-native-a-preserved-fixes-composition/REPORT.md",
+      "sha256": "f75fabf3800f16dd1b9697d600a7c64bc42397e4c28f56008257f8cf11a13661"
+    },
+    {
+      "path": "q3-native-a-preserved-fixes-composition/source-manifest.json",
+      "sha256": "f5d3794755177393620dbb6871e56cb2cb4a61abef33fe59fdccff8b400ba680"
+    },
+    {
+      "path": "q3-native-a-preserved-fixes-composition/merge-verification.json",
+      "sha256": "825cb15ea5af2e9191e9ab81d3ff32a5e2a19ae023e3240cece8a75637f2c3ba"
+    },
+    {
+      "path": "q3-native-a-preserved-fixes-composition/patch-verification.json",
+      "sha256": "e98012f44bef99fb296f09f0ac1ed00e24f4c1340493f745d4cd4f0f4103ee04"
+    },
+    {
+      "path": "q3-native-a-preserved-fixes-composition/preserved-fixes.patch",
+      "sha256": "486eb1944041f5b85f1c8be1191a28ce41e05a96922f01dd3172212098e7d9eb"
+    },
+    {
+      "path": "q3-native-a-preserved-fixes-composition/strict-comparison.json",
+      "sha256": "856b79b682ad206037c36a570ac083fb1d307d55a96456e8f22ef7ba3bd8af07"
+    }
+  ]
+}

@@ -1,0 +1,81 @@
+﻿{
+    "change":  "deliver-codex-session-loop",
+    "batch":  "WP4 production shared-view display wiring",
+    "recordedAt":  "2026-11-13T12:40:20.1034690+08:00",
+    "dependencyCanonical":  "dd097a21189008970617be4dba6aeba4ac78f899a07858fecf1b6ad628eed6ca",
+    "checks":  [
+                   {
+                       "label":  "resume-focused-v1",
+                       "mode":  "test",
+                       "exitCode":  0,
+                       "sourceUnchanged":  true,
+                       "dependenciesUnchanged":  true,
+                       "gitIndexBefore":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "gitIndexAfter":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "sourceCanonical":  "1e448ecd4636b1f450566140c1f461fe6ae4bad4696ed433ec1bab5d7117687c",
+                       "sourceLeaves":  364
+                   },
+                   {
+                       "label":  "resume-tsc-v1",
+                       "mode":  "check",
+                       "exitCode":  0,
+                       "sourceUnchanged":  true,
+                       "dependenciesUnchanged":  true,
+                       "gitIndexBefore":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "gitIndexAfter":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "sourceCanonical":  "1e448ecd4636b1f450566140c1f461fe6ae4bad4696ed433ec1bab5d7117687c",
+                       "sourceLeaves":  364
+                   },
+                   {
+                       "label":  "resume-full-suite-v1",
+                       "mode":  "test",
+                       "exitCode":  0,
+                       "sourceUnchanged":  true,
+                       "dependenciesUnchanged":  true,
+                       "gitIndexBefore":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "gitIndexAfter":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "sourceCanonical":  "1e448ecd4636b1f450566140c1f461fe6ae4bad4696ed433ec1bab5d7117687c",
+                       "sourceLeaves":  364
+                   },
+                   {
+                       "label":  "resume-build-v1",
+                       "mode":  "build",
+                       "exitCode":  0,
+                       "sourceUnchanged":  true,
+                       "dependenciesUnchanged":  true,
+                       "gitIndexBefore":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "gitIndexAfter":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+                       "sourceCanonical":  "05545f29217e2d8546cf3b20db0855655f60fdfe25260cc24e7e9ece4bc44cec",
+                       "sourceLeaves":  364
+                   }
+               ],
+    "independentReview":  {
+                              "path":  "testing\\runs\\deliver-codex-session-loop\\2026-11-13-web-view-assembly-v1\\review\\INCREMENTAL-20261113.md",
+                              "sha256":  "443C6D23AFBCBC49EAB235F40257BAEBECC76B91B15771C37F32A83EE56A2CA4",
+                              "scope":  "三个近期竞态修正；有限源码复查，不是完整验收"
+                          },
+    "browser":  {
+                    "status":  "not-run",
+                    "reason":  "夹具要求可信专用HTTPS证书；已找到历史Edge/Playwright工具，但未确认可信测试证书。本轮禁止跳过证书校验或更改系统信任库。",
+                    "required":  "WV-13/14/15由独立浏览器执行",
+                    "fixtureManifest":  "939 bytes  21a153481b05b2dc1cfb507534386b5354b5e0ad02ad62c81d823ea4d9dfe89d  clients/web/tests/browser/session-view-main.html\r\n17201 bytes  d3c26ba5dd4d7b6a6a6935abf3b0282012f9822853651f1844a9c05174c37902  clients/web/tests/browser/session-view-main.ts\r\n13407 bytes  6ae123077e171833392ef9a6aefd7de05b1fe170e87391c97c82edf0b628259c  clients/web/tests/browser/independent-dom/management-peer.ts\r\n3895 bytes  9c3cf81f32fe7ff19aa48ebf19811546dcfe8d7a0937167718e9b69b55e54c7c  clients/web/tests/browser/independent-dom/view-wire.ts\r\n598 bytes  44fe059d38de519d59559b75476cf79d6a6b76349b647f1fc1faabac559d6e32  clients/web/tests/browser/independent-dom/vite.https.config.mjs\r\n1884 bytes  65d5333cdc2a80319229ef5753428ba61d7f9ef693ef98ffdc1d8f53122eca3f  clients/web/tests/browser/independent-dom/README.md"
+                },
+    "npmAudit":  "not-run per user instruction",
+    "trackedProgress":  "9/28",
+    "taskCheckbox":  "4.2 and 6.4 remain open",
+    "sourceIdentityNote":  "四次运行各自前后源树不变，产品三叶同版；browser fixture期间有增量，完整Web树canonical按每次运行记录。",
+    "productFiles":  [
+                         {
+                             "path":  "clients/web/src/main.ts",
+                             "sha256":  "7aac61c99b2a91a67950a5afacbeeb423d427a4601035606f804ed76c554f92d"
+                         },
+                         {
+                             "path":  "clients/web/src/management/session-view-display.ts",
+                             "sha256":  "dd9415fdc783ba209f1cf7aba1869da7a73e51ff9f5f8f718cff9922536b740d"
+                         },
+                         {
+                             "path":  "clients/web/src/management/session-view-status.ts",
+                             "sha256":  "cc424edb61cdb9a38180d4c5799e92eba0ab784915898b09e4bdb32e75008553"
+                         }
+                     ]
+}

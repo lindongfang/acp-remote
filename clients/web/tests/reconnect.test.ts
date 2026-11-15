@@ -2,6 +2,33 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ManagementConnectionError, ManagementRequestError } from "../src/management/client";
 import { ManagementProtocolError } from "../src/management/protocol";
 import { ManagementReconnect } from "../src/management/reconnect";
+import type { ManagementErrorCode } from "../src/management/protocol";
+import { MANAGEMENT_ERROR_CASES } from "./error-contract-vectors";
+
+describe("C50 recovery classification", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  it.each(MANAGEMENT_ERROR_CASES)("preserves existing connection recovery for %s", (code) => {
+    const retry = vi.fn();
+    const reconnect = new ManagementReconnect(retry);
+    try {
+      const delay = code === "rate_limited" ? 60_000
+        : ["storage_unavailable", "node_stopping"].includes(code) ? 2_000 : null;
+      expect(reconnect.schedule(new ManagementRequestError(code as ManagementErrorCode))).toBe(delay);
+      expect(vi.getTimerCount()).toBe(delay === null ? 0 : 1);
+      if (delay !== null) {
+        vi.advanceTimersByTime(delay - 1);
+        expect(retry).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(1);
+        expect(retry).toHaveBeenCalledTimes(1);
+      }
+      vi.advanceTimersByTime(120_000);
+      expect(retry).toHaveBeenCalledTimes(delay === null ? 0 : 1);
+    } finally {
+      reconnect.reset();
+    }
+  });
+});
 
 describe("management connection recovery", () => {
   beforeEach(() => vi.useFakeTimers());

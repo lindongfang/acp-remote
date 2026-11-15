@@ -1,0 +1,45 @@
+{
+  "recordedAt": "2026-11-07T22:45:00+08:00",
+  "change": "deliver-codex-session-loop",
+  "tracked": { "complete": 6, "total": 25 },
+  "scope": "Source SQL v4 independent program v9 compile and exact-list only",
+  "candidate": {
+    "executionManifestSha256": "6e5b4012a4cc709fdaa18e5f5fa6b9e01e428186856d1b7337e346ed5420dd85",
+    "programManifestSha256": "ca9f72db2fe2e67b0a5464a8dbf3d2c6a4b1221e92f6eb4f0d06a9f7deba42f4",
+    "programFreezeSha256": "22619d197aa7a84bad13bd863bcf4bdd0fc66e62ef75b1ddc13e4f3137bb4d48",
+    "reviewGate": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/reports/REVIEW-v9-GATE.md",
+    "reviewGateSha256": "d43369f5ce394124ceab23c5c89500bded9d722e1c579f84e94736a27fb14839"
+  },
+  "compile": {
+    "label": "compile-v9-01",
+    "exitCode": 0,
+    "timedOut": false,
+    "sourceUnchanged": true,
+    "binaryPath": "D:/Project/acp-remote/.tmp/source-sql-v4-acceptance-v9/target/debug/deps/acp_remote-97a9ea4da3f593fd.exe",
+    "binarySha256": "78cf06dbfb5854662910f9a123c612ef6c91a6b9b2936bb2eb48314a6387a671",
+    "binaryBytes": 80757248,
+    "ownedJob": { "activeBeforeCleanup": 1, "remainingBeforeCleanup": ["vctip"], "forcedCleanup": true, "activeAfterCleanup": 0 },
+    "evidence": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/logs/compile-v9-01.*"
+  },
+  "exactList": {
+    "attempted": 16,
+    "passed": 16,
+    "failed": 0,
+    "zeroTests": 0,
+    "wrongOrMissingSelector": 0,
+    "sourceDrift": 0,
+    "jobNotEmpty": 0,
+    "binarySha256": "78cf06dbfb5854662910f9a123c612ef6c91a6b9b2936bb2eb48314a6387a671",
+    "resultPattern": "each separately owned invocation exited 0 and printed exactly its requested selector with 1 test, 0 benchmarks",
+    "logs": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/source-sql-v4-acceptance-v2/logs/list-v9-01..16.*"
+  },
+  "authorizationBoundary": {
+    "dynamicExecution": "not authorized and not run",
+    "p1Finding": "SSF-SQL-RECONCILIATION001 remains OPEN; Register/Query cancellation SQL-specific coverage is absent",
+    "rootInstallation": false,
+    "npmAudit": "not run per user instruction"
+  },
+  "committed": false,
+  "pushed": false,
+  "archived": false
+}

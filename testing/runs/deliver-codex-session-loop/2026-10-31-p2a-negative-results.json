@@ -1,0 +1,102 @@
+{
+  "utc": "2026-10-31T02:38:37.209Z",
+  "results": [
+    {
+      "name": "positive",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--manifest-path",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\p2a-negative\\Cargo.toml"
+      ],
+      "exit": 0,
+      "expected": "positive compile with five Copy controls",
+      "pass": true
+    },
+    {
+      "name": "clone-owner",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\p2a-negative\\Cargo.toml"
+      ],
+      "exit": 101,
+      "expected": "E0277",
+      "pass": true
+    },
+    {
+      "name": "default-owner",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\p2a-negative\\Cargo.toml"
+      ],
+      "exit": 101,
+      "expected": "E0277",
+      "pass": true
+    },
+    {
+      "name": "private-owner",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\p2a-negative\\Cargo.toml"
+      ],
+      "exit": 101,
+      "expected": "E0616",
+      "pass": true
+    },
+    {
+      "name": "retained-claim",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\p2a-negative\\Cargo.toml"
+      ],
+      "exit": 101,
+      "expected": "E0599",
+      "pass": true
+    },
+    {
+      "name": "rebuild-owner",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\p2a-negative\\Cargo.toml"
+      ],
+      "exit": 101,
+      "expected": "private fields",
+      "pass": true
+    },
+    {
+      "name": "escape-borrow",
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\p2a-negative\\Cargo.toml"
+      ],
+      "exit": 101,
+      "expected": "lifetime may not live long enough",
+      "pass": true
+    }
+  ]
+}

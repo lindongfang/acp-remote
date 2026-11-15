@@ -1,0 +1,27 @@
+{
+    "version":  1,
+    "frozen_at_utc":  "2026-10-31T07:50:06.5811283Z",
+    "scope":  "Design only, R1/R2/R3 same gate; not implementation/review approval.",
+    "files":  [
+                  {
+                      "path":  "registration-contract-draft.md",
+                      "bytes":  35831,
+                      "sha256":  "b2c03bcb9393d37aaac40eae6c32cbefff0e21eaac6aebedee0e83bcf4077a05"
+                  },
+                  {
+                      "path":  "queue-owner-application-draft.md",
+                      "bytes":  29833,
+                      "sha256":  "4109374c74b5773daf16c4ebbdb924c5080a86e74af27e4c5afb0086e2bd0363"
+                  },
+                  {
+                      "path":  "schema5-registration-draft.sql",
+                      "bytes":  4073,
+                      "sha256":  "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+                  },
+                  {
+                      "path":  "inputs.sha256.json",
+                      "bytes":  10353,
+                      "sha256":  "17eb85217452e7e0a24768ca6a6bcdd86f9337a155e29580665eff029796ce89"
+                  }
+              ]
+}

@@ -1,0 +1,112 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "tracked": {
+    "complete": 6,
+    "total": 25
+  },
+  "root": {
+    "productSourceCount": 789,
+    "schemaVersion": 8,
+    "candidatesInstalled": false
+  },
+  "verifiedPackages": [
+    {
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-default-head-two-leaf-maintenance-proposal-v1",
+      "freezeSHA256": "ca9e33e5fdd41dcae6416379460ddbe61f33841d227d1e704a0b9a9b987ba112",
+      "members": 12,
+      "allMembersRootVerified": true
+    },
+    {
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-default-head-two-leaf-execution-v1",
+      "freezeSHA256": "a80f24c1d2c19ec7fa74f9f31754c71b4dcdfc36587deeb7f004dc22f562834e",
+      "members": 840,
+      "allMembersRootVerified": true
+    },
+    {
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-default-two-historical-fixture-maintenance-proposal-v2",
+      "freezeSHA256": "c59072d27d5f03a4a47c5c432f91ed2c9e62bf4f627381cedac849654155708e",
+      "members": 18,
+      "allMembersRootVerified": true
+    },
+    {
+      "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-node-close-independent-owned-arc-maintenance-v1",
+      "freezeSHA256": "3d64ab7299ff4fc00986bd0c9d8d37b0732e6c47d2cd3581feeda2716cbf43bf",
+      "members": 7,
+      "allMembersRootVerified": true
+    }
+  ],
+  "review": {
+    "path": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-default-head-list-and-historical-fixture-narrow-gate-2026-11-03",
+    "freezeSHA256": "250380b336e7850bbe6c78db083f16cc4a9fc463c9ba5c8682e297168c59364f",
+    "members": 2,
+    "allMembersRootVerified": true,
+    "scope": [
+      "Correct head maintenance list to management31+registry2=33, preserve source and original compile, first runs only",
+      "Permit exact two historical fixture maintenance before compile/list/exact first runs"
+    ],
+    "authorizesRootInstallation": false
+  },
+  "execution": {
+    "headTestsAtGate": 0,
+    "historicalFixtureTestsAtGate": 0,
+    "testerDispatched": true,
+    "sourceAndAssertionsUnchangedForHead": true,
+    "stopOnFirstMismatch": true,
+    "retries": 0
+  },
+  "lifecycle": {
+    "authorReported": true,
+    "independentABIPatchApplied": true,
+    "independentLeafSHA256": "be963d84468e4bddd72127eb91a3e60d491ebc020e63d398c565169a892e335f",
+    "productionCheckThird": 0,
+    "developmentCheckFourth": 0,
+    "developmentStages": [
+      {
+        "stage": "lifecycle-first",
+        "passed": 12,
+        "failed": 0
+      },
+      {
+        "stage": "lifecycle-transport-first",
+        "passed": 16,
+        "failed": 0
+      },
+      {
+        "stage": "lifecycle-native-first",
+        "passed": 3,
+        "failed": 0
+      }
+    ],
+    "countsOverlap": true,
+    "originalShutdownRegression": {
+      "passed": 15,
+      "failed": 1,
+      "failure": "reg_close_node_01 success expectation conflicts with physical SQLite worker closure unconfirmed"
+    },
+    "cleanupFirstObservation": "Windows error32 retained",
+    "metadataFirstRunSession": 59483,
+    "finalFreezeAvailable": false,
+    "independentAcceptance": false
+  },
+  "parallel": {
+    "lifecycle": "Isolated Node owner implementation and development verification",
+    "tester": "Separate head and historical test maintenance",
+    "wss": "Exact product assembly design only; no product writes"
+  },
+  "open": [
+    "CLDB actual SQLite worker ACK/join",
+    "default full run709/38",
+    "strict101/682",
+    "ordinary production assembly",
+    "WSS and frontend entry wiring",
+    "real Harness and full Windows process tree"
+  ],
+  "unperformed": [
+    "npm audit",
+    "git commit",
+    "git push",
+    "openspec archive",
+    "index writes"
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "scope": "Read-only probes after first removal failed",
+  "productionFix": false,
+  "issue": "Q3-COMP-CLEANUP001",
+  "state": "Open",
+  "firstRunPassed": 29,
+  "secondRunPassed": 28,
+  "secondRunFailed": 1,
+  "firstRemoveRawOsCode": 32,
+  "dbWalShmExclusiveRawOsCode": 32,
+  "lockAndIdentity": "NotFound",
+  "certAndKey": "exclusive opens succeed",
+  "rootCauseProven": false,
+  "noDeletionRetry": true,
+  "date": "2026-11-02",
+  "externalPackage": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-first-cleanup-file-probe-v1",
+  "freezeSha256": "5c8fd58e123749a0ba353ef6db1e24324566f18d73278dd73064ecfbd69914ff",
+  "verifiedFrozenMembers": 799,
+  "records": [
+    {
+      "path": "q3-first-cleanup-file-diagnostic/freeze.json",
+      "sha256": "5c8fd58e123749a0ba353ef6db1e24324566f18d73278dd73064ecfbd69914ff"
+    },
+    {
+      "path": "q3-first-cleanup-file-diagnostic/NOTE.md",
+      "sha256": "b3a111bfd3151d3cf932f4bed9f4d09d8af2ea43d1a02520cdefed938af076e6"
+    },
+    {
+      "path": "q3-first-cleanup-file-diagnostic/workspace/app/src/shared_view_test_support.rs",
+      "sha256": "5ab7cbc2c77c59c713007a2c7c9ded5424023d9008538fb4d13c0e88405f7281"
+    },
+    {
+      "path": "q3-first-cleanup-file-diagnostic/logs/transfer-module-file-probe-01.json",
+      "sha256": "0d6e15f63817e6adba4e55c8717abca78cac9ef61e4f2e6e7e3a8648c4a27557"
+    },
+    {
+      "path": "q3-first-cleanup-file-diagnostic/logs/transfer-module-file-probe-02.json",
+      "sha256": "370a4998620bb4df6bc71b53beb5b610c1f7d22dc88b9274319197d3502f6b1b"
+    },
+    {
+      "path": "q3-first-cleanup-file-diagnostic/logs/transfer-module-file-probe-02.stderr.log",
+      "sha256": "4c233730ca71885ad5f205c9bf85b4dfa04b57fb7b53d4e598bd4ccf63ffa9a6"
+    },
+    {
+      "path": "q3-first-cleanup-file-diagnostic/logs/transfer-module-file-probe-02.stdout.jsonl",
+      "sha256": "8778087b6242ffd6bd02502f8ccff9f567a09afeda86876f34e8549ba6665b54"
+    }
+  ]
+}

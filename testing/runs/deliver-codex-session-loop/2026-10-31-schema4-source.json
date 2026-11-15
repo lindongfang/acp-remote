@@ -1,0 +1,54 @@
+﻿[
+    {
+        "path":  "app/src/session_storage/schema.rs",
+        "sha256":  "fcec6f7e929056bdf7809534c7f9566c7bbe77f5ebb0c2a47be1a00e06564d18"
+    },
+    {
+        "path":  "app/src/session_storage/product_schema.rs",
+        "sha256":  "e3d2d32c0e3ec32f1c6ef4ed4a971f31c4f203bd8ca6d67063f81b4f14aa6c00"
+    },
+    {
+        "path":  "app/src/storage.rs",
+        "sha256":  "e837ffd3f8a4754ccb4be279aede3ff2483089aec40a2785fa89583a5eaa5be6"
+    },
+    {
+        "path":  "app/src/session_storage/product_schema/tests.rs",
+        "sha256":  "5474fa85089a02d630ed8ffdea95a08f9d2a6131b690f97d598e94f32ae57e32"
+    },
+    {
+        "path":  "app/src/session_storage/product_schema/delivery_tests.rs",
+        "sha256":  "34822fbb82488901297734709410cf4b9e888644d31bc665efd09b3c7f19fc17"
+    },
+    {
+        "path":  "app/src/lib.rs",
+        "sha256":  "f13a23576f46c510e60644c7de56ba6fa865738f1d1ce0f64fc01aff6cb2069f"
+    },
+    {
+        "path":  "app/Cargo.toml",
+        "sha256":  "c48046e404e8d10b036eec48163295a1386aa2cbe4baeafbe479fe823638045d"
+    },
+    {
+        "path":  "app/Cargo.lock",
+        "sha256":  "87f27b619281b37015c79ceae8d95471c8a4de50f202f4dd8a6d99fa0d27e324"
+    },
+    {
+        "path":  "app/tests/acceptance/schema3_migration.rs",
+        "sha256":  "501c45a597b8a423ab4936e4dc4271e508eeb8c8e79d8fa1a02ead3908e173a5"
+    },
+    {
+        "path":  "app/tests/acceptance/schema4_migration.rs",
+        "sha256":  "9c82a6e1964d0648d93ec0cdbc6397eacb915fe8fd0a0af9ee598a561078a56c"
+    },
+    {
+        "path":  "openspec/changes/deliver-codex-session-loop/approval-owner-contract.md",
+        "sha256":  "40b3201436331e848dd8b0b70e50e90367b68e888bf9bfa4d31c964b79bad4fa"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/schema3-before-schema4-test.rs",
+        "sha256":  "2fb2e326088eb107bcd05ae6a949238c9a073803e64a2f6357886926a5d9dc91"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/schema3-pinned-product-original.rs",
+        "sha256":  "6243339225616835236c2348d357c432620c9d1d15195e40b06f6d73d84755ba"
+    }
+]

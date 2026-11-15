@@ -1,0 +1,11 @@
+[package]
+name="independent-acp-api05-a"
+version="0.0.0"
+edition="2024"
+[dependencies]
+acp-remote={path="../../../../app"}
+serde={version="1.0.229",features=["derive"]}
+tokio={version="1.53.3",features=["full"]}
+[[bin]]
+name="probe"
+path="main.rs"

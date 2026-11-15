@@ -1,0 +1,95 @@
+{
+  "scope": "NRV limited developer/independent acceptance and actual Root636 integration checkpoint; actual Root final review pending",
+  "sourceInputs": 636,
+  "actualTrustPassed": 11,
+  "actualNodeAssertionsPassed": 39,
+  "newNrvFirstPhysicalPassed": 2,
+  "nodeGroupResidualDirectories": 2,
+  "nodeGroupPhysicalPassed": false,
+  "defaultStrict": 0,
+  "build": 0,
+  "independentFixedFunctions": 12,
+  "independentNegativeControl": "old BEGIN only, real code5, same success oracle failed once",
+  "allLibraryPassed": false,
+  "defaultSchema": 5,
+  "fullSessionLoop": false,
+  "parentTasksSigned": false,
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/reviews/node-revoke-production-and-independent-final-limited-review.md",
+      "sha256": "f3787af2cf6f8767e22d2d80cf66eb4c1b12663a91fd9127cacbc36e0bdee28f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/reviews/verification.json",
+      "sha256": "3be92d0a371b9283c34f69fd34e4456af7d5a39d4458290f1e64934022902901"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/reviews/runtime-precision-verification.json",
+      "sha256": "c38e731982b104282f6ef8765cca9515ef94c7401106e7fb67699131115722a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/developer/REPORT.md",
+      "sha256": "cb868646e52ff33fa9ef8508cecd012cfd4fe7a69c870498facd6b81d742b5d7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/developer/STATE.json",
+      "sha256": "36124647cc8be0840cdb9bfaeeb64931f94a0235345f03e5c5e9c5c2a183f9c4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/developer/freeze.json",
+      "sha256": "b517f2544282a435013d68a135920e39799433548a7592681a31fa37835a6025"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/independent/report.md",
+      "sha256": "4beecefd6b8ab319f81b97335faa35b6e89fd4f0aff669ad930a384e15905492"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/independent/freeze.json",
+      "sha256": "1298e8179daf752d44d2c0bc099fd56e93247d90459460e15ed5917d35b09f84"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/preparation.json",
+      "sha256": "60a52fc1daee3a720155f6c46c721a17c9a5f8db018afe94f2cf82db4db9d9f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/integration.json",
+      "sha256": "482b205d0bc73d19d2a057b8c49ce1b5bc821ea65384fa64fa265fba9053cbca"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/source-before-checks.json",
+      "sha256": "bb51ec8a655318799d587adc7b0d3054aa4454b8d628cca60551a8d1f8aef123"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/source-after-checks.json",
+      "sha256": "859dab0a8a8353fd59b0c2737681b8e1facd6a88e0b078957749064da44a0143"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/root-after-checks.json",
+      "sha256": "e417102f17d158787bc78eb3aa6e1a298e6db9bae23e31705a7f13495f5b9217"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/physical-summary.json",
+      "sha256": "f0bf37147e39238663361fbb14a869285a8cc50730d9fed3cadbb5b5758ba886"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/inventory.json",
+      "sha256": "ef9319b3c6184ddc9ca9136246a706d94a623e1331c91ff846a23e5456a87590"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/compiled-tests.json",
+      "sha256": "3d7d2fae6bf55a0b807e73b3662cec5b8e3977cb55c60438687d1d5c6a11daca"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/compiled-tests-location.json",
+      "sha256": "40f2d0c7fb3dfd214bfe36851526c00ea014292b0fbb01cbdba51e6806208602"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/build-artifact.json",
+      "sha256": "1a78e6e4afe72c56b6a213390626119dc2b220c02a75670f0d300b9dcd7e333a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-root-node-revoke/node-residual-metadata.json",
+      "sha256": "8b48c87659700cbef904775f346ac747a94c0250c65b260ea9e1e228214de3ad"
+    }
+  ]
+}

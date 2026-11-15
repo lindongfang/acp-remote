@@ -1,0 +1,539 @@
+{
+  "source_candidate": "3135ff8d000fdcdee046bf2d581e2ff7edf9e37fbbb1cb5ae571cd9d0abbc137",
+  "S0": "858e7be2378baabdd52018622479e91dd1ff61e960384ce92dda3fa80d2df07f",
+  "relevant_identical_files": 35,
+  "definitions": [
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/tests.md",
+      "sha256": "a5e288d7225907983905d0b70b4142835dcc24f6892cbd62d524dc26f4855d65"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/structured-history/spec.md",
+      "sha256": "2b7935a5d172d6a5a3773fe3c877380e0b4738b1acdb601768af2f1e48b55227"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/harness-management/spec.md",
+      "sha256": "96b3335ffe5268972633ab5f7db001372d53b669fe0c231e0053d55e9b231989"
+    },
+    {
+      "path": "openspec/changes/deliver-codex-session-loop/specs/management-audit/spec.md",
+      "sha256": "44def0ff9e017b6069834023e4750dbddeeba8e98c3a7a4ad7bd7ab79564ca3a"
+    }
+  ],
+  "actual_functions": 2,
+  "actual_fixture_instances": 2,
+  "actual_stages_per_version": 6,
+  "final_labels": [
+    "tool-both-final",
+    "tool-strict-final",
+    "tool-fmt-final",
+    "tool-normal-final"
+  ],
+  "runs": [
+    {
+      "name": "tool-both-final",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "internal",
+        "-Filter",
+        "tool_origin_cases"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:20:49.003Z",
+      "end": "2026-11-01T17:21:07.374Z",
+      "exit": 0,
+      "signal": null,
+      "timedOut": false,
+      "pid": 36368,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "0e0f31bb1a2d147ef2861d045e98e8a995db5f460cadb194495b481dde1391d8"
+        }
+      ],
+      "executables": [
+        {
+          "path": "acp_remote-4159aa38c8969f26.exe",
+          "sha256": "5e693bd937554cd712d77eb8853c774d5fc3d6432c6df3b71b4d6686374818bd",
+          "note": "Actual target executable inventory; select the exact command log Running/Executable path, do not infer all enumerated images ran"
+        }
+      ],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    },
+    {
+      "name": "tool-both-snapshot-default",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "internal",
+        "-Filter",
+        "tool_origin_cases"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:14:57.173Z",
+      "end": "2026-11-01T17:15:11.675Z",
+      "exit": 0,
+      "signal": null,
+      "timedOut": false,
+      "pid": 13232,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "f26070280fadb488df0a0887c6dffbdda5da8990f97cb4f78bbb5ceb4af0c567"
+        }
+      ],
+      "executables": [
+        {
+          "path": "acp_remote-4159aa38c8969f26.exe",
+          "sha256": "67596edf31533a84507736c19fbf673c16ecf50f9385a9e879784236c4c01275",
+          "note": "Actual target executable inventory; select the exact command log Running/Executable path, do not infer all enumerated images ran"
+        }
+      ],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    },
+    {
+      "name": "tool-fmt-final",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "fmt"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:21:07.489Z",
+      "end": "2026-11-01T17:21:09.574Z",
+      "exit": 0,
+      "signal": null,
+      "timedOut": false,
+      "pid": 41796,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "0e0f31bb1a2d147ef2861d045e98e8a995db5f460cadb194495b481dde1391d8"
+        }
+      ],
+      "executables": [],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    },
+    {
+      "name": "tool-normal-final",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "normal-check"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:21:09.686Z",
+      "end": "2026-11-01T17:21:15.032Z",
+      "exit": 0,
+      "signal": null,
+      "timedOut": false,
+      "pid": 14472,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "0e0f31bb1a2d147ef2861d045e98e8a995db5f460cadb194495b481dde1391d8"
+        }
+      ],
+      "executables": [],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    },
+    {
+      "name": "tool-strict-final",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "strict-internal"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:19:14.559Z",
+      "end": "2026-11-01T17:19:33.067Z",
+      "exit": 0,
+      "signal": null,
+      "timedOut": false,
+      "pid": 4632,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "0e0f31bb1a2d147ef2861d045e98e8a995db5f460cadb194495b481dde1391d8"
+        }
+      ],
+      "executables": [],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    },
+    {
+      "name": "tool-strict-first",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "strict-internal"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:16:28.417Z",
+      "end": "2026-11-01T17:16:48.752Z",
+      "exit": 101,
+      "signal": null,
+      "timedOut": false,
+      "pid": 37544,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "f26070280fadb488df0a0887c6dffbdda5da8990f97cb4f78bbb5ceb4af0c567"
+        }
+      ],
+      "executables": [],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    },
+    {
+      "name": "tool-v1-first",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "internal",
+        "-Filter",
+        "q003_v1_tool_updates"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:08:24.937Z",
+      "end": "2026-11-01T17:09:03.417Z",
+      "exit": 101,
+      "signal": null,
+      "timedOut": false,
+      "pid": 34212,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "bb76979df4b3b98c9096511bf28586ca14a9a2164e98a5a66ddf8d9c01de1a97"
+        }
+      ],
+      "executables": [
+        {
+          "path": "acp_remote-4159aa38c8969f26.exe",
+          "sha256": "25accafdd9d2a8b097c62ffce3892ac51110a28dd5ae39d5699bedffc6e812cf",
+          "note": "Actual target executable inventory; select the exact command log Running/Executable path, do not infer all enumerated images ran"
+        }
+      ],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    },
+    {
+      "name": "tool-v1-live-window",
+      "command": [
+        "C:/Users/jack/.cache/codex-runtimes/codex-primary-runtime/dependencies/native/powershell/pwsh.exe",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\run-owner.ps1",
+        "-Mode",
+        "internal",
+        "-Filter",
+        "q003_v1_tool_updates"
+      ],
+      "cwd": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-tester\\implementation-v7-q003-tool-origin\\source",
+      "start": "2026-11-01T17:12:57.173Z",
+      "end": "2026-11-01T17:13:11.801Z",
+      "exit": 101,
+      "signal": null,
+      "timedOut": false,
+      "pid": 33180,
+      "source_changes": [],
+      "assets": [
+        {
+          "path": "app/tests/shared_view_rf_independent.rs",
+          "sha256": "59e9f9d81bf25aac2e5d6b0747e391f8769f825143bb3cc4e082226f09ad9629"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support.rs",
+          "sha256": "1ac4b37bfce8154010065b18cea255ec04a88806e20246c6830576a8b42c98b7"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/module_observation.rs",
+          "sha256": "e47ac58536be5eb1924560954a772f391edda94086d30cbf268d5aee8a2ba3da"
+        },
+        {
+          "path": "app/tests/shared_view_module_acceptance/reader_observation.rs",
+          "sha256": "c5d5cf41a10c415769a5ae2ecb2021612b4753fc7a8adaf4c23c680f5a00caf3"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_internal_cases.rs",
+          "sha256": "6e64c7c0b2a0e9167fcb012a1e66d89e337282141252438dce7933593a0e34f6"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_support_internal.rs",
+          "sha256": "167ad8be532fc5f459a74a20ec201b6059e33660c8af09d8fa8c158035fe7004"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/rf_remainder_cases.rs",
+          "sha256": "29d500261a7242dbdc5bb6e5e650b101ef49dccf95b213c6495fa5955fc170a8"
+        },
+        {
+          "path": "app/tests/shared_view_rf_independent/tool_origin_cases.rs",
+          "sha256": "09e2b155f1c19d3a3ba21db6c0e9cb9186de5f6680bddceaccff7bfdd3122ffb"
+        }
+      ],
+      "executables": [
+        {
+          "path": "acp_remote-4159aa38c8969f26.exe",
+          "sha256": "2414c5ce33969416afaccf4bf7bd1d0eee648e1cce1f14e2203d58121ea7cedf",
+          "note": "Actual target executable inventory; select the exact command log Running/Executable path, do not infer all enumerated images ran"
+        }
+      ],
+      "scope": "Only owned PowerShell/cargo/test tree; timeout reclamation never counts actual join"
+    }
+  ],
+  "physical": {
+    "checked": "2026-11-01T17:27:54.3461696Z",
+    "active": [],
+    "fixtureChildren": [],
+    "tempChildren": [],
+    "scope": "Exact exclusive target executable prefix and only this version-owned fixture/TEMP roots; vector artifacts intentionally retained separately; no deletion or forcekill"
+  },
+  "wire_vectors": {
+    "freeze": "74309ee7a79f723d2ca1d50be488bc779f643df408f3e1762e2c9f91cca9e91b",
+    "members": 257,
+    "records": 254,
+    "itemEvidence": 90,
+    "rawCopies": 80
+  },
+  "default_strict": "not claimed: feature-off check0 has inherited warnings",
+  "old_heavy_tests_executed": false,
+  "CL023ParentPassed": false
+}

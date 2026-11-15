@@ -1,0 +1,17 @@
+{
+  "date": "2026-11-03",
+  "review": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-d-body-vis001-v2-posterior-2026-11-03",
+  "freezeSHA256": "c1ca00e6259b352134b8a6b63d553050f00f86c6d9ca4a66700a84c4afa73438",
+  "members": 2,
+  "rootVerified": true,
+  "candidate": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-node-factory-d-body-component-candidate-v2",
+  "candidateFreeze": "e884367c5d742e82f5227d5c5a4fc59e7e9cd419f7d5ac4322250fc604d1b85d",
+  "finding": "D-BODY-VIS001",
+  "state": "Fixed-static-and-development-limited",
+  "componentReusableForIsolatedComposition": true,
+  "independentAcceptance": false,
+  "ordinaryProductionNode": false,
+  "completeD": false,
+  "CLDB": false,
+  "rootInstalled": false
+}

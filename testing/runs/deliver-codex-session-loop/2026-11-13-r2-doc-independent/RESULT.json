@@ -1,0 +1,212 @@
+{
+  "status": "Doc narrow-slice independent acceptance passed",
+  "before": {
+    "canonical": "21137d04eb1cfcdce87342d363d29ccaa9734b2f75f716aaec760fe2cd8061f1",
+    "count": 517,
+    "rootAndIsolatedMatch": true,
+    "index": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "pe": "7d8789785a2728360850daa858140b7beaeaa7948da66a0c2b806fcd0af57fc1",
+    "wrapper": "b321060b54828439c1776d75c9e6738d928ac8ddaba1eec1a28191302b81027f"
+  },
+  "after": {
+    "canonical": "21137d04eb1cfcdce87342d363d29ccaa9734b2f75f716aaec760fe2cd8061f1",
+    "count": 517,
+    "rootAndIsolatedMatch": true,
+    "index": "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4",
+    "pe": "7d8789785a2728360850daa858140b7beaeaa7948da66a0c2b806fcd0af57fc1",
+    "wrapper": "b321060b54828439c1776d75c9e6738d928ac8ddaba1eec1a28191302b81027f"
+  },
+  "count": 7,
+  "results": [
+    {
+      "label": "case-01",
+      "name": "node::tests::document_transfer_development::document_d1_completed_and_empty_jobs_are_reaped",
+      "actual": "1 passed; 0 failed; 0 ignored",
+      "originalNodeShutdownAndAreaRemoved": true,
+      "command": "D:\\Project\\acp-remote\\.tmp\\q3-source-r1-20261113\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+      "arguments": "\"node::tests::document_transfer_development::document_d1_completed_and_empty_jobs_are_reaped\" \"--exact\" \"--test-threads=1\" \"--nocapture\"",
+      "startedAt": "2026-11-13T12:54:10.9741740+00:00",
+      "finishedAt": "2026-11-13T12:54:11.7973056+00:00",
+      "exitCode": 0,
+      "timedOut": false,
+      "naturalExitAndEmptyJob": true,
+      "activeJobProcessesAfterExit": 0,
+      "activeJobProcessesAtParentExit": 0,
+      "jobDrainWaitMs": 1,
+      "jobDrainSamples": [
+        {
+          "elapsedMs": 0,
+          "active": 0
+        }
+      ],
+      "stopInvoked": false,
+      "jobMembersAtParentExit": [],
+      "jobMembersBeforeStop": [],
+      "activeJobProcessesAfterOwnedCleanup": 0
+    },
+    {
+      "label": "case-02",
+      "name": "node::tests::document_transfer_development::document_d1_descriptor_canonical_decimal_strings",
+      "actual": "1 passed; 0 failed; 0 ignored",
+      "originalNodeShutdownAndAreaRemoved": false,
+      "command": "D:\\Project\\acp-remote\\.tmp\\q3-source-r1-20261113\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+      "arguments": "\"node::tests::document_transfer_development::document_d1_descriptor_canonical_decimal_strings\" \"--exact\" \"--test-threads=1\" \"--nocapture\"",
+      "startedAt": "2026-11-13T12:54:12.4214645+00:00",
+      "finishedAt": "2026-11-13T12:54:12.8887811+00:00",
+      "exitCode": 0,
+      "timedOut": false,
+      "naturalExitAndEmptyJob": true,
+      "activeJobProcessesAfterExit": 0,
+      "activeJobProcessesAtParentExit": 0,
+      "jobDrainWaitMs": 1,
+      "jobDrainSamples": [
+        {
+          "elapsedMs": 0,
+          "active": 0
+        }
+      ],
+      "stopInvoked": false,
+      "jobMembersAtParentExit": [],
+      "jobMembersBeforeStop": [],
+      "activeJobProcessesAfterOwnedCleanup": 0
+    },
+    {
+      "label": "case-03",
+      "name": "node::tests::document_transfer_development::document_d1_original_queue_raw_to_real_socket_and_final_credit",
+      "actual": "1 passed; 0 failed; 0 ignored",
+      "originalNodeShutdownAndAreaRemoved": true,
+      "command": "D:\\Project\\acp-remote\\.tmp\\q3-source-r1-20261113\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+      "arguments": "\"node::tests::document_transfer_development::document_d1_original_queue_raw_to_real_socket_and_final_credit\" \"--exact\" \"--test-threads=1\" \"--nocapture\"",
+      "startedAt": "2026-11-13T12:54:13.5270955+00:00",
+      "finishedAt": "2026-11-13T12:54:14.4080776+00:00",
+      "exitCode": 0,
+      "timedOut": false,
+      "naturalExitAndEmptyJob": true,
+      "activeJobProcessesAfterExit": 0,
+      "activeJobProcessesAtParentExit": 0,
+      "jobDrainWaitMs": 1,
+      "jobDrainSamples": [
+        {
+          "elapsedMs": 0,
+          "active": 0
+        }
+      ],
+      "stopInvoked": false,
+      "jobMembersAtParentExit": [],
+      "jobMembersBeforeStop": [],
+      "activeJobProcessesAfterOwnedCleanup": 0
+    },
+    {
+      "label": "case-04",
+      "name": "node::tests::document_transfer_development::document_d1_publication_failure_retires_without_later_command",
+      "actual": "1 passed; 0 failed; 0 ignored",
+      "originalNodeShutdownAndAreaRemoved": true,
+      "command": "D:\\Project\\acp-remote\\.tmp\\q3-source-r1-20261113\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+      "arguments": "\"node::tests::document_transfer_development::document_d1_publication_failure_retires_without_later_command\" \"--exact\" \"--test-threads=1\" \"--nocapture\"",
+      "startedAt": "2026-11-13T12:54:15.0531216+00:00",
+      "finishedAt": "2026-11-13T12:54:15.8385017+00:00",
+      "exitCode": 0,
+      "timedOut": false,
+      "naturalExitAndEmptyJob": true,
+      "activeJobProcessesAfterExit": 0,
+      "activeJobProcessesAtParentExit": 0,
+      "jobDrainWaitMs": 1,
+      "jobDrainSamples": [
+        {
+          "elapsedMs": 0,
+          "active": 0
+        }
+      ],
+      "stopInvoked": false,
+      "jobMembersAtParentExit": [],
+      "jobMembersBeforeStop": [],
+      "activeJobProcessesAfterOwnedCleanup": 0
+    },
+    {
+      "label": "case-05",
+      "name": "node::tests::document_transfer_development::document_d1_real_edit_cancel_seal_without_waiting_for_credit",
+      "actual": "1 passed; 0 failed; 0 ignored",
+      "originalNodeShutdownAndAreaRemoved": true,
+      "command": "D:\\Project\\acp-remote\\.tmp\\q3-source-r1-20261113\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+      "arguments": "\"node::tests::document_transfer_development::document_d1_real_edit_cancel_seal_without_waiting_for_credit\" \"--exact\" \"--test-threads=1\" \"--nocapture\"",
+      "startedAt": "2026-11-13T12:54:16.4760513+00:00",
+      "finishedAt": "2026-11-13T12:54:17.3916903+00:00",
+      "exitCode": 0,
+      "timedOut": false,
+      "naturalExitAndEmptyJob": true,
+      "activeJobProcessesAfterExit": 0,
+      "activeJobProcessesAtParentExit": 0,
+      "jobDrainWaitMs": 1,
+      "jobDrainSamples": [
+        {
+          "elapsedMs": 0,
+          "active": 0
+        }
+      ],
+      "stopInvoked": false,
+      "jobMembersAtParentExit": [],
+      "jobMembersBeforeStop": [],
+      "activeJobProcessesAfterOwnedCleanup": 0
+    },
+    {
+      "label": "case-06",
+      "name": "node::tests::document_transfer_development::document_d1_same_actor_other_socket_cannot_take_the_consumer",
+      "actual": "1 passed; 0 failed; 0 ignored",
+      "originalNodeShutdownAndAreaRemoved": true,
+      "command": "D:\\Project\\acp-remote\\.tmp\\q3-source-r1-20261113\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+      "arguments": "\"node::tests::document_transfer_development::document_d1_same_actor_other_socket_cannot_take_the_consumer\" \"--exact\" \"--test-threads=1\" \"--nocapture\"",
+      "startedAt": "2026-11-13T12:54:18.0282063+00:00",
+      "finishedAt": "2026-11-13T12:54:18.8115911+00:00",
+      "exitCode": 0,
+      "timedOut": false,
+      "naturalExitAndEmptyJob": true,
+      "activeJobProcessesAfterExit": 0,
+      "activeJobProcessesAtParentExit": 0,
+      "jobDrainWaitMs": 1,
+      "jobDrainSamples": [
+        {
+          "elapsedMs": 0,
+          "active": 0
+        }
+      ],
+      "stopInvoked": false,
+      "jobMembersAtParentExit": [],
+      "jobMembersBeforeStop": [],
+      "activeJobProcessesAfterOwnedCleanup": 0
+    },
+    {
+      "label": "case-07",
+      "name": "node::tests::document_transfer_development::document_d2_wrapped_snapshot_preserves_original_allocation_and_scope",
+      "actual": "1 passed; 0 failed; 0 ignored",
+      "originalNodeShutdownAndAreaRemoved": true,
+      "command": "D:\\Project\\acp-remote\\.tmp\\q3-source-r1-20261113\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+      "arguments": "\"node::tests::document_transfer_development::document_d2_wrapped_snapshot_preserves_original_allocation_and_scope\" \"--exact\" \"--test-threads=1\" \"--nocapture\"",
+      "startedAt": "2026-11-13T12:54:19.4624110+00:00",
+      "finishedAt": "2026-11-13T12:54:20.2749553+00:00",
+      "exitCode": 0,
+      "timedOut": false,
+      "naturalExitAndEmptyJob": true,
+      "activeJobProcessesAfterExit": 0,
+      "activeJobProcessesAtParentExit": 0,
+      "jobDrainWaitMs": 1,
+      "jobDrainSamples": [
+        {
+          "elapsedMs": 0,
+          "active": 0
+        }
+      ],
+      "stopInvoked": false,
+      "jobMembersAtParentExit": [],
+      "jobMembersBeforeStop": [],
+      "activeJobProcessesAfterOwnedCleanup": 0
+    }
+  ],
+  "compileRun": false,
+  "oldApiRed": "read original Cargo exact two E0308, not rerun",
+  "limits": [
+    "only fixed seven Doc selectors",
+    "not Source producer or full R2/R3/WP4",
+    "no compile, workspace checks, frontend or npm audit"
+  ],
+  "ownedCleanup": "all per-label temp/p1/rpc naturally empty; no deletion performed"
+}

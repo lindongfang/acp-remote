@@ -1,0 +1,38 @@
+﻿[
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/p0-v1-message-id-definition.md",
+        "sha256":  "4a16aa62b77d0c933bed614911ab770b6470e2278e2cbed81b5706c39bf5bed1"
+    },
+    {
+        "path":  "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-view-adapter-revision3/p0-v1-message-id-contract.md",
+        "sha256":  "833c1124b7257cfaf796f045fa3b7e72bceb7d343ae1204e6836beccec7e1981"
+    },
+    {
+        "path":  "app/src/adapters/acp/strategy.rs",
+        "sha256":  "cb91ed1d4395ac70af35fb422a8c97e1b2edf93f76feb39b10f638f3cf43debf"
+    },
+    {
+        "path":  "app/src/adapters/acp/model.rs",
+        "sha256":  "a14f33cf708aa1a93b8291fbf0e5d55f18627190d54f086505f4f1c883bb2b60"
+    },
+    {
+        "path":  "app/src/adapters/acp/transport.rs",
+        "sha256":  "93bd37e419387eefbb5f5a8819bbbf9c678f44a0baccec89b9edfc61d34f535b"
+    },
+    {
+        "path":  "app/tests/acceptance/acp_discovery_replay.rs",
+        "sha256":  "48ac5cb99352caafa01d1294304e67a0c46d81cb98a71daa349ff739d123cbca"
+    },
+    {
+        "path":  "app/tests/acceptance/acp_permission_subject.rs",
+        "sha256":  "cccda47e932366e486ec54400e320cf9973a9d8ede5f4778d425bc21aaf2b276"
+    },
+    {
+        "path":  "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/schema/v1/schema.json",
+        "sha256":  "1c57095acf9c0844054dd1fdc3624c121b3fdc24209ecc987fd6748c705fdef5"
+    },
+    {
+        "path":  "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/sdk/dist/v1/schema/types.gen.d.ts",
+        "sha256":  "53da804f1c8e61755e696fd8fbd7be2e22419e58f8714245882e6f07eb7cc780"
+    }
+]

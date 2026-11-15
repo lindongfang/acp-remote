@@ -1,0 +1,25 @@
+﻿{
+    "publicExit":  0,
+    "publicTests":  9,
+    "publicOwnedChildTests":  1,
+    "publicChildAlreadyCountedInNine":  true,
+    "allocatorTests":  3,
+    "privateBuildExit":  0,
+    "privateExit":  0,
+    "privateTests":  8,
+    "privateFiltered":  413,
+    "regressionExit":  0,
+    "regressionTests":  106,
+    "regressionBreakdown":  [
+                                11,
+                                69,
+                                20,
+                                6
+                            ],
+    "rootAllTargetsClippyExit":  0,
+    "rootFmtExit":  0,
+    "negativeCompileTestsRerun":  0,
+    "rootSourceEntries":  107,
+    "rootSourceAllMatched":  true,
+    "UTC":  "2026-10-31T03:10:18.8204661Z"
+}

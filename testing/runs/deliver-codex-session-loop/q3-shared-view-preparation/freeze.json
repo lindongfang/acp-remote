@@ -1,0 +1,142 @@
+{
+  "scope": "Independent immutable WIP1 asset preparation only, not formal Shared83 or actual auth/ND/WSS pass",
+  "wipManifest": "fb3731aa21c3292dc217dfed86f3e0c00048ce404c1f0da69093f070c0a7db3f",
+  "stableDefinition": "96aa8288ad24e2b64460b95b604516859fdfd7a445166ef3660edb485929ed85",
+  "codingGate": "5609f606991d0c2608074bc7914b3a8bcc33ebf51730645e988d5e87ca47178e",
+  "sourceCount": 331,
+  "productChanges": 0,
+  "rootBaseline321Changes": 0,
+  "formalCases": 83,
+  "formalExecuted": 0,
+  "preparationPassed": 6,
+  "preparationFailed": 0,
+  "negativeProbesExecuted": 0,
+  "assets": [
+    {
+      "path": "assets/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "path": "assets/peer.rs",
+      "sha256": "4b3abb9a1193da0e5dc7a8a9e3ef0a4de94ea95ed055b6f745cfa7198544f94b"
+    },
+    {
+      "path": "assets/preparation.rs",
+      "sha256": "e22e2cc3d7da000879317738a5981264684e0ef7244551c3b3c1c9e844a63a2e"
+    },
+    {
+      "path": "assets/signing.rs",
+      "sha256": "da8ce69dbeba3631890815318e3ed1851fdc6411137b46bdcddc24a0cabab4c8"
+    },
+    {
+      "path": "assets/tls_area.rs",
+      "sha256": "9b1af65f421fcad94503e046ee3e003090988ff3c51fb9e8c07ee87dfbfea449"
+    },
+    {
+      "path": "assets/vectors.rs",
+      "sha256": "10a9fa5fa09bbcc30756983ec62fa6c0ecc53b2f17349e0c6d54a361f07391ba"
+    },
+    {
+      "path": "compile-probes/binding_identity_field.rs",
+      "sha256": "2ef4a851c653362eb26732935b0df724f631457f34a0138b7a59548f4037253c"
+    },
+    {
+      "path": "compile-probes/client_actor_field.rs",
+      "sha256": "514aacf207113c53e6bcf28c187d9a679bba605c7b26e7e2cdb7d01f054c8dba"
+    },
+    {
+      "path": "compile-probes/client_issuer_field.rs",
+      "sha256": "3cfb974377860efd3139f8e631867a4262cb83888c5eb9e6e0717f01859cbde8"
+    },
+    {
+      "path": "compile-probes/positive.rs",
+      "sha256": "56f9cce2671a88e0489addae96541a7c870ce08ea2cf1026924a1e277eed0c7f"
+    },
+    {
+      "path": "compile-probes/retained_raw_tuple_field.rs",
+      "sha256": "0b4bbd307f57726a45391c6ebb38d71e1b489ff4fe62ac186e13d89ffe22cd84"
+    },
+    {
+      "path": "logs/preparation-run-1.txt",
+      "sha256": "407caa6756a333011d52b85a2278b8e2b27c3aca0122f82b7283fefd0b8c17a1"
+    },
+    {
+      "path": "logs/preparation-run-2.txt",
+      "sha256": "becd7fda0a552ce35632d4608ae655e9142ec02a7c0bbfb2ee29e8c7af6db02b"
+    },
+    {
+      "path": "logs/preparation-run-3.txt",
+      "sha256": "ba890c35afa7e96dedae6225b2be660868547b074a95748d7bc48448853025fe"
+    },
+    {
+      "path": "logs/toolchain.txt",
+      "sha256": "23eb98d344669bddad2300f76bcb62215156f332e10da18994dd68c921930f8f"
+    },
+    {
+      "path": "source-inputs.json",
+      "sha256": "a448d517ae1108b47b18ed7ccbd9bd790dc70b5b698b35f7e6a631eb409e9a04"
+    },
+    {
+      "path": "wip-api.md",
+      "sha256": "ab62d8ee2c12b758937a3fe2a49f0ed6e4bcd1242f4b67521192c02c49fcdf28"
+    },
+    {
+      "path": "HANDOFF.md",
+      "sha256": "5a87526e56b9b76ea127de59e205788ac72169961b761d3218be46d9547562c9"
+    },
+    {
+      "path": "case-preparation-map.json",
+      "sha256": "2f06a2bb32093f6601324c22164f3cc340ed68937d399b2bd1fe6ec109d601a0"
+    },
+    {
+      "path": "compile-probe-definitions.json",
+      "sha256": "f979de9053f723f88f38b0a65ac4c92c4481bb0e4eda2196a39a5ec682a4a29a"
+    },
+    {
+      "path": "workspace-final-source.json",
+      "sha256": "4b48d6156b11770c381a5eb3040e6d604857a4fb4fa9e19f5158a7c821d0b006"
+    },
+    {
+      "path": "prepare-workspace.cjs",
+      "sha256": "128174f71bc5eb02a10637e161f0b10865bcace03132aacecd10ef90908526ea"
+    },
+    {
+      "path": "install-assets.cjs",
+      "sha256": "914f83eef9afe3db92b5e8f01202b5e568aee3eb597dad1a4cb2cb54ffd4ca35"
+    },
+    {
+      "path": "finalize-preparation.cjs",
+      "sha256": "e00e4715cb2615cd14440a179ac41fb6eb3e5312c773aad37a8c52b1c0422482"
+    }
+  ],
+  "mounted": [
+    {
+      "path": "app/tests/shared_view_acceptance/preparation/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "path": "app/tests/shared_view_acceptance/preparation/peer.rs",
+      "sha256": "4b3abb9a1193da0e5dc7a8a9e3ef0a4de94ea95ed055b6f745cfa7198544f94b"
+    },
+    {
+      "path": "app/tests/shared_view_acceptance/preparation/preparation.rs",
+      "sha256": "e22e2cc3d7da000879317738a5981264684e0ef7244551c3b3c1c9e844a63a2e"
+    },
+    {
+      "path": "app/tests/shared_view_acceptance/preparation/signing.rs",
+      "sha256": "da8ce69dbeba3631890815318e3ed1851fdc6411137b46bdcddc24a0cabab4c8"
+    },
+    {
+      "path": "app/tests/shared_view_acceptance/preparation/tls_area.rs",
+      "sha256": "9b1af65f421fcad94503e046ee3e003090988ff3c51fb9e8c07ee87dfbfea449"
+    },
+    {
+      "path": "app/tests/shared_view_acceptance/preparation/vectors.rs",
+      "sha256": "10a9fa5fa09bbcc30756983ec62fa6c0ecc53b2f17349e0c6d54a361f07391ba"
+    },
+    {
+      "path": "app/tests/shared_view_asset_preparation.rs",
+      "sha256": "0a20777ed0c403f331a1725e7954bd151a691249e5c58c716aaf3f85fd08b240"
+    }
+  ]
+}

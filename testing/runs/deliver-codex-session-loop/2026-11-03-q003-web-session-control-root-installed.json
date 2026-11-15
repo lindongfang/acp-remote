@@ -1,0 +1,67 @@
+{
+  "date": "2026-11-03",
+  "change": "deliver-codex-session-loop",
+  "tracked": {
+    "completed": 6,
+    "total": 25
+  },
+  "root": {
+    "sourceFiles": 791,
+    "prior789Unchanged": true,
+    "schema": 8,
+    "indexUnchanged": true,
+    "sourceManifest": "q3-web-session-control-root-v1/target791-manifest.json",
+    "sourceManifestSHA256": "d7958bbbb6ceb2592689ace8974116411e1e3fb8f412d0441d4cfcc5e1f6a159"
+  },
+  "independentGate": {
+    "path": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-web-session-control-codec-candidate-static-delivery-2026-11-03",
+    "freezeSHA256": "895cc8a80fc696686be428a2d77ea4479dfea29254650dd7f5d31bb42abdeee5",
+    "members": 3,
+    "rootAllVerified": true,
+    "conclusion": "Pass-limited, exact two-new-file Root installation authorized; independent dynamic/allocation unexecuted"
+  },
+  "rootInstallation": {
+    "path": "testing/runs/deliver-codex-session-loop/q3-web-session-control-root-v1",
+    "freezeSHA256": "b936b4674dcf4f48821927ec763b51cf63ceb51c1512723c43f28cd6f34f89bc",
+    "members": 13,
+    "newFiles": [
+      {
+        "path": "clients/web/src/management/session-protocol.ts",
+        "sha256": "10b717c9feb2225cfe9115b26b0f3e07295da3d65758d8be415ba559a2caf8c8",
+        "bytes": 10906
+      },
+      {
+        "path": "clients/web/tests/session-protocol.test.ts",
+        "sha256": "9b9e4b289dfbb8ccdc81b714d341973011321e365f08985783faa6219e2439bb",
+        "bytes": 10511
+      }
+    ],
+    "checkExit": 0,
+    "testExit": 0,
+    "testFiles": 28,
+    "testsPassed": 651,
+    "testsFailed": 0,
+    "buildExit": 0,
+    "retries": 0,
+    "eachStageSourceAndIndexUnchanged": true,
+    "productionConnection": false
+  },
+  "notProven": [
+    "P4 complete",
+    "WSS true socket binding",
+    "UploadOwner",
+    "ordinary production factory",
+    "real Harness",
+    "SQLite worker physical closed",
+    "strict clean",
+    "independent new-code functional/allocation fault tests"
+  ],
+  "unperformed": [
+    "npm audit",
+    "commit",
+    "push",
+    "publication",
+    "archive",
+    "index writes"
+  ]
+}

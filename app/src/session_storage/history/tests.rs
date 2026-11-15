@@ -14,24 +14,63 @@ use std::{
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 const CHILD_ROOT: &str = "ACP_WP2_HISTORY_CRASH_ROOT";
-struct Area {
+struct ChildRoots {
     directory: PathBuf,
+}
+struct AreaRoots {
+    directory: PathBuf,
+}
+struct Area {
+    roots: Arc<AreaRoots>,
+    scopes: std::sync::Mutex<Vec<Arc<crate::sqlite_fixture_scope::SqliteFixtureScope>>>,
+}
+impl std::ops::Deref for Area {
+    type Target = AreaRoots;
+    fn deref(&self) -> &AreaRoots {
+        &self.roots
+    }
 }
 impl Area {
     fn new() -> Self {
         let directory = std::env::temp_dir().join(format!(
-            "acp-wp2-history-{}-{}",
+            "acp-wp2-history-{}-{}-{}",
             std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture clock")
+                .as_nanos()
         ));
         std::fs::create_dir(&directory).expect("owned fixture");
-        Self { directory }
+        Self {
+            roots: Arc::new(AreaRoots { directory }),
+            scopes: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+    async fn open(
+        &self,
+    ) -> Result<crate::sqlite_fixture_scope::FixtureStorage, Arc<crate::error::StorageError>> {
+        let scope = Arc::new(crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+            &self.database(),
+            self.roots.clone(),
+        ));
+        self.scopes
+            .lock()
+            .expect("fixture scopes")
+            .push(scope.clone());
+        scope.open().await
+    }
+    async fn observe(&self) {
+        let scopes = std::mem::take(&mut *self.scopes.lock().expect("fixture scopes"));
+        for scope in scopes {
+            scope.stop_and_observe().await;
+        }
     }
     fn database(&self) -> PathBuf {
         self.directory.join("node.sqlite3")
     }
 }
-impl Drop for Area {
+impl Drop for AreaRoots {
     fn drop(&mut self) {
         assert_eq!(
             self.directory.parent(),
@@ -144,7 +183,7 @@ fn item(
 #[tokio::test]
 async fn source_order_tool_updates_and_unknown_raw_fields_survive_latest_value_storage() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     let history = storage.histories();
     let mut positions = history
@@ -232,12 +271,13 @@ async fn source_order_tool_updates_and_unknown_raw_fields_survive_latest_value_s
         "latest objects only, no version log"
     );
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn stale_versions_never_overwrite_and_same_version_content_or_source_conflicts_fail() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     let history = storage.histories();
     let position = history
@@ -299,12 +339,13 @@ async fn stale_versions_never_overwrite_and_same_version_content_or_source_confl
         1
     );
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn immutable_read_pins_delay_only_unreferenced_old_content_cleanup_and_restart_clears_them() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     let history = storage.histories();
     let position = history
@@ -392,13 +433,14 @@ async fn immutable_read_pins_delay_only_unreferenced_old_content_cleanup_and_res
         1
     );
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn history_body_item_revision_and_real_commit_faults_roll_back_all_versions() {
     for failure in ["body", "item", "revision", "commit"] {
         let area = Area::new();
-        let storage = Storage::open(&area.database()).await.expect("storage");
+        let storage = area.open().await.expect("storage");
         let scope = seed(&storage).await;
         let history = storage.histories();
         let position = history
@@ -457,13 +499,14 @@ async fn history_body_item_revision_and_real_commit_faults_roll_back_all_version
             .await
             .expect("retry same identity/position");
         storage.close().await;
+        area.observe().await;
     }
 }
 
 #[tokio::test]
 async fn a_later_item_fault_rolls_back_the_entire_batch_and_failed_cas_keeps_old_content() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     let history = storage.histories();
     let mut positions = history.reserve_positions(scope, 64).await.expect("reserve");
@@ -536,6 +579,7 @@ async fn a_later_item_fault_rolls_back_the_entire_batch_and_failed_cas_keeps_old
         1
     );
     storage.close().await;
+    area.observe().await;
 }
 
 #[derive(Clone, Default)]
@@ -566,7 +610,7 @@ impl OutputControl for Output {
 #[tokio::test]
 async fn coordinator_real_sqlite_faults_never_advance_commit_and_stop_at_three_failures() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     let clock = Clock::default();
     let output = Output::default();
@@ -610,12 +654,13 @@ async fn coordinator_real_sqlite_faults_never_advance_commit_and_stop_at_three_f
         .expect("durable error");
     assert_eq!(reason, "persistent_failure");
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn position_reservation_fault_and_counter_limit_leave_the_durable_counter_unchanged() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     let history = storage.histories();
     sqlx::query("CREATE TRIGGER position_fault BEFORE UPDATE OF next_position ON session_state BEGIN SELECT RAISE(ABORT,'fixture'); END").execute(storage.pool_for_test()).await.expect("fault");
@@ -641,6 +686,7 @@ async fn position_reservation_fault_and_counter_limit_leave_the_durable_counter_
         9_007_199_254_740_980
     );
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
@@ -649,11 +695,12 @@ async fn abrupt_child_exit_loses_only_uncommitted_tail_and_never_reuses_reserved
         return;
     }
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     storage.close().await;
+    area.observe().await;
     let mut child = std::process::Command::new(std::env::current_exe().expect("test executable"))
-        .arg("session_storage::history::tests::crash_after_reservation_child")
+        .arg("session_storage::legacy::history::tests::crash_after_reservation_child")
         .arg("--exact")
         .arg("--nocapture")
         .env(CHILD_ROOT, &area.directory)
@@ -676,9 +723,7 @@ async fn abrupt_child_exit_loses_only_uncommitted_tail_and_never_reuses_reserved
     let child = child.wait_with_output().expect("owned child output");
     assert_eq!(child.status.code(), Some(93));
     assert!(String::from_utf8_lossy(&child.stdout).contains("VISIBLE_POSITION=1"));
-    let storage = Storage::open(&area.database())
-        .await
-        .expect("reopen after abrupt exit");
+    let storage = area.open().await.expect("reopen after abrupt exit");
     assert_eq!(
         scalar(&storage, "SELECT next_position FROM session_state").await,
         65
@@ -707,14 +752,19 @@ async fn abrupt_child_exit_loses_only_uncommitted_tail_and_never_reuses_reserved
     assert!(row.get::<i64, _>("first_position") <= 1);
     assert!(row.get::<i64, _>("last_position") >= 64);
     storage.close().await;
+    area.observe().await;
 }
 #[tokio::test]
 async fn crash_after_reservation_child() {
     let Some(directory) = std::env::var_os(CHILD_ROOT) else {
         return;
     };
-    let database = PathBuf::from(directory).join("node.sqlite3");
-    let storage = Storage::open(&database).await.expect("child storage");
+    let roots = Arc::new(ChildRoots {
+        directory: PathBuf::from(directory),
+    });
+    let database = roots.directory.join("node.sqlite3");
+    let storage_scope = crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(&database, roots);
+    let storage = storage_scope.open().await.expect("child storage");
     let row = sqlx::query("SELECT run_id,turn_id FROM runs")
         .fetch_one(storage.pool_for_test())
         .await
@@ -747,7 +797,7 @@ async fn crash_after_reservation_child() {
 #[tokio::test]
 async fn integrity_facts_belong_to_their_original_run_and_survive_a_later_clean_run() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let old = seed(&storage).await;
     let history = storage.histories();
     let mut positions = history.reserve_positions(old, 64).await.expect("reserve");
@@ -831,12 +881,13 @@ async fn integrity_facts_belong_to_their_original_run_and_survive_a_later_clean_
     );
     assert_eq!(history.integrity(scope).await.expect("new run"), None);
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn history_replacement_cleanup_preserves_prepared_unaccepted_input_references() {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("storage");
+    let storage = area.open().await.expect("storage");
     let scope = seed(&storage).await;
     let actor = ActorContext {
         client_id: id(1),
@@ -914,16 +965,15 @@ async fn history_replacement_cleanup_preserves_prepared_unaccepted_input_referen
     assert!(!accepted.replayed);
     assert_eq!(scalar(&storage, "SELECT COUNT(*) FROM runs").await, 2);
     storage.close().await;
+    area.observe().await;
 }
 
 #[tokio::test]
 async fn independent_sqlite_pin_and_replacement_transactions_have_no_unpinned_read_window() {
     let area = Area::new();
-    let first = Storage::open(&area.database()).await.expect("storage");
+    let first = area.open().await.expect("storage");
     let scope = seed(&first).await;
-    let second = Storage::open(&area.database())
-        .await
-        .expect("independent writer");
+    let second = area.open().await.expect("independent writer");
     let reader = first.histories();
     let writer = second.histories();
     let mut positions = reader.reserve_positions(scope, 64).await.expect("reserve");
@@ -987,4 +1037,5 @@ async fn independent_sqlite_pin_and_replacement_transactions_have_no_unpinned_re
     }
     second.close().await;
     first.close().await;
+    area.observe().await;
 }

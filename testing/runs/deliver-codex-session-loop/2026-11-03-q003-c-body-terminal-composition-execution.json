@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-03",
+  "proposal": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-c-body-terminal-composition-proposal-v1",
+  "sourceManifest": "cb5c97d2fa4276a321a4fd2adb7d26cc4d76b6aa90fec4aa71a96a5ddd60681c",
+  "execution": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-c-body-terminal-composition-execution-v1",
+  "reviewGate": {
+    "directory": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-c-body-terminal-819-development-execution-gate-2026-11-03",
+    "freeze": "259864ab97c04f4dfed4de7ddf2edda8e57453ce466ebf6f7b3fbdd3ee98ca1d",
+    "members": 2,
+    "rootVerified": true
+  },
+  "stages": {
+    "checkCombined": {
+      "exit": 0
+    },
+    "directedTests": "running; not yet passed",
+    "defaultAllTargets": "not started"
+  },
+  "helperFirstSyntaxError": {
+    "cargoStarted": false,
+    "preserved": true,
+    "fixedSyntaxCheck": 0
+  },
+  "context": "authorized outside-sandbox current-user DPAPI; isolated synthetic data; locked offline",
+  "rootInstalled": false
+}

@@ -1,0 +1,38 @@
+{
+  "kind": "Actual Root789 executable build followup",
+  "excluded": [
+    "owned-test-data"
+  ],
+  "members": [
+    {
+      "path": "build-after.json",
+      "bytes": 130004,
+      "sha256": "0ab05aab0cf94efcc72877f480ac1a70131da9221878cb7bd62d6a96c83a666c"
+    },
+    {
+      "path": "build-before.json",
+      "bytes": 130004,
+      "sha256": "0ab05aab0cf94efcc72877f480ac1a70131da9221878cb7bd62d6a96c83a666c"
+    },
+    {
+      "path": "build.json",
+      "bytes": 927,
+      "sha256": "2054459ce543f23f6afa5e01944f2c15e78141a150049eeda4e8ac85328341be"
+    },
+    {
+      "path": "build.stderr.log",
+      "bytes": 18174,
+      "sha256": "bfa2c3fe0307dae4f9a213be4ecaa6ba63d915b182ae904820759428d8572a46"
+    },
+    {
+      "path": "build.stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "REPORT.md",
+      "bytes": 267,
+      "sha256": "a9c5a8ad02e176be2b63321cdd12028ed42dbdf784a6e7536f0b313f92682bbb"
+    }
+  ]
+}

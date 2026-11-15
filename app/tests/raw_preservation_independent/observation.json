@@ -1,0 +1,842 @@
+[
+  {
+    "id": "RAW-OBSERVATION-V1-params-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"_fixture_pad\":0}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-params-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":null}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-params-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":false}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionId-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"_fixture_pad\":0,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionId-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":null,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionId-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":false,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionId-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionId-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"sessionId\":null,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionId-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"\\u0073essionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-update-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"_fixture_pad\":0}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-update-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":null}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-update-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":false}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-update-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"},\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-update-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"},\"update\":null}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-update-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"},\"\\u0075pdate\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionUpdate-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"_fixture_pad\":0,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionUpdate-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":null,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionUpdate-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":false,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionUpdate-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionUpdate-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"sessionUpdate\":null,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-sessionUpdate-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"\\u0073essionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-toolCallId-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-toolCallId-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":null}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-toolCallId-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":false}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-toolCallId-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-toolCallId-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":null}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V1-toolCallId-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 1,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"\\u0074oolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-params-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"_fixture_pad\":0}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-params-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":null}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-params-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":false}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionId-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"_fixture_pad\":0,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionId-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":null,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionId-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":false,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionId-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionId-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"sessionId\":null,\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionId-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"\\u0073essionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-update-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"_fixture_pad\":0}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-update-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":null}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-update-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":false}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-update-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"},\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-update-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"},\"update\":null}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-update-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"},\"\\u0075pdate\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionUpdate-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"_fixture_pad\":0,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionUpdate-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":null,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionUpdate-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":false,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionUpdate-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionUpdate-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"sessionUpdate\":null,\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-sessionUpdate-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"\\u0073essionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-toolCallId-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-toolCallId-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":null}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-toolCallId-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":false}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-toolCallId-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-toolCallId-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"toolCallId\":null}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-toolCallId-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"\\u0074oolCallId\":\"t\"}}}",
+    "steps": [
+      "Make real Strategy::update event from unique baseline session s/tool t notification",
+      "RawMessage::parse current input; if top envelope params duplicate is rejected, assert InvalidMessage before context; otherwise invoke actual private view_observations::context(&event,&raw)",
+      "Verify no observation context success and original RawDocument bytes remain; do not manufacture Received"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:282-333"
+  },
+  {
+    "id": "RAW-OBSERVATION-OPAQUE",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"tool_call_update\",\"toolCallId\":\"t\",\"u\":{\"x\":1,\"x\":2}}}}",
+    "steps": [
+      "Generate consistent actual Strategy::update event and call actual context helper",
+      "Compare raw bytes and decoded returned session/tag"
+    ],
+    "expected": "Ok((s,tool_call_update)); opaque u preserved; no recursive schema"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-STATE-missing",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"state_update\",\"_fixture_pad\":0}}}",
+    "steps": [
+      "Use actual baseline state_update event state idle; call real context on mutated raw"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:320-327"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-STATE-null",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"state_update\",\"state\":null}}}",
+    "steps": [
+      "Use actual baseline state_update event state idle; call real context on mutated raw"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:320-327"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-STATE-wrong",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"state_update\",\"state\":false}}}",
+    "steps": [
+      "Use actual baseline state_update event state idle; call real context on mutated raw"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:320-327"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-STATE-duplicate-same",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"state_update\",\"state\":\"idle\",\"state\":\"idle\"}}}",
+    "steps": [
+      "Use actual baseline state_update event state idle; call real context on mutated raw"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:320-327"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-STATE-duplicate-different",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"state_update\",\"state\":\"idle\",\"state\":\"busy\"}}}",
+    "steps": [
+      "Use actual baseline state_update event state idle; call real context on mutated raw"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:320-327"
+  },
+  {
+    "id": "RAW-OBSERVATION-V2-STATE-duplicate-escaped",
+    "level": "L3",
+    "operation": "observation_context",
+    "version": 2,
+    "inputUtf8": "{\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"state_update\",\"state\":\"idle\",\"st\\u0061te\":\"idle\"}}}",
+    "steps": [
+      "Use actual baseline state_update event state idle; call real context on mutated raw"
+    ],
+    "expected": "ObservationError::InvalidObservation",
+    "source": "view_observations.rs:320-327"
+  }
+]

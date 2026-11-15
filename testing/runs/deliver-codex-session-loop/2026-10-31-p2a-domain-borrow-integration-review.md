@@ -1,0 +1,46 @@
+# root P2A + Domain借用版本：实际组合审查
+
+2026-10-31。当前结论：实际集成差异与验收资产静态核对通过，未发现新增阻断；等待两位原tester的本107项版本实际组合报告及root完整工程结果，尚未签组合最终验收。旧外部P2A/Domain通过不能直接代替本报告。
+
+## 本次来源与真实差异
+
+新清单 testing/runs/deliver-codex-session-loop/2026-10-31-p2a-dbr-integration-source.json SHA256 1896b236e703b8274dc8ab246257dadbacb85d76254bd15891f047fd650cddf1。逐项独立重算107条全部匹配。旧101清单的历史范围保留，没有回填旧摘要；新清单新增P2A合同并省去旧两份规划证据的清单行，不表示删除其文件。
+
+关键生产边界：Domain views01e8ad736724f71a26fab128f819f41f1f65b359b06face964aa5d117c4eb933、staging ad3bf8644505a1f9656e58bc94580e146ca52702351570eda9b56c4e88cc8443与已审版本逐字相同。P2A新模块4cf2b6d36a8a3095bed73de496d926cec871e97bc0addf431256be5a8d54b503、开发测试f9cbf51ac8ff4be8aded29121e0c961820f24d6393e2939ae881da79ee788433、ACP mod934d3b0bf1f05403aaa06ba2e84585ce0c15b3f4d000ccb1a0b0bc68c3a42bdc与已审外部一致；mod只有一行新模块声明，不覆盖root其他模块。Root新增独立资产共五路径，不改Cargo或生产hook。
+
+Domain README仅把本端口pending改为已验收链接，保留不代表实际输出/授权的限制。合同与旧外部报告没有因这次集成被重写为新组合证据。
+
+## 资产与换行的实际核对
+
+P2A主资产a4a85b41a00a4b7a046ac7a0006504d9ee3b79e74b993e4e3a47da9f3ddc1382，实际与原b153…完整diff仅新增support path属性；support逐字e733dbcbb617189e698ce757685d9375ed0479b721a0966a6f339139cd8484bf。断言、数据、顺序及原allow说明没有变化。
+
+DBR公开9/allocator3/support为2538c111fe9eda61d5627cca515c82de6714d598d3c97793f9ee5a62527f90de、36292daac3e441b9551bd435c57148dce447dfc5d9cd79282d8df95738151f49、3ca0debb449739f3b64aca78f2e3288835924eec437299a214558f28754b23db。已亲读原dbr-root-assets/path-style.diff及README/semantic-reversal-proof，核实际recovered三文件摘要逐字回到原9adc…/dbc58…/d453…：只调整support入口、stage helper位置/私有性、两const、已知0/4096的安全转换和unit分号，未改变assert、循环、调用顺序或child watchdog。两个公共目标仍独立二进制，allocator不混入其他测试。私有8项和负编译原资产不加root生产hook，后续隔离再验。
+
+Root两份patch-newlines.json记录8文件初次apply为CRLF、随后恢复原字节。本审查没有只信布尔标记：读取当前8文件，实际SHA都等于original，再在内存展开CRLF计算SHA，8项均精确等于记录before。因此可证差异仅换行，不是借格式掩盖业务变更。没有写文件或Git索引。
+
+Patch路径已核：生产候选三路径、P2A资产两路径、DBR资产三路径均为授权范围。父报告先check再apply；若没有可读取的持久root执行日志，本审查只将此先后归作父执行工具记录，而不声称已亲读不存在的日志。实际最终源码/patch路径/字节恢复已独立核对。
+
+## 待实际组合证据
+
+原baseline_tester负责root P2A19与原112；原request_tester负责root DBR9+3、隔离私有8及适用原106。重复的旧回归不能相加充新功能。主执行root完整npm check/build日志另看实际exit与结果。现已见dbr-root107-public.log的9+3实际通过及其exit0，private overlay仍仅三行cfg入口加空行；这不是尚未到齐的正式整体报告。
+
+最终须核107前后未变、root资产无额外风格/预期修改、隔离copy允许差异与额外synthetic index范围、实际工程完成。P2B current/scanner、完整002/3.2、首开交付/发送期间新鲜性、owner/授权/WSS/Harness均不因本组合绿而完成。
+
+## 107源组合最终限定结论
+
+2026-10-31追加。两位原tester正式报告与root全量工程证据均已到齐，已亲读原件：
+- baseline_tester p2a-dbr-root-integration-acceptance.md，SHA dde3bb83f8be855f732e10b57ee46dd8ec011785f21486a3c4c600994d225efe；p2a-root-tests/exits/clippy/fmt、before/after、assets-comparison和与旧外部版差异。
+- request_tester domain-borrow-root107-acceptance.md，SHA e0742afdf86035609797bdc0194d468e8722d4744aad0874cb22a1ab5c2bd6fb；dbr-root107-public/private-watchdog/regression/style/final-exit、source/copy后检及34资产清单。
+- root full-check.txt SHA b2328363d3e71ba9f6aeab94bba9fcc7d7fa16a87a74e11fef4f460aa0e1a32e；full-build.txt SHA eccd828a619e55c4ab858b77d1ed6de042b67a141dd97a3ad3d4c83c6636acde。另读integration-application-record，保持“主工具事实记录、非原始apply流”的明确归属。
+
+独立root公开143=19 P2A+112原回归+12 DBR全部通过，严格all-target clippy/fmt实际exit0。另一tester独立重跑公开9+allocator3、原106及隔离私有8均通过，私有测试其余413 filtered明确未执行；与143重复的12/旧回归不再累计为新功能数。DBR04 exact child的1 passed/8 filtered是父9内部的受控执行，不充第144/21项。
+
+本次再独立重算root107全部匹配，私有copy107全部匹配其after记录（唯一views cfg overlay，106份原产品字节同源），34资产均匹配；root生产Domain两源及P2A仍为既定摘要。私有8和native watchdog源码与旧原资产逐字相同，新runner canonicalize允许根缩至专属private目录，只复制其自有同SHA测试exe进入该根；实际8 passed、pid23080回收与exit0日志相符。额外synthetic Web index仍只用于隔离Domain测试编译，未代签真实Web。root正式全量另实测Web50/lib413/JWS4/platform12/P2A19/P0六/P1十一/DBR9+3/公开69/预算20+6并完成fmt、clippy与实际嵌入Web的cargo build；父工具实际exit0与日志完成行相符。
+
+实际布局变化已承认：新Domain budget allocator看到的cell请求由旧48变64，原window1024上界与实际原断言保持通过，不声称“底层分配未变”。本轮没有重跑P2A6/DBR15负编译；其类型/私有hook定义精确同源，旧报告可定位复用，但不记作root新增动态执行。同步P2A内部CAS/u64/其中途bulk null等仍按原未验界限保留；内层budget26不能替代wrapper每一步注入。
+
+**最终结论：1896b236…固定107源的P2A有限工具锚点+Domain同步借用/revision实际组合，通过本次限定交付审查和独立组合验收。无新增阻断或产品问题ID。** 本次窄合入及公共资产可以收口；历史101/103报告保持各自来源范围，不重写为107。未来行为/源码变更须另固定快照、做影响检查，文档状态更新也不得回填历史清单。
+
+此结论仍不完成完整VPROJ-PLAN-002、任务3.2或P2B/current/scanner；P2B-TG01–06当前全部open-definition。实际首开交付/权限撤销、长期发送新鲜性、单一producer/共享reader公平队列、WSS/Web安全、实际审批/后台owner、可信轮次与真实Harness/完整L5/L6仍待实现/验证。没有因组合工程全绿降低这些义务。
+
+

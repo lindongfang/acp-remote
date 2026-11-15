@@ -1,0 +1,74 @@
+{
+  "date": "2026-11-13",
+  "scope": "R1 complete facts and exact schema8 fixture developer validation",
+  "sourceManifest": "SOURCE-FROZEN.json",
+  "canonicalSha256": "b9de84e397f31d3f7882c807b07ef28b47fe4774f93c6819cacce035498951aa",
+  "changes": [
+    "Snapshot every old table row and column with SQLite quote literals; preserve identity except expected schema_version change",
+    "Seed two complete release records including failed/error fields, revoked actor, audit, valid approval request/decision/invalidation/audit facts",
+    "Compare snapshots across migration success, thirteen precommit faults, real SQLite FK787 COMMIT failure, committed-report loss and reinitialize",
+    "Insert real schema8 node_meta identity and compare both heads and identity at every existing catalog fault",
+    "Match all thirteen Source injected faults specifically as MigrationInterrupted"
+  ],
+  "runs": [
+    {
+      "module": "session_storage::native_release_schema::tests",
+      "passed": 15,
+      "failed": 0,
+      "ignored": 0,
+      "exit": 0,
+      "stdout": "release.stdout.txt",
+      "stderr": "release.stderr.txt"
+    },
+    {
+      "module": "session_storage::node_catalog_schema::tests",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0,
+      "exit": 0,
+      "stdout": "catalog.stdout.txt",
+      "stderr": "catalog.stderr.txt"
+    },
+    {
+      "module": "session_storage::schema::",
+      "passed": 7,
+      "failed": 0,
+      "ignored": 0,
+      "exit": 0,
+      "stdout": "schema.stdout.txt",
+      "stderr": "schema.stderr.txt"
+    },
+    {
+      "check": "rustfmt --check --edition 2024 on two modified test leaves",
+      "exit": 0
+    },
+    {
+      "check": "git diff --check on two modified test leaves",
+      "exit": 0
+    }
+  ],
+  "environment": {
+    "rust": "1.98.1",
+    "flags": [
+      "--locked",
+      "--offline",
+      "--lib",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "target": ".tmp/q3-source-r1-matrix-20261113",
+    "testTemp": ".tmp/q3-source-r1-matrix-20261113/temp",
+    "ownerRunner": "not loaded; developer module validation"
+  },
+  "limits": [
+    "Independent file database acceptance and Red Check not executed yet",
+    "Reviewer follow-up RF01/RF02/RF03 closure pending",
+    "Full task completion not claimed; tracked remains 9/28",
+    "npm audit not run by user instruction"
+  ],
+  "executionNotes": [
+    "Earlier unlogged smoke run passed 15; not reused as final-source evidence",
+    "A PowerShell ErrorActionPreference Stop logging attempt aborted on native stderr before tests; reran with Continue and captured final raw logs",
+    "72 existing compiler warnings reported; this is not strict clippy validation"
+  ]
+}

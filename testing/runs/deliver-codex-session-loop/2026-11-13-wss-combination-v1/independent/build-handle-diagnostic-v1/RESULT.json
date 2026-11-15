@@ -1,0 +1,91 @@
+{
+    "phase":  "diagnostic",
+    "status":  "diagnostic_only",
+    "failure":  null,
+    "before":  {
+                   "ownLeaves":  515,
+                   "ownCanonical":  "5c7c0aeff9a94a213ffb8b81184ebdb9b8fffd16051bcc9836f7f2f11231921f",
+                   "rootLeaves":  515,
+                   "rootCanonical":  "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+                   "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+               },
+    "after":  {
+                  "ownLeaves":  515,
+                  "ownCanonical":  "5c7c0aeff9a94a213ffb8b81184ebdb9b8fffd16051bcc9836f7f2f11231921f",
+                  "rootLeaves":  515,
+                  "rootCanonical":  "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+                  "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+              },
+    "processes":  [
+                      {
+                          "label":  "rust-version",
+                          "executable":  "D:\\Application\\Rust\\.cargo\\bin\\rustc.exe",
+                          "arguments":  [
+                                            "+1.98.1",
+                                            "--version",
+                                            "--verbose"
+                                        ],
+                          "cwd":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\workspace\\app",
+                          "startedAt":  "2026-11-13T05:32:48.5443580+00:00",
+                          "pid":  36888,
+                          "exitCode":  0,
+                          "timedOut":  false,
+                          "cleanupInvoked":  false,
+                          "activeBeforeCleanup":  0,
+                          "activeAfterCleanup":  0,
+                          "remainingOwnedPids":  [
+
+                                                 ],
+                          "residualProcessIdentity":  [
+
+                                                      ],
+                          "identitySamplingFailed":  false,
+                          "failure":  null,
+                          "endedAt":  "2026-11-13T05:32:48.6567611+00:00"
+                      },
+                      {
+                          "label":  "child",
+                          "executable":  "D:\\Application\\Rust\\.cargo\\bin\\cargo.exe",
+                          "arguments":  [
+                                            "+1.98.1",
+                                            "build",
+                                            "--manifest-path",
+                                            "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\workspace\\app\\Cargo.toml",
+                                            "--locked",
+                                            "--offline",
+                                            "--bin",
+                                            "native_dispatch_dev_child",
+                                            "--features",
+                                            "native-dispatch-dev-fixtures",
+                                            "--message-format=json"
+                                        ],
+                          "cwd":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-wss-combination-v1\\independent\\workspace\\app",
+                          "startedAt":  "2026-11-13T05:32:48.6836394+00:00",
+                          "pid":  29248,
+                          "exitCode":  0,
+                          "timedOut":  false,
+                          "cleanupInvoked":  false,
+                          "activeBeforeCleanup":  0,
+                          "activeAfterCleanup":  0,
+                          "remainingOwnedPids":  [
+
+                                                 ],
+                          "residualProcessIdentity":  [
+
+                                                      ],
+                          "identitySamplingFailed":  false,
+                          "failure":  null,
+                          "endedAt":  "2026-11-13T05:32:49.0459961+00:00"
+                      }
+                  ],
+    "artifacts":  null,
+    "selection":  [
+
+                  ],
+    "runnerSha256":  "2c72757b63d164af1df7d7eb0036f442b83759d1fe9d472b22ca0b9a2193d895",
+    "helperSha256":  "28c6778960879355e6f4ad34d097292227e58ce89a2bd8672dfe968cb613a52f",
+    "powershell":  "5.1.26100.9818",
+    "os":  "Microsoft Windows NT 10.0.26300.0",
+    "scope":  "Owned-Job handle identity diagnostic only; no accepted build or test execution",
+    "npmAuditRun":  false
+}

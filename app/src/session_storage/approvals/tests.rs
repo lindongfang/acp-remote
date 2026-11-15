@@ -14,24 +14,93 @@ use std::{
 };
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-struct Area {
+struct AreaRoots {
     directory: PathBuf,
+}
+struct Area {
+    roots: Arc<AreaRoots>,
+    scopes: std::sync::Mutex<Vec<Arc<crate::sqlite_fixture_scope::SqliteFixtureScope>>>,
+}
+impl std::ops::Deref for Area {
+    type Target = AreaRoots;
+    fn deref(&self) -> &AreaRoots {
+        &self.roots
+    }
 }
 impl Area {
     fn new() -> Self {
         let directory = std::env::temp_dir().join(format!(
-            "acp-wp2-approval-{}-{}",
+            "acp-wp2-approval-{}-{}-{}",
             std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
+            NEXT.fetch_add(1, Ordering::Relaxed),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("fixture clock")
+                .as_nanos()
         ));
         std::fs::create_dir(&directory).expect("owned fixture");
-        Self { directory }
+        Self {
+            roots: Arc::new(AreaRoots { directory }),
+            scopes: std::sync::Mutex::new(Vec::new()),
+        }
     }
     fn database(&self) -> PathBuf {
         self.directory.join("node.sqlite3")
     }
+    async fn open(
+        &self,
+    ) -> Result<crate::sqlite_fixture_scope::FixtureStorage, Arc<crate::error::StorageError>> {
+        let scope = Arc::new(crate::sqlite_fixture_scope::SqliteFixtureScope::prepare(
+            &self.database(),
+            self.roots.clone(),
+        ));
+        self.scopes
+            .lock()
+            .expect("fixture scopes")
+            .push(scope.clone());
+        scope.open().await
+    }
+    async fn finish(self, storage: &Storage) {
+        storage.close().await;
+        let scopes = std::mem::take(&mut *self.scopes.lock().expect("fixture scopes"));
+        for scope in scopes {
+            scope.stop_and_observe().await;
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            for name in ["node.sqlite3", "node.sqlite3-wal", "node.sqlite3-shm"] {
+                match std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .share_mode(0)
+                    .open(self.directory.join(name))
+                {
+                    Ok(_exclusive) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        assert_ne!(name, "node.sqlite3");
+                    }
+                    Err(error) => panic!("owned approval database is still open: {error}"),
+                }
+            }
+        }
+        let directory = self.directory.canonicalize().expect("owned fixture path");
+        let temporary = std::env::temp_dir()
+            .canonicalize()
+            .expect("owned temporary root");
+        assert_eq!(directory.parent(), Some(temporary.as_path()));
+        assert!(
+            directory
+                .file_name()
+                .expect("fixture name")
+                .to_string_lossy()
+                .starts_with(&format!("acp-wp2-approval-{}-", std::process::id()))
+        );
+        std::fs::remove_dir_all(&directory).expect("normal owned approval fixture cleanup");
+        println!("LEGACY_APPROVAL_FIXTURE_NORMAL_CLOSE");
+    }
 }
-impl Drop for Area {
+impl Drop for AreaRoots {
     fn drop(&mut self) {
         assert_eq!(
             self.directory.parent(),
@@ -117,9 +186,13 @@ fn actor() -> ActorContext {
         auth_generation: 1,
     }
 }
-async fn fixture() -> (Area, Storage, ApprovalObservation) {
+async fn fixture() -> (
+    Area,
+    crate::sqlite_fixture_scope::FixtureStorage,
+    ApprovalObservation,
+) {
     let area = Area::new();
-    let storage = Storage::open(&area.database()).await.expect("open");
+    let storage = area.open().await.expect("open");
     let scope = seed(&storage).await;
     let native_session =
         NativeSessionId::new(Arc::from("native-session-sensitive")).expect("native session");
@@ -220,7 +293,7 @@ fn input(view: &ApprovalView, request: u8, choice: usize) -> DecisionInput {
 #[tokio::test]
 async fn approval_structure_reference_and_typed_namespaces() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let (_area, storage, mut observation) = fixture().await;
+        let (area, storage, mut observation) = fixture().await;
         let store = storage.approvals();
         let view = store.observe(&observation).await.expect("observe");
         assert_eq!(view.state, ApprovalState::Pending);
@@ -253,6 +326,7 @@ async fn approval_structure_reference_and_typed_namespaces() {
             store.decide(actor(), input(&unsupported, 41, 0)).await,
             Err(ApprovalError::UnsupportedRequest)
         ));
+        area.finish(&storage).await;
     })
     .await
     .expect("bounded");
@@ -260,7 +334,7 @@ async fn approval_structure_reference_and_typed_namespaces() {
 #[tokio::test]
 async fn approval_once_decision_replay_claim_and_transport_fact() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let (_area, storage, observation) = fixture().await;
+        let (area, storage, observation) = fixture().await;
         let store = storage.approvals();
         let view = store.observe(&observation).await.expect("observe");
         let request = input(&view, 41, 0);
@@ -311,6 +385,7 @@ async fn approval_once_decision_replay_claim_and_transport_fact() {
                 );
             }
         }
+        area.finish(&storage).await;
     })
     .await
     .expect("bounded");
@@ -318,7 +393,8 @@ async fn approval_once_decision_replay_claim_and_transport_fact() {
 #[tokio::test]
 async fn approval_concurrent_opposite_actors_one_winner() {
     tokio::time::timeout(Duration::from_secs(15),async{
- let (area,storage,observation)=fixture().await;sqlx::query("INSERT INTO clients(client_id,public_key,display_name,status,auth_generation,created_at) VALUES(?,X'02','second','trusted',1,0)").bind(id(2).encode()).execute(storage.pool_for_test()).await.expect("second actor");let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");let independent=Storage::open(&area.database()).await.expect("independent pool");let other=independent.approvals();let (a,b)=tokio::join!(store.decide(actor(),input(&view,41,0)),other.decide(ActorContext{client_id:id(2),auth_generation:1},input(&view,42,1)));assert_ne!(a.is_ok(),b.is_ok());assert_eq!(count(&storage,"approval_deliveries").await,1);assert_eq!(count(&storage,"session_commands").await,2);
+ let (area,storage,observation)=fixture().await;sqlx::query("INSERT INTO clients(client_id,public_key,display_name,status,auth_generation,created_at) VALUES(?,X'02','second','trusted',1,0)").bind(id(2).encode()).execute(storage.pool_for_test()).await.expect("second actor");let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");let independent=area.open().await.expect("independent pool");let other=independent.approvals();let (a,b)=tokio::join!(store.decide(actor(),input(&view,41,0)),other.decide(ActorContext{client_id:id(2),auth_generation:1},input(&view,42,1)));assert_ne!(a.is_ok(),b.is_ok());assert_eq!(count(&storage,"approval_deliveries").await,1);assert_eq!(count(&storage,"session_commands").await,2);
+independent.close().await;area.finish(&storage).await;
 }).await.expect("bounded");
 }
 
@@ -331,7 +407,7 @@ async fn approval_lifecycle_old_epoch_restart_and_unknown_never_retry() {
             RunLifecycle::Cancelled,
             RunLifecycle::Failed,
         ] {
-            let (_area, storage, observation) = fixture().await;
+            let (area, storage, observation) = fixture().await;
             let store = storage.approvals();
             let view = store.observe(&observation).await.expect("observe");
             store
@@ -363,8 +439,9 @@ async fn approval_lifecycle_old_epoch_restart_and_unknown_never_retry() {
                     .expect("run");
                 assert_eq!(status, "cancelling");
             }
+            area.finish(&storage).await;
         }
-        let (_area, storage, observation) = fixture().await;
+        let (area, storage, observation) = fixture().await;
         let store = storage.approvals();
         let view = store.observe(&observation).await.expect("observe");
         let request = input(&view, 41, 0);
@@ -401,7 +478,8 @@ async fn approval_lifecycle_old_epoch_restart_and_unknown_never_retry() {
                 .await
                 .is_err()
         );
-        let (_area, storage, observation) = fixture().await;
+        area.finish(&storage).await;
+        let (area, storage, observation) = fixture().await;
         let store = storage.approvals();
         let view = store.observe(&observation).await.expect("observe");
         let newer = ConnectionEpoch {
@@ -411,6 +489,7 @@ async fn approval_lifecycle_old_epoch_restart_and_unknown_never_retry() {
         store.bind_connection(newer).await.expect("new epoch");
         assert!(store.decide(actor(), input(&view, 41, 0)).await.is_err());
         assert!(store.observe(&observation).await.is_err());
+        area.finish(&storage).await;
     })
     .await
     .expect("bounded");
@@ -419,15 +498,15 @@ async fn approval_lifecycle_old_epoch_restart_and_unknown_never_retry() {
 async fn approval_transaction_faults_rollback_decision_and_claim() {
     tokio::time::timeout(Duration::from_secs(25),async{
  for trigger in ["CREATE TRIGGER fail BEFORE INSERT ON session_commands WHEN NEW.action='approval.decide' BEGIN SELECT RAISE(ABORT,'synthetic');END", "CREATE TRIGGER fail BEFORE UPDATE OF status ON approvals WHEN NEW.status='decided' BEGIN SELECT RAISE(ABORT,'synthetic');END", "CREATE TRIGGER fail BEFORE INSERT ON security_audit WHEN NEW.action='approval.decide' BEGIN SELECT RAISE(ABORT,'synthetic');END", "CREATE TRIGGER fail BEFORE INSERT ON approval_audit_links BEGIN SELECT RAISE(ABORT,'synthetic');END"]{
- let (_area,storage,observation)=fixture().await;let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");let audits=count(&storage,"security_audit").await;sqlx::query(trigger).execute(storage.pool_for_test()).await.expect("fault trigger");assert!(matches!(store.decide(actor(),input(&view,41,0)).await,Err(ApprovalError::StorageUnavailable)));assert_eq!(count(&storage,"session_commands").await,1);assert_eq!(count(&storage,"security_audit").await,audits);assert_eq!(store.view(actor(),view.id).await.expect("view").state,ApprovalState::Pending);sqlx::query("DROP TRIGGER fail").execute(storage.pool_for_test()).await.expect("remove fault");store.decide(actor(),input(&view,41,0)).await.expect("retry after rollback");}
+ let (area,storage,observation)=fixture().await;let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");let audits=count(&storage,"security_audit").await;sqlx::query(trigger).execute(storage.pool_for_test()).await.expect("fault trigger");assert!(matches!(store.decide(actor(),input(&view,41,0)).await,Err(ApprovalError::StorageUnavailable)));assert_eq!(count(&storage,"session_commands").await,1);assert_eq!(count(&storage,"security_audit").await,audits);assert_eq!(store.view(actor(),view.id).await.expect("view").state,ApprovalState::Pending);sqlx::query("DROP TRIGGER fail").execute(storage.pool_for_test()).await.expect("remove fault");store.decide(actor(),input(&view,41,0)).await.expect("retry after rollback");area.finish(&storage).await;}
  for trigger in ["CREATE TRIGGER fail BEFORE UPDATE ON approval_deliveries WHEN NEW.state='claimed' BEGIN SELECT RAISE(ABORT,'synthetic');END", "CREATE TRIGGER fail BEFORE INSERT ON security_audit WHEN NEW.action='approval.claim' BEGIN SELECT RAISE(ABORT,'synthetic');END"]{
- let (_area,storage,observation)=fixture().await;let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");store.decide(actor(),input(&view,41,0)).await.expect("decision");let audits=count(&storage,"security_audit").await;sqlx::query(trigger).execute(storage.pool_for_test()).await.expect("fault");assert!(store.claim_delivery(actor(),view.id).await.is_err());assert_eq!(store.view(actor(),view.id).await.expect("view").delivery,DeliveryState::NotSent);assert_eq!(count(&storage,"security_audit").await,audits);sqlx::query("DROP TRIGGER fail").execute(storage.pool_for_test()).await.expect("remove fault");let claim=store.claim_delivery(actor(),view.id).await.expect("claim after rollback");sqlx::query("CREATE TRIGGER fail BEFORE INSERT ON security_audit WHEN NEW.action='approval.transport' BEGIN SELECT RAISE(ABORT,'synthetic');END").execute(storage.pool_for_test()).await.expect("report fault");assert!(store.report_transport(&claim,TransportReport::Unknown).await.is_err());assert_eq!(store.view(actor(),view.id).await.expect("view").delivery,DeliveryState::Claimed);assert!(store.claim_delivery(actor(),view.id).await.is_err());}
+ let (area,storage,observation)=fixture().await;let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");store.decide(actor(),input(&view,41,0)).await.expect("decision");let audits=count(&storage,"security_audit").await;sqlx::query(trigger).execute(storage.pool_for_test()).await.expect("fault");assert!(store.claim_delivery(actor(),view.id).await.is_err());assert_eq!(store.view(actor(),view.id).await.expect("view").delivery,DeliveryState::NotSent);assert_eq!(count(&storage,"security_audit").await,audits);sqlx::query("DROP TRIGGER fail").execute(storage.pool_for_test()).await.expect("remove fault");let claim=store.claim_delivery(actor(),view.id).await.expect("claim after rollback");sqlx::query("CREATE TRIGGER fail BEFORE INSERT ON security_audit WHEN NEW.action='approval.transport' BEGIN SELECT RAISE(ABORT,'synthetic');END").execute(storage.pool_for_test()).await.expect("report fault");assert!(store.report_transport(&claim,TransportReport::Unknown).await.is_err());assert_eq!(store.view(actor(),view.id).await.expect("view").delivery,DeliveryState::Claimed);assert!(store.claim_delivery(actor(),view.id).await.is_err());area.finish(&storage).await;}
 }).await.expect("bounded");
 }
 #[tokio::test]
 async fn approval_unsupported_option_wrong_generation_and_revoked_actor() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let (_area, storage, mut observation) = fixture().await;
+        let (area, storage, mut observation) = fixture().await;
         let store = storage.approvals();
         observation.options[0].kind = PermissionOptionKind::Unsupported(Arc::from("future-kind"));
         let view = store.observe(&observation).await.expect("retain unknown");
@@ -446,6 +525,7 @@ async fn approval_unsupported_option_wrong_generation_and_revoked_actor() {
             store.view(actor(), view.id).await,
             Err(ApprovalError::InvalidActor)
         ));
+        area.finish(&storage).await;
     })
     .await
     .expect("bounded");
@@ -454,15 +534,15 @@ async fn approval_unsupported_option_wrong_generation_and_revoked_actor() {
 #[tokio::test]
 async fn approval_real_deferred_commit_faults_keep_all_associations() {
     tokio::time::timeout(Duration::from_secs(20),async{
- for phase in ["decision","claim","report"]{let (_area,storage,observation)=fixture().await;let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");if phase!="decision"{store.decide(actor(),input(&view,41,0)).await.expect("decision");}let claim=if phase=="report"{Some(store.claim_delivery(actor(),view.id).await.expect("claim"))}else{None};let commands=count(&storage,"session_commands").await;let audits=count(&storage,"security_audit").await;
+ for phase in ["decision","claim","report"]{let (area,storage,observation)=fixture().await;let store=storage.approvals();let view=store.observe(&observation).await.expect("observe");if phase!="decision"{store.decide(actor(),input(&view,41,0)).await.expect("decision");}let claim=if phase=="report"{Some(store.claim_delivery(actor(),view.id).await.expect("claim"))}else{None};let commands=count(&storage,"session_commands").await;let audits=count(&storage,"security_audit").await;
  sqlx::query("CREATE TABLE commit_fault(id TEXT REFERENCES sessions(session_id) DEFERRABLE INITIALLY DEFERRED)").execute(storage.pool_for_test()).await.expect("deferred fixture");let action=match phase{"decision"=>"approval.decide","claim"=>"approval.claim",_=>"approval.transport"};sqlx::query(&format!("CREATE TRIGGER commit_fail AFTER INSERT ON security_audit WHEN NEW.action='{action}' BEGIN INSERT INTO commit_fault VALUES('missing'); END")).execute(storage.pool_for_test()).await.expect("commit fault");
- let failed=match phase{"decision"=>store.decide(actor(),input(&view,41,0)).await.is_err(),"claim"=>store.claim_delivery(actor(),view.id).await.is_err(),_=>store.report_transport(claim.as_ref().expect("claim"),TransportReport::Unknown).await.is_err()};assert!(failed);assert_eq!(count(&storage,"session_commands").await,commands);assert_eq!(count(&storage,"security_audit").await,audits);assert_eq!(count(&storage,"commit_fault").await,0);let actual=store.view(actor(),view.id).await.expect("view");assert_eq!(actual.delivery,if phase=="report"{DeliveryState::Claimed}else{DeliveryState::NotSent});}
+ let failed=match phase{"decision"=>store.decide(actor(),input(&view,41,0)).await.is_err(),"claim"=>store.claim_delivery(actor(),view.id).await.is_err(),_=>store.report_transport(claim.as_ref().expect("claim"),TransportReport::Unknown).await.is_err()};assert!(failed);assert_eq!(count(&storage,"session_commands").await,commands);assert_eq!(count(&storage,"security_audit").await,audits);assert_eq!(count(&storage,"commit_fault").await,0);let actual=store.view(actor(),view.id).await.expect("view");assert_eq!(actual.delivery,if phase=="report"{DeliveryState::Claimed}else{DeliveryState::NotSent});area.finish(&storage).await;}
 }).await.expect("bounded");
 }
 #[tokio::test]
 async fn approval_input_shares_actor_request_namespace() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        let (_area, storage, observation) = fixture().await;
+        let (area, storage, observation) = fixture().await;
         let store = storage.approvals();
         let view = store.observe(&observation).await.expect("observe");
         assert!(matches!(
@@ -487,6 +567,7 @@ async fn approval_input_shares_actor_request_namespace() {
             storage.sessions().admit_input(actor(), request).await,
             Err(crate::domain::SessionError::RequestConflict)
         ));
+        area.finish(&storage).await;
     })
     .await
     .expect("bounded");
@@ -518,18 +599,18 @@ impl crate::application::history::OutputControl for OutputFixture {
 async fn approval_forced_flush_failure_and_changed_checkpoint_accept_nothing() {
     tokio::time::timeout(Duration::from_secs(20),async{
  use crate::application::{history::HistoryCoordinator,approvals::ApprovalService};
- let (_area,storage,observation)=fixture().await;let history=HistoryCoordinator::new(storage.histories(),Clock,OutputFixture);let scope=observation.binding.scope;history.attach(scope).await.expect("attach");let service=ApprovalService::new(storage.approvals(),history.clone());let prepared=service.prepare_observation(observation.clone()).await.expect("prepare");let tail=history.begin_item(scope,SourceId(id(60)),Arc::from("text"),Arc::from("acp"),Arc::from("1"),b"new dirty tail".to_vec()).await.expect("tail");assert!(matches!(service.commit_observation(prepared).await,Err(ApprovalError::HistoryUnavailable)));assert_eq!(count(&storage,"approvals").await,0);
+ let (area,storage,observation)=fixture().await;let history=HistoryCoordinator::new(storage.histories(),Clock,OutputFixture);let scope=observation.binding.scope;history.attach(scope).await.expect("attach");let service=ApprovalService::new(storage.approvals(),history.clone());let prepared=service.prepare_observation(observation.clone()).await.expect("prepare");let tail=history.begin_item(scope,SourceId(id(60)),Arc::from("text"),Arc::from("acp"),Arc::from("1"),b"new dirty tail".to_vec()).await.expect("tail");assert!(matches!(service.commit_observation(prepared).await,Err(ApprovalError::HistoryUnavailable)));assert_eq!(count(&storage,"approvals").await,0);
  sqlx::query("CREATE TRIGGER history_fault BEFORE INSERT ON content_objects WHEN NEW.purpose='output' BEGIN SELECT RAISE(ABORT,'synthetic');END").execute(storage.pool_for_test()).await.expect("history fault");assert!(matches!(service.prepare_observation(observation.clone()).await,Err(ApprovalError::HistoryUnavailable)));assert_eq!(count(&storage,"approvals").await,0);assert_eq!(count(&storage,"session_commands").await,1);sqlx::query("DROP TRIGGER history_fault").execute(storage.pool_for_test()).await.expect("remove fault");
  // The controlled clock remains at zero after failure: use a fresh owner to preserve minimum retry delay.
  assert!(history.close(Duration::from_millis(50)).await.is_err());drop(service);drop(history);
- let history=HistoryCoordinator::new(storage.histories(),Clock,OutputFixture);history.attach(scope).await.expect("new fixture owner");let service=ApprovalService::new(storage.approvals(),history.clone());let view=service.commit_observation(service.prepare_observation(observation).await.expect("prepare")).await.expect("observe");let decision=service.prepare_decision(actor(),input(&view,41,0)).await.expect("prepare decision");history.begin_item(scope,SourceId(id(61)),Arc::from("text"),Arc::from("acp"),Arc::from("1"),b"changed".to_vec()).await.expect("dirty");assert!(matches!(service.commit_decision(decision).await,Err(ApprovalError::HistoryUnavailable)));assert_eq!(count(&storage,"session_commands").await,1);service.commit_decision(service.prepare_decision(actor(),input(&view,41,0)).await.expect("reflush")).await.expect("decision");let delivery=service.prepare_delivery(actor(),view.id).await.expect("prepare delivery");history.begin_item(scope,SourceId(id(62)),Arc::from("text"),Arc::from("acp"),Arc::from("1"),b"changed again".to_vec()).await.expect("dirty");assert!(matches!(service.claim_delivery(delivery).await,Err(ApprovalError::HistoryUnavailable)));assert_eq!(storage.approvals().view(actor(),view.id).await.expect("view").delivery,DeliveryState::NotSent);history.close(Duration::from_secs(1)).await.expect("owned close");drop(tail);
+ let history=HistoryCoordinator::new(storage.histories(),Clock,OutputFixture);history.attach(scope).await.expect("new fixture owner");let service=ApprovalService::new(storage.approvals(),history.clone());let view=service.commit_observation(service.prepare_observation(observation).await.expect("prepare")).await.expect("observe");let decision=service.prepare_decision(actor(),input(&view,41,0)).await.expect("prepare decision");history.begin_item(scope,SourceId(id(61)),Arc::from("text"),Arc::from("acp"),Arc::from("1"),b"changed".to_vec()).await.expect("dirty");assert!(matches!(service.commit_decision(decision).await,Err(ApprovalError::HistoryUnavailable)));assert_eq!(count(&storage,"session_commands").await,1);service.commit_decision(service.prepare_decision(actor(),input(&view,41,0)).await.expect("reflush")).await.expect("decision");let delivery=service.prepare_delivery(actor(),view.id).await.expect("prepare delivery");history.begin_item(scope,SourceId(id(62)),Arc::from("text"),Arc::from("acp"),Arc::from("1"),b"changed again".to_vec()).await.expect("dirty");assert!(matches!(service.claim_delivery(delivery).await,Err(ApprovalError::HistoryUnavailable)));assert_eq!(storage.approvals().view(actor(),view.id).await.expect("view").delivery,DeliveryState::NotSent);history.close(Duration::from_secs(1)).await.expect("owned close");drop(tail);area.finish(&storage).await;
 }).await.expect("bounded");
 }
 
 #[tokio::test]
 async fn approval_tool_reference_never_crosses_source_scope() {
     tokio::time::timeout(Duration::from_secs(20),async{
- for mutation in ["UPDATE conversation_items SET tool_generation=0 WHERE kind='tool'", "UPDATE conversation_items SET tool_instance_id='another-instance' WHERE kind='tool'", "UPDATE conversation_items SET tool_native_session_id='other-native',tool_native_session_digest='other-digest' WHERE kind='tool'", "UPDATE conversation_items SET native_tool_id='other-tool',native_tool_digest='other-digest' WHERE kind='tool'"]{let (_area,storage,observation)=fixture().await;sqlx::query(mutation).execute(storage.pool_for_test()).await.expect("different historical source fixture");let view=storage.approvals().observe(&observation).await.expect("fail closed request");assert_eq!(view.restriction,Some(ApprovalRestriction::UnresolvedTool));assert!(view.tool.is_none());assert!(storage.approvals().decide(actor(),input(&view,41,0)).await.is_err());}
- let (_area,storage,observation)=fixture().await;let mut wrong=observation.clone();wrong.binding.scope.session=SessionId(id(99));assert!(storage.approvals().observe(&wrong).await.is_err());
+ for mutation in ["UPDATE conversation_items SET tool_generation=0 WHERE kind='tool'", "UPDATE conversation_items SET tool_instance_id='another-instance' WHERE kind='tool'", "UPDATE conversation_items SET tool_native_session_id='other-native',tool_native_session_digest='other-digest' WHERE kind='tool'", "UPDATE conversation_items SET native_tool_id='other-tool',native_tool_digest='other-digest' WHERE kind='tool'"]{let (area,storage,observation)=fixture().await;sqlx::query(mutation).execute(storage.pool_for_test()).await.expect("different historical source fixture");let view=storage.approvals().observe(&observation).await.expect("fail closed request");assert_eq!(view.restriction,Some(ApprovalRestriction::UnresolvedTool));assert!(view.tool.is_none());assert!(storage.approvals().decide(actor(),input(&view,41,0)).await.is_err());area.finish(&storage).await;}
+ let (area,storage,observation)=fixture().await;let mut wrong=observation.clone();wrong.binding.scope.session=SessionId(id(99));assert!(storage.approvals().observe(&wrong).await.is_err());area.finish(&storage).await;
 }).await.expect("bounded");
 }

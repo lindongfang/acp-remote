@@ -1,0 +1,521 @@
+{
+  "scope": "Original independent tester v19 schema-only hybrid: API06 plus exact combined fe155 schema and approved independent assets. 386 source files hash verified, full source remains external;103 evidence files embedded.63 unique functions final62 pass/1 old latest5 oracle failure;67 actual invocations62 pass/5 fail including4 long-TEMP SQLite14 initial failures preserved and same-exe short-TEMP green reruns. New independent schema41,70 SQL vectors,14 ordinal and true787 passed. No production provider/Permission/NoOwner/Native80 acceptance. Minimal old latest oracle proposal only, not installed or rerun. No product source changed.",
+  "verifiedSources": 386,
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\compile-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/compile-assets.mjs",
+      "sha256": "6e45ee45bf6a7606d245dfe940e79f062ffb26b9a4f01821fd968dd22fbe7b47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\finalization-notes.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/finalization-notes.json",
+      "sha256": "3aa6882604de9d4a3426095c74c6ee51e83e30307247dfb7b3e3330389c2af0e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\finalize-schema-execution-02.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/finalize-schema-execution-02.mjs",
+      "sha256": "dc4e19911513ba7c8d951a49a088cfcd94ebf1d803feebd9c46d7d04b520c944"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\finalize-schema-execution.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/finalize-schema-execution.mjs",
+      "sha256": "1846ed6f2b08b7b051e98263b9e2e2fd7dfd74269fbe432db61b467cfdc3d1cf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\formal80-status.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/formal80-status.json",
+      "sha256": "48ec641996e50db84cd634bdd5efe647aca030dd00bc97a60f47b0770595b591"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs-v19.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs-v19.json",
+      "sha256": "67dc664e8883b94e32e6220adf84da13669c71c0d7562ab5cbee0e73935b48b1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\api06-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/api06-freeze.json",
+      "sha256": "5442d93177b1825ea1c28cd091fa49a95c145c7a765e6cabc41640747f2e7b59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\approved-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/approved-schema6.sql",
+      "sha256": "478262bbeb09bbda8441584bd78eb41bd9fc80093ae5c4f0d9ded2fa39c4daf6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\assets-header-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/assets-header-freeze.json",
+      "sha256": "87707adf3149a4750cf7ddf8dde375dfae0067cf4f4176c5ca33fea79f2a885f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\assets-v1-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/assets-v1-freeze.json",
+      "sha256": "a3a0b5e12b35b2525a5ab3634852ce4f7cf8d8b371ffb578df2ba48326ec6627"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\execution-gate.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/execution-gate.md",
+      "sha256": "ae333eeecf2031dbf583c516b779913e4b56533bc8cc201ba469e044a179d335"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\v18-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/v18-freeze.json",
+      "sha256": "2e5354db68ad0b7eddc01b469439eb4b3df910413fad64a9999735e6d33c8e14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\v18-source.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/v18-source.json",
+      "sha256": "7560ae88a90a26faba415eaf20a3bdd7c41c36c1780174a6a1e6eb38b500e309"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inputs\\windows-owner.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inputs/windows-owner.ps1",
+      "sha256": "e262ac6d70d0d7ccb4e17b72c727d393e3877c50ab79a46541970bd82caa5403"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inventory-first-attempt.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inventory-first-attempt.json",
+      "sha256": "1ee0c2a169339e211dc38b0f89632e99b8322981231bc542aeca2a637658719f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inventory-schema-tests-02.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inventory-schema-tests-02.mjs",
+      "sha256": "1ec8ba1f39d1e6ca42a6caacc7c279c8ef2f09e2ad5eb1258840fbcd7cfcc379"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\inventory-schema-tests.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/inventory-schema-tests.mjs",
+      "sha256": "392842ed907df3fe4214761e02a0b3f1b7f90e34d61b63eb0c22a1067f544738"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\issues.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/issues.json",
+      "sha256": "f5ec4692fca7e300d914b0685e20e18dcf5b85171fba8c2942a88697aab37633"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\library-latest-version-oracle-proposal-v1\\after\\app\\src\\session_storage\\request_registry\\tests.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/library-latest-version-oracle-proposal-v1/after/app/src/session_storage/request_registry/tests.rs",
+      "sha256": "deb9dc2fa0df585ccb750056d0cb6247b078ab9e4c94cb2a0b5772e78a5fe57e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\library-latest-version-oracle-proposal-v1\\before\\app\\src\\session_storage\\request_registry\\tests.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/library-latest-version-oracle-proposal-v1/before/app/src/session_storage/request_registry/tests.rs",
+      "sha256": "5488798257bf0019f3d46113c4881ed11f0284e7a7cbd9d83aade0b3e3b868e2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\library-latest-version-oracle-proposal-v1\\manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/library-latest-version-oracle-proposal-v1/manifest.json",
+      "sha256": "7498a2a6289c01373506ca6bb0b2a663e1787fb13da2ccccd6fd8053b2ef4db6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\library-latest-version-oracle-proposal-v1\\proposal.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/library-latest-version-oracle-proposal-v1/proposal.md",
+      "sha256": "dd65c443762da670287bbfc9ef62d51da222a378fc6b19d81bcbc01814edcc32"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\library-latest-version-oracle-proposal-v1\\root-relative.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/library-latest-version-oracle-proposal-v1/root-relative.patch",
+      "sha256": "59c7ef75a08dc02a6be5284e88145c6cfcab6511630be7d3bf625619b0564b44"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy-short-temp-host-batch.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy-short-temp-host-batch.json",
+      "sha256": "216fbd60156395b53ed5f5dd6a5385c772d1d3b345794e5a54ce6558463e089c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy01.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy01.json",
+      "sha256": "f274de31497c998b7abb77d37afde58bfb6544f24799fa8d34bc377c0229bfab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy01.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy01.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy01.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy01.stdout.log",
+      "sha256": "7d874db02ad4cbc65981a7e9363a08fc30d6ce8070560581fd73eae47bc8ff29"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy02.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy02.json",
+      "sha256": "999ff21e6a5b5e1ae8bf9b6d0fcbb3b9289cdc17c84cefe2335a7b470e10a4d8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy02.stdout.log",
+      "sha256": "bba8b0a9aff129b637b3ad9ec353daf7a3d95f0fbbed0e1369e5a42d5ac0d868"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy03.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy03.json",
+      "sha256": "e51c007349c1dbcd632c3b7e5d26f36e13bee5e6d2184cce62fe181e7f50d7c6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy03.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy03.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy03.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy03.stdout.log",
+      "sha256": "e7d3f2d6d3f98028287799f28ae5866493948b6dda71c2cdcf3cfd02c1ed13f1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy04.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy04.json",
+      "sha256": "815c74067f5226deac318be447e9c004bd9a528eba0fc8a6932f47094d8faa05"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy04.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy04.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\legacy04.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/legacy04.stdout.log",
+      "sha256": "280ff88aea6bfe99a533a5cdab250ed8f3afdc3ede112ca01922286428a30f7e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\native-schema-development-regression.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/native-schema-development-regression.json",
+      "sha256": "b62053898ed6798d7aa8f2f5517dca7bb28422650bf684993342dd16febc84dd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\native-schema-development-regression.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/native-schema-development-regression.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\native-schema-development-regression.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/native-schema-development-regression.stdout.log",
+      "sha256": "19ca40fe44f7d8db365ec31e0f60d788ad6f9da3f7dffcf0df2fe36377d1c762"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\native-schema-independent.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/native-schema-independent.json",
+      "sha256": "f3393a9dbe79cb5979625867c284f787afb3362148709fa502d0b81924f1e5dc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\native-schema-independent.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/native-schema-independent.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\native-schema-independent.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/native-schema-independent.stdout.log",
+      "sha256": "157f13755384ae1907e042459242e0ad8399b90a07d2aa477d87c61d7ea3485d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-product-schema-development-regression.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-product-schema-development-regression.json",
+      "sha256": "e2d9ac1f3b2f2e29e20b1da9c2444d56229323e484495aff9c3fca3867f24eb4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-product-schema-development-regression.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-product-schema-development-regression.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-product-schema-development-regression.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-product-schema-development-regression.stdout.log",
+      "sha256": "639ae8f8f97d2f7c2c0b17b0f5483cf95b0f90f335ed14bc7edca2e07a172612"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema3-independent.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema3-independent.json",
+      "sha256": "654d23361baef643d0137c32e2653584c26f1992762b9040f4b6e7ac85b67fad"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema3-independent.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema3-independent.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema3-independent.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema3-independent.stdout.log",
+      "sha256": "151f29572ef306395e05a7f74a2446a11828fab1cb92ff65bc2e54639ffb5c8c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema4-independent.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema4-independent.json",
+      "sha256": "5f4282a143311e1071847ab2c11464213761e2ce6a2a20b41804a14298e8c787"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema4-independent.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema4-independent.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema4-independent.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema4-independent.stdout.log",
+      "sha256": "5073478a273b4c93429df4ffd513ebf63e9586457684d0d5d3c966c3d20192e8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema5-independent.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema5-independent.json",
+      "sha256": "e98805244216d4a0bde9ab2019256571063739d20c761dc3f7a0ca23e4c07378"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema5-independent.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema5-independent.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-schema5-independent.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-schema5-independent.stdout.log",
+      "sha256": "c2455bf85256feccbec2feb9acfe3c8d5d847088a4e639531232491bb765bee8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-dispatch-claim-rechecks-session-release-and-schema-two-rejects-missing-index.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-dispatch-claim-rechecks-session-release-and-schema-two-rejects-missing-index.json",
+      "sha256": "9b28a477284377e5eeefe317b30513162e8c78fedf980e493a74e9bad3cf89b0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-dispatch-claim-rechecks-session-release-and-schema-two-rejects-missing-index.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-dispatch-claim-rechecks-session-release-and-schema-two-rejects-missing-index.stderr.log",
+      "sha256": "83e8790b1a5c0ad8cc61d66037d562e5673c34051b8f1c2db374cb3450278cce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-dispatch-claim-rechecks-session-release-and-schema-two-rejects-missing-index.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-dispatch-claim-rechecks-session-release-and-schema-two-rejects-missing-index.stdout.log",
+      "sha256": "1e5e8734c1ceb3b3e1ad768d9c66c6ad7795d659a81fff7beb8f13f2c116ebad"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-migration-ddl-version-update-and-real-commit-faults-leave-complete-schema-one.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-migration-ddl-version-update-and-real-commit-faults-leave-complete-schema-one.json",
+      "sha256": "b88e55fe0961ceed945329e561b7e2d689b1b499f8c20216b67187a82854fb2c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-migration-ddl-version-update-and-real-commit-faults-leave-complete-schema-one.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-migration-ddl-version-update-and-real-commit-faults-leave-complete-schema-one.stderr.log",
+      "sha256": "6aaeb536a1d537a043c1580a6efcc973ad7eb61294f3288b37b45f2b4c9dcc25"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-migration-ddl-version-update-and-real-commit-faults-leave-complete-schema-one.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-migration-ddl-version-update-and-real-commit-faults-leave-complete-schema-one.stdout.log",
+      "sha256": "000bc4472a823d6f74717442a109b46583282dfeff554111e16f8003291537af"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-schema-one-upgrade-retains-identity-trust-revocation-audit-and-revision.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-schema-one-upgrade-retains-identity-trust-revocation-audit-and-revision.json",
+      "sha256": "b96ee2f5727300ec62bba8b4fec5ef71fcb471f091974e95225b2fed5d382dc3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-schema-one-upgrade-retains-identity-trust-revocation-audit-and-revision.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-schema-one-upgrade-retains-identity-trust-revocation-audit-and-revision.stderr.log",
+      "sha256": "5aca13970bb9d0280d97009e782a75864a29247064cdd80dd719d485f355e63f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-schema-one-upgrade-retains-identity-trust-revocation-audit-and-revision.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-schema-one-upgrade-retains-identity-trust-revocation-audit-and-revision.stdout.log",
+      "sha256": "b3c6c6034430973ad640a62ff59cb96c3147cca09b26fcea0d3d49171924e6b7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-unknown-inconsistent-and-incomplete-schemas-are-rejected-read-only.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-unknown-inconsistent-and-incomplete-schemas-are-rejected-read-only.json",
+      "sha256": "67c037a45892bbf8fb33f34b071bb901a8257b835d33f4e32877bc270e39efc4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-unknown-inconsistent-and-incomplete-schemas-are-rejected-read-only.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-unknown-inconsistent-and-incomplete-schemas-are-rejected-read-only.stderr.log",
+      "sha256": "6575b4d1cf6e9c736504f8e82169a8d856377082cc3ea4c0f63c678d13869aeb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\old-storage-unknown-inconsistent-and-incomplete-schemas-are-rejected-read-only.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/old-storage-unknown-inconsistent-and-incomplete-schemas-are-rejected-read-only.stdout.log",
+      "sha256": "812a4c7229b7ba481e2c29dca06faa30263045101a107e7eba986d365c880c04"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\registry-schema5-development-regression.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/registry-schema5-development-regression.json",
+      "sha256": "d52e1e3bdef3c21dab1c165a986a7ce3973911a75c4ddd1cec73c4621f5319ed"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\registry-schema5-development-regression.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/registry-schema5-development-regression.stderr.log",
+      "sha256": "19366c8b93a8c20c6cbae563559336e916b4917c4598e699b5c5d7608552bed9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\registry-schema5-development-regression.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/registry-schema5-development-regression.stdout.log",
+      "sha256": "1e5b6fadf2edea582aa19cd6a91efe29e6510864fdf46100da81e92c5c0fee8c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-hybrid-compile-01-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-hybrid-compile-01-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-hybrid-compile-01-child.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-hybrid-compile-01-child.stderr.log",
+      "sha256": "744a7c07342cd35967e7f653a0c110796c4bfcbe78c65d98f8ba7432a995d5f9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-hybrid-compile-01-child.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-hybrid-compile-01-child.stdout.jsonl",
+      "sha256": "2613e057976855f38d3a7d821daab3d9a461ccd3f2d9838b9dc771dc6affc6b9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-hybrid-compile-01-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-hybrid-compile-01-lib.json",
+      "sha256": "21c0baedd4c8d44373e889a7e66cf2ad42484f82f6303f2c032bb7367510ec72"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-hybrid-compile-01-lib.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-hybrid-compile-01-lib.stderr.log",
+      "sha256": "0d0dc3e92afdb68c506d23341e87db30ec771f0efbffb352f2da0e8fcd6698e7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-hybrid-compile-01-lib.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-hybrid-compile-01-lib.stdout.jsonl",
+      "sha256": "005179e074b8d63ecccdecccf7183380d22bf248c03b631eff1d9bc1a64abd6d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-remaining-after-library-red-host-batch.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-remaining-after-library-red-host-batch.json",
+      "sha256": "6a98dd4c924da896a11d10c922d15397b35adddc4bcce2d1b581f67747efb690"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-remaining-host-batch.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-remaining-host-batch.json",
+      "sha256": "6f565deff9a0a4c54688899c815b94316ca6c4dc019caa44f5245bb92c3e1e36"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-test-inventory-02.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-test-inventory-02.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-test-inventory-02.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-test-inventory-02.stdout.log",
+      "sha256": "40d41fc2d2cdaf98f765cf25ac22bf3b2e1b38522a14c1596100bf89b8ea41c9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-test-inventory.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-test-inventory.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\schema-test-inventory.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/schema-test-inventory.stdout.log",
+      "sha256": "40d41fc2d2cdaf98f765cf25ac22bf3b2e1b38522a14c1596100bf89b8ea41c9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\storage-metadata-schema-regression.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/storage-metadata-schema-regression.json",
+      "sha256": "19f80835cc8e5f63c3caf81cd0eddf1e728db4e19d970c9f4baa837e83a2cfde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\storage-metadata-schema-regression.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/storage-metadata-schema-regression.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\storage-metadata-schema-regression.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/storage-metadata-schema-regression.stdout.log",
+      "sha256": "1c9f5a42897e49d36f8d471b8a8005841ba62da5efa9be4fb8a73b619a8b4875"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\storage-pool-close-physical-regression.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/storage-pool-close-physical-regression.json",
+      "sha256": "0e7b7702e96c1875ea0b21789efff6b6221f11002ce0a8aae2202aec10f8785b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\storage-pool-close-physical-regression.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/storage-pool-close-physical-regression.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\logs\\storage-pool-close-physical-regression.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/logs/storage-pool-close-physical-regression.stdout.log",
+      "sha256": "5434f5a0c46c6f18b15808f71e818b9d643a2426c731fc6dece5f26dc6b55cbc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\portable\\after\\app\\src\\session_storage\\native_dispatch_schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/portable/after/app/src/session_storage/native_dispatch_schema.rs",
+      "sha256": "fe155c0d82b5aa587dee8d5000f5dc5e959f00e95974c4db07a886e536a2e0ad"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\portable\\approved-assets.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/portable/approved-assets.patch",
+      "sha256": "cefad1e37f9af763644c52b979b02e9c80bd7ceb86ddbc4e079684a18fc98b56"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\portable\\before\\app\\src\\session_storage\\native_dispatch_schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/portable/before/app/src/session_storage/native_dispatch_schema.rs",
+      "sha256": "73b5e8a6f2ee0238fa7cfa639b0cfe24d3867c8fa80174687b2ea5d4fd91f18d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\portable\\schema-only-hybrid.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/portable/schema-only-hybrid.patch",
+      "sha256": "eeedb5f4c4b4200e92b5561a38ca06433838c522bc97d9905beeb9b3fa5a33cf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\prepare-inventory-02.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/prepare-inventory-02.mjs",
+      "sha256": "7d88ae19ed87d4560dfd3ad4b9850f93e7c6b1a75afa0ec87d803bf05ba132ef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\prepare-library-oracle-proposal.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/prepare-library-oracle-proposal.mjs",
+      "sha256": "999482a3d1b88a21a9f505d3e110558a3b341d5edaf89e9052b3795b49dca75f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\prepare-schema-execution.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/prepare-schema-execution.mjs",
+      "sha256": "2670714d0a119abf50dde4c18ab791dcde249d195bfc8ddbc325ac5622c07ce1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/report.md",
+      "sha256": "569bdce468d6ce28ec84ad11d2157ff204e3a5c04d7c1264dea2f8b533a397c9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\run-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/run-assets.mjs",
+      "sha256": "d86bae9072d8feee7f406eee4aad227bbc8b7e87898e8c95817e18cc336512e0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\run-legacy-short-temp.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/run-legacy-short-temp.mjs",
+      "sha256": "0370753227292c819b7c6d651b10d6e34dd8e11b05322fd7ea5eabb13fba16c6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\run-schema-remaining-after-library-red.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/run-schema-remaining-after-library-red.mjs",
+      "sha256": "fe95dde769105ac753506980c255f1be0074497f465f05a2bed3036422144a83"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\run-schema-remaining.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/run-schema-remaining.mjs",
+      "sha256": "e2a35f7d6fa72832e98457740aac56f6ca48db06bd6b387d43ca62d3baedbec5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\schema-execution-inventory.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/schema-execution-inventory.json",
+      "sha256": "a1481caf4a19a5ca634e7e4d5f7ecc8ed076326465aa7a47c39403943b4951ec"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\schema-execution-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/schema-execution-results.json",
+      "sha256": "04cb8997fd35f7a7bd65d496b40a6316bdd672a9c7fc28fd0fb5db447fa5617b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\source-v19.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/source-v19.json",
+      "sha256": "5468163aef4ee918aa17ecd0c2d8a7ffa8e1f40a7a209efe8793b612278badaa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v19\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-schema-v19/freeze.json",
+      "sha256": "63a73b4a0dd7a7f6527931deb3198b3410f0bc0565dd3c19d535428a8b7f4fe6"
+    }
+  ]
+}

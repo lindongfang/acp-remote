@@ -1,0 +1,26 @@
+{
+  "date": "2026-11-02",
+  "scope": "Rust E1 finite codec/buffer only",
+  "verdict": "PASS-finite-data-component",
+  "independentTests": 7,
+  "developmentTests": 4,
+  "rootInstalled": false,
+  "realWss": false,
+  "strictPassed": false,
+  "open": [
+    "E1-OPEN001 production consumer absent",
+    "OffsetExhausted/real Allocation/address-space/physical allocator release not dynamically verified"
+  ],
+  "packages": [
+    {
+      "directory": "q3-wss-e1-final-limited-review",
+      "freeze": "bc49b727eaf1967afeb3cb4ad997aae9a2c60ced63c11d4640482b23d8f00adb",
+      "members": 4,
+      "copied": [
+        "freeze.json",
+        "REVIEW.md",
+        "summary.json"
+      ]
+    }
+  ]
+}

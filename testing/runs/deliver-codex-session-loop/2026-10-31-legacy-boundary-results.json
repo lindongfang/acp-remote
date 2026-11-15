@@ -1,0 +1,841 @@
+[
+  {
+    "name": "positive-initial",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N01",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "b65b85e72f6e9b8532ce7d15ac4f976b921f09f527f449093b8ff10ead092899",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0599",
+        "message": "no method named `sessions` found for reference `&acp_remote::storage::Storage` in the current scope",
+        "primary": [
+          {
+            "byte_end": 681,
+            "byte_start": 673,
+            "column_end": 44,
+            "column_start": 36,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "method not found in `&acp_remote::storage::Storage`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 44,
+                "highlight_start": 36,
+                "text": "pub fn legacy(s:&Storage) {let _=s.sessions();}"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N01-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N02",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "2cf9b2ec95baa1900a2f70a4557f5ffd1bf3743e506f9b5331f459579f2b8fa3",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0599",
+        "message": "no method named `histories` found for reference `&acp_remote::storage::Storage` in the current scope",
+        "primary": [
+          {
+            "byte_end": 682,
+            "byte_start": 673,
+            "column_end": 45,
+            "column_start": 36,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "method not found in `&acp_remote::storage::Storage`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 45,
+                "highlight_start": 36,
+                "text": "pub fn legacy(s:&Storage) {let _=s.histories();}"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N02-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N03",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "867b83f1d7a07505edc12a161da073f5ba259ece9aeae367a2a8e467849f452f",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0599",
+        "message": "no method named `approvals` found for reference `&acp_remote::storage::Storage` in the current scope",
+        "primary": [
+          {
+            "byte_end": 682,
+            "byte_start": 673,
+            "column_end": 45,
+            "column_start": 36,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "method not found in `&acp_remote::storage::Storage`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 45,
+                "highlight_start": 36,
+                "text": "pub fn legacy(s:&Storage) {let _=s.approvals();}"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N03-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N04",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "99505837107682d17f569139dff61e54874ef8f6f2d52ed18e0850ed17db5138",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::application::InputRepository`",
+        "primary": [
+          {
+            "byte_end": 686,
+            "byte_start": 646,
+            "column_end": 49,
+            "column_start": 9,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 49,
+                "highlight_start": 9,
+                "text": "pub use acp_remote::application::InputRepository;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N04-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N05",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "4daa46594c3db30e9536ac68931ee193f5580764fb9946cf9ac58478ec2c06cd",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::application::InputService`",
+        "primary": [
+          {
+            "byte_end": 683,
+            "byte_start": 646,
+            "column_end": 46,
+            "column_start": 9,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 46,
+                "highlight_start": 9,
+                "text": "pub use acp_remote::application::InputService;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N05-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N06",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "cf0537feb9149bedd6747249b37353cff865cdd114d82231686a390b30e75ed2",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::application::history`",
+        "primary": [
+          {
+            "byte_end": 678,
+            "byte_start": 671,
+            "column_end": 41,
+            "column_start": 34,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "could not find `history` in `application`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 41,
+                "highlight_start": 34,
+                "text": "pub use acp_remote::application::history::HistoryCoordinator;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N06-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N07",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "138564aacd8a96f1e411df256c6fc9ceb7183da17a985cb5d01a58e38fe1a089",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::application::approvals`",
+        "primary": [
+          {
+            "byte_end": 680,
+            "byte_start": 671,
+            "column_end": 43,
+            "column_start": 34,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "could not find `approvals` in `application`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 43,
+                "highlight_start": 34,
+                "text": "pub use acp_remote::application::approvals::ApprovalService;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N07-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N08",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "6445b000c68ff1153609f803b371c84b55338c6e2fe54428fb00a4cf5d7db8f6",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::session_storage::SessionStore`",
+        "primary": [
+          {
+            "byte_end": 687,
+            "byte_start": 646,
+            "column_end": 50,
+            "column_start": 9,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": null,
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 50,
+                "highlight_start": 9,
+                "text": "pub use acp_remote::session_storage::SessionStore;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N08-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N09",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "0d08befd0b2f5956916d204010b13b675f5eed82e00633b306e7b0127699a762",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::session_storage::history`",
+        "primary": [
+          {
+            "byte_end": 682,
+            "byte_start": 675,
+            "column_end": 45,
+            "column_start": 38,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "could not find `history` in `session_storage`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 45,
+                "highlight_start": 38,
+                "text": "pub use acp_remote::session_storage::history::HistoryStore;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N09-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N10",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "bce983500463f832be0a6b4fd98216f383e878ececfbd30b458fd8d3ec531e54",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::session_storage::approvals`",
+        "primary": [
+          {
+            "byte_end": 684,
+            "byte_start": 675,
+            "column_end": 47,
+            "column_start": 38,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "could not find `approvals` in `session_storage`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 47,
+                "highlight_start": 38,
+                "text": "pub use acp_remote::session_storage::approvals::ApprovalStore;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N10-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N11",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "ce0acea6c843b7e8944bb285df0ce72799bb740d15edea0359809dd29f9ed6a3",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::session_storage::legacy`",
+        "primary": [
+          {
+            "byte_end": 681,
+            "byte_start": 675,
+            "column_end": 44,
+            "column_start": 38,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "could not find `legacy` in `session_storage`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 44,
+                "highlight_start": 38,
+                "text": "pub use acp_remote::session_storage::legacy::SessionStore;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N11-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N12",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "1886193fd66a90153d1a246de6f3aa3c754183ca85d2a4c17f6d395226ff034a",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::domain::history`",
+        "primary": [
+          {
+            "byte_end": 673,
+            "byte_start": 666,
+            "column_end": 36,
+            "column_start": 29,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "could not find `history` in `domain`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 36,
+                "highlight_start": 29,
+                "text": "pub use acp_remote::domain::history::HistoryItem;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N12-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "N13",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "153ab8395aea052f837915ed629dacf3411815cd27c30122d12f6ebe74979e60",
+    "exit": 101,
+    "pass": true,
+    "errors": [
+      {
+        "code": "E0432",
+        "message": "unresolved import `acp_remote::domain::approvals`",
+        "primary": [
+          {
+            "byte_end": 675,
+            "byte_start": 666,
+            "column_end": 38,
+            "column_start": 29,
+            "expansion": null,
+            "file_name": "src\\lib.rs",
+            "is_primary": true,
+            "label": "could not find `approvals` in `domain`",
+            "line_end": 10,
+            "line_start": 10,
+            "suggested_replacement": null,
+            "suggestion_applicability": null,
+            "text": [
+              {
+                "highlight_end": 38,
+                "highlight_start": 29,
+                "text": "pub use acp_remote::domain::approvals::ApprovalBinding;"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "N13-control",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  },
+  {
+    "name": "positive-final",
+    "command": [
+      "cargo",
+      "check",
+      "--manifest-path",
+      "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\deliver-codex-session-loop-tester\\legacy-boundary-probe\\Cargo.toml",
+      "--offline",
+      "--lib",
+      "--message-format=json",
+      "--locked"
+    ],
+    "sourceSha256": "e02f2065f6fa66ba90532d722a0d07c9e525e61acdd8ec195256849385d09fa8",
+    "exit": 0,
+    "pass": true,
+    "errors": []
+  }
+]

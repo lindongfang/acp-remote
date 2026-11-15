@@ -1,0 +1,88 @@
+{
+  "schema": "deliver-codex-session-loop-wp1-1.4-focused-followup-v2",
+  "date": "2026-11-08",
+  "toolchain": {
+    "cargo": "1.98.1",
+    "rustc": "1.98.1",
+    "locked": true,
+    "offline": true,
+    "targetDir": ".tmp/q3-wp1-14-clean-20261108b"
+  },
+  "results": [
+    {
+      "scope": "Current-source product command independent acceptance",
+      "passed": 31,
+      "failed": 0,
+      "exitCode": 0,
+      "note": "Confirms the earlier schema-version assertion failures in the old serial log came from stale test binaries."
+    },
+    {
+      "scope": "Schema3 real deferred COMMIT failure",
+      "test": "schema3_migration_acceptance::cl004_real_engine_commit_failure_is_not_a_precommit_hook",
+      "passed": 1,
+      "failed": 0,
+      "exitCode": 0,
+      "note": "Corrected the fixture to use the existing DeferredCommit test path, which inserts a real deferred foreign-key violation inside the original migration transaction. Preflight remains before migration, rollback and schema preservation assertions remain. The actual engine returned SQLite foreign-key error code 787."
+    },
+    {
+      "scope": "Complete schema3 migration acceptance group",
+      "filter": "schema3_migration_acceptance",
+      "passed": 13,
+      "failed": 0,
+      "ignored": 0,
+      "exitCode": 0,
+      "log": "2026-11-08-wp1-1.4-schema3-group.stdout.txt"
+    },
+    {
+      "scope": "SQLite close owner stage",
+      "test": "pool_close_tests::independent_size_fence_tests::rpc001_002_original_floating_blocks_until_normal_ack_first_tail",
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 1,
+      "note": "20-second watchdog reproduced. The test never observed its required held-return state; retained fixture observed pool_closed=true, pool_size=0, registry_status=Pending. Do not interpret as a normal-return close guarantee passing."
+    },
+    {
+      "scope": "Ordinary SQLite close behavior",
+      "tests": [
+        "pool_close_tests::independent_size_fence_tests::rpc006_original_default_max1_explicit_and_drop_return",
+        "pool_close_tests::independent_size_fence_tests::rpc007_original_max2_two_explicit_and_two_drop_returns"
+      ],
+      "passed": 2,
+      "failed": 0,
+      "exitCode": 0
+    },
+    {
+      "scope": "DPAPI identity subprocess",
+      "test": "identity::tests::dpapi_identity_is_recovered_by_a_new_process",
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101,
+      "log": "2026-11-08-wp1-1.4-dpapi-focused.stdout.txt",
+      "note": "Current Windows test identity was denied access (Win32 OS error 5) while committing the protected node identity. This is an environment-limited result, not a product pass."
+    },
+    {
+      "scope": "C1 real child process",
+      "test": "node::tests::catalog_upload_development::catalog_c1_ordinary_native_child_real_stop_suspends_original_waiting",
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101,
+      "log": "2026-11-08-wp1-1.4-c1-focused.stdout.txt",
+      "note": "Child Node startup was denied access to its data-directory lock (Win32 OS error 5); the fixture then panicked when it expected the started child. Not treated as a product regression or pass."
+    },
+    {
+      "scope": "ACP/shared-view real Node pairing",
+      "test": "adapters::acp::shared_view_module::tests::shared_view_module_real_create_early_sid_backfill_authenticated_fixed_h_and_tail",
+      "passed": 0,
+      "failed": 1,
+      "exitCode": 101,
+      "note": "The real Node fixture returned ReadFailure even when P1_DATA_ROOT and RPC_FIXTURE_ROOT pointed to precreated isolated workspace directories. Startup limitation remains unresolved; the serial shared-view cluster is not counted green."
+    }
+  ],
+  "preservedEvidence": [
+    "The older serial log was left unchanged and has no final suite summary, so it is not a valid full-library result.",
+    "The four RPC floating-return watchdog failures and their original fixture evidence remain preserved.",
+    "DPAPI and C1 failure output was captured to focused logs; no identity, database, or failure fixture was deleted."
+  ],
+  "npmAudit": "not run; user declined registry metadata egress",
+  "taskStatus": "WP1 task 1.4 remains open: full effective Rust suite and independent security audit are incomplete."
+}

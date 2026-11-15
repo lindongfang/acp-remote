@@ -1,0 +1,346 @@
+{
+    "before":  {
+                   "sourceLeaves":  515,
+                   "canonical":  "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+                   "librarySha256":  "b6f7958f489fc04c9db1fa328cc71b1a96ce522341a4c175d0fc6e5a6bb5be3d",
+                   "childSha256":  "2bcf2efe3eb8bd1b95e42cb6b821cca208b0a2fb0fac74a0e904d898654ef978",
+                   "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+               },
+    "after":  {
+                  "sourceLeaves":  515,
+                  "canonical":  "5f076a551d81c3b3ed28b18a0c6bc3d66772969170178962ec3b745c9aaf9942",
+                  "librarySha256":  "b6f7958f489fc04c9db1fa328cc71b1a96ce522341a4c175d0fc6e5a6bb5be3d",
+                  "childSha256":  "2bcf2efe3eb8bd1b95e42cb6b821cca208b0a2fb0fac74a0e904d898654ef978",
+                  "indexSha256":  "ac76c7ad84c1d4333fc64a710647e60aeb96015eb4407f996a4bf6adc91fbff4"
+              },
+    "groups":  [
+                   {
+                       "label":  "acpi-r01-r09-codec",
+                       "count":  13,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "acpi-r01-r09-codec",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "acpi_",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:41:48.9768539+00:00",
+                                       "pid":  35392,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:41:58.2382581+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "r10-publish",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "r10-publish",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "production_factory_opens_listener_only_after_the_bundle_is_complete",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:41:58.2463522+00:00",
+                                       "pid":  24648,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:41:58.9395245+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "r10-reject",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "r10-reject",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "production_factory_service_rejection_opens_no_listener_and_joins_workers",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:41:58.9427265+00:00",
+                                       "pid":  24856,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:41:59.6490890+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "r10-control-only",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "r10-control-only",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "queue_read_control_only_does_not_report_an_empty_product",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:41:59.6532406+00:00",
+                                       "pid":  35856,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:41:59.8683030+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "queue-revoked",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "queue-revoked",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "queue_read_device_revoked_actor_keeps_accepted_items_and_other_actors_live",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:41:59.8723033+00:00",
+                                       "pid":  35680,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:00.5056505+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "queue-shared",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "queue-shared",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "queue_read_wss_shared_three_and_original_registration_facts",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:42:00.5091012+00:00",
+                                       "pid":  708,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:00.9712105+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "queue-register",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "queue-register",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "queue_command_register_consume_is_stable_and_single_dispatch",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:42:00.9745514+00:00",
+                                       "pid":  32748,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:01.3291176+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "queue-mutations",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "queue-mutations",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "queue_command_wss_applies_edit_cancel_prioritize_and_resume",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:42:01.3328312+00:00",
+                                       "pid":  32284,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:02.1053039+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "queue-resume",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "queue-resume",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "queue_command_resume_preserves_three_suspended_items_and_same_identity",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:42:02.1089553+00:00",
+                                       "pid":  29712,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:02.6974904+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "body-read",
+                       "count":  4,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "body-read",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "input_body_open_",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:42:02.7016184+00:00",
+                                       "pid":  30232,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:04.0666823+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "release-route",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "release-route",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "session_management_routes_approval_and_native_release_services",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:42:04.0706820+00:00",
+                                       "pid":  31692,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:04.6261443+00:00"
+                                   }
+                   },
+                   {
+                       "label":  "release-registration",
+                       "count":  1,
+                       "status":  "passed",
+                       "process":  {
+                                       "label":  "release-registration",
+                                       "executable":  "D:\\Project\\acp-remote\\.tmp\\wp4-owner-20261113-v2-target\\debug\\deps\\acp_remote-e75360741b1915fc.exe",
+                                       "arguments":  [
+                                                         "native_release_registration_has_a_durable_actor_bound_fact",
+                                                         "--test-threads=1",
+                                                         "--nocapture"
+                                                     ],
+                                       "startedAt":  "2026-11-13T03:42:04.6291804+00:00",
+                                       "pid":  24852,
+                                       "exitCode":  0,
+                                       "timedOut":  false,
+                                       "cleanupInvoked":  false,
+                                       "activeBeforeCleanup":  0,
+                                       "activeAfterCleanup":  0,
+                                       "remainingOwnedPids":  [
+
+                                                              ],
+                                       "failure":  null,
+                                       "endedAt":  "2026-11-13T03:42:04.9063650+00:00"
+                                   }
+                   }
+               ],
+    "failure":  null,
+    "status":  "passed",
+    "powershell":  "5.1.26100.9818",
+    "os":  "Microsoft Windows NT 10.0.26300.0",
+    "sourceManifest":  "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-13-native-view-error-mapping-v1\\SOURCE-GREEN.json",
+    "helperSha256":  "68b3b841ac02b13035296a2b253b0c5ff7ff797ff0350bd43adfc979734eccf5",
+    "ownerScript":  "testing/ci/windows-owner.ps1",
+    "cargoInvoked":  false,
+    "compiled":  false,
+    "independentAcceptance":  false,
+    "boundary":  "Development regression: real Node/SQLite/TLS/WSS, FakeProtector and controlled native child; no new Web page or real Harness.",
+    "notRun":  [
+                   "Real Web/Harness E2E and CL030/031/123",
+                   "all-features and whole-project checks",
+                   "npm audit: user declined"
+               ]
+}

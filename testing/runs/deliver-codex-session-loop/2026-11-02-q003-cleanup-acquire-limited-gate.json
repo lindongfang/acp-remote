@@ -1,0 +1,13 @@
+{
+  "kind": "Independent limited coding gate",
+  "source": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/session-loop-q003-continuation-reviewer-2026-11-02/followup-cleanup-acquire-ownership-proposal-static-2026-11-02",
+  "freeze": "7183ee1edc69050039be0cb62576134d15af0afdf01a24bd6257ef1d2ed940b9",
+  "membersVerified": 3,
+  "limitedImplementationApproved": true,
+  "fullFixApproved": false,
+  "issue": "CLDB-DESIGN-REV001",
+  "state": "Open",
+  "scope": "same Storage owner pre-register and retain acquire; explicit close ACK; sticky Unconfirmed integrated in final Storage/Node close state",
+  "implementation": "new isolated coder candidate in progress",
+  "rootInstalled": false
+}

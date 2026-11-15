@@ -1,6 +1,10 @@
 # WP2 2.3 开发边界
 
-合同单一来源：主仓库 openspec/changes/deliver-codex-session-loop/session-contract.md §4、§7、§8。本说明记录内层实现和开发验证范围，不替代合同或独立验收。
+本文为先前部分实现的开发记录；强刷前置、必须活动Run及重启批量失效审批等旧语义已被新规格取代，禁止接入新会话入口。当前依据见[implementation-contract](../../../openspec/changes/deliver-codex-session-loop/implementation-contract.md)的审批章节及permission-approvals规格。
+
+本旧模块当前仅cfg(test)编译；其断言保留历史代码回归用途，不是新版审批owner验收。
+
+以下仅记录已停用session-contract §4、§7、§8对应的旧实现和验证范围，不替代当前合同或独立验收，也不表示新审批链路已实现。
 
 - ApprovalObservation 保存原始请求、选项、作用范围及协议标识；原生 request ID 的字符串与数值类型不同，与 tool ID 使用不同类型。工具关联限定平台 session/Run/turn、实例/连接代际、原生 session 和精确 tool ID；SHA256 仅用于索引，命中后比较原文。缺失引用、未知请求/作用范围/选项保留为 unsupported，不默认允许，也不等待未来事件自动补授权。
 - prepare 在 actor/source fence 外强刷 BeforeApproval；commit 要求调用者已按 client_gate→owner 顺序持锁，再复核 owner 生命周期和观察版本，随后开始短 SQLite 事务。prepare 后任何已接收输出使旧检查点无效；检查点跨 attach 不复用。仓库接口是内层持久化端口，不承担网络身份或来源认证。

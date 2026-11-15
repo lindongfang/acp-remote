@@ -1,0 +1,13 @@
+{
+  "command": "cargo test --manifest-path C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/view-budget-probe/Cargo.toml --locked --offline --tests -- --nocapture",
+  "cwd": "D:/Project/acp-remote",
+  "CARGO_TARGET_DIR": "C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/activity-target",
+  "CARGO_INCREMENTAL": "0",
+  "exit": 0,
+  "log": "view-budget-probe/test-final-clean.log",
+  "capture": "functions.exec nested exec_command completion reported exit_code=0 (chunk_id 4cd1af); shell command explicitly ended with exit $LASTEXITCODE",
+  "test_binaries": [{"name":"allocations","passed":6},{"name":"budget","passed":20},{"name":"view_window","passed":19}],
+  "zero_case_library_is_not_counted": true,
+  "failed": 0,
+  "ignored": 0
+}

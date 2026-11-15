@@ -1,0 +1,48 @@
+{
+  "scope": "Eight effective engineering documents; limited coding gate only; dynamic 83 not executed",
+  "authorFreeze": "777a273e2a570ab8b61f7aba69defa1e638da3d5c46b2d8e6be8b760f9f18637",
+  "supplementFreeze": "489e4e815d3fd5bb122d57e27eff2a798e8bb4e205ccaf7fc34e9c3dc10c7faf",
+  "definitionFreeze": "96aa8288ad24e2b64460b95b604516859fdfd7a445166ef3660edb485929ed85",
+  "documents": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2-supplement\\read-and-source-api.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/read-and-source-api.md",
+      "sha256": "8422edfd377f4171b30985c0a513297b02978a69f63fbb427eb7593ac90954f5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2-supplement\\supplement.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/supplement.md",
+      "sha256": "5fec0314f5645f034ee46efb35ebb952cb7d1e242915341fa3dbab8dd777d742"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\engineering-contract.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/engineering-contract.md",
+      "sha256": "e54ee9755a4bbf62b2999f9846a41d69a7db6a2ca400faad6e3ebc3382a77aeb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\send-and-credit-api.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/send-and-credit-api.md",
+      "sha256": "ea8a3ab7f9da7642b23c9760d6bc15814600adc58883aa1ba94e53ddd20ea26e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\native-assembly.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/native-assembly.md",
+      "sha256": "e0ea8a3b753bb23b54376dc0abf30832296937b28691316147036144b0e4b6d4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\issue-disposition.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/issue-disposition.md",
+      "sha256": "e66f952284a9b9df57f0cd576f2866283a93eb1a7f5f1e30582186fdedc8f3a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\case-mapping.md",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/case-mapping.md",
+      "sha256": "5fcb90092fa5f1d7c89872cf4b88b15abb4ee2bd95fec2f8dbd4d38588c88cb5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-shared-view-author\\revision2\\case-mapping.json",
+      "path": "openspec/changes/deliver-codex-session-loop/shared-view/revision2/case-mapping.json",
+      "sha256": "8c60075e5defa4043254861e05450ef6684f8bc1a7531099c525bebf1549f60d"
+    }
+  ]
+}

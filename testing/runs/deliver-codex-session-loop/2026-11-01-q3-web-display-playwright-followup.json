@@ -1,0 +1,1680 @@
+{
+  "scope": "Playwright local component follow-up: CSS fix candidate, original independent tester closed dark-controls issue and full28 component acceptance; 31 actual images inspected. Not Root integration, full Shared83, Node/WSS, current authentication or Harness acceptance. Original command exit1 for known diagnostic residue and separate physical cleanup are retained. Browser uses a fresh Edge context via existing local Playwright; no user profile, dependency installation or audit egress.",
+  "copyPreparation": "Initial strict run-directory path guard stopped on declared parent-relative references. Resumed only identical already-copied hashes; parent references checked against the independent owner root and copied under referenced-inputs.",
+  "candidateSourceInputs": 48,
+  "candidateHash": "671c3a2de1eaef8015ac4d0089016335de0a1ad4a1af58a18b6bb2f5e16599d4",
+  "acceptanceHash": "121d1c314e25ea9667662e0f449670fdf8d17f5c73eb3786465ab89090fb3f63",
+  "finalHash": "c7962525bcf1be9b917d9654bb6d69ac7de60749e40fcecf612627bc4c78637b",
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\dist\\assets\\index-0luCBpbO.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/dist/assets/index-0luCBpbO.css",
+      "sha256": "59f460f235f69fc261ab0d97c4518ee9fb511717330afa09c4da71276c5b3880"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\dist\\assets\\index-DpQyfqZ1.js",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/dist/assets/index-DpQyfqZ1.js",
+      "sha256": "e7d2d3679eb07c5d5033e265a7fc8a2f308b41f5e00ec1a9749bdd3b820f355b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\dist\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/dist/index.html",
+      "sha256": "76cd985a6377fd5231fb01a18d59f2be9e5e54c17d35055417f52f20dea23c71"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/index.html",
+      "sha256": "f95ccd4eee548fae8b19034adc198c810a988cecc39e272850e265a9f39b968f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\package-lock.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/package-lock.json",
+      "sha256": "1212cdaa6f409a971a08b74e3ead7930b41032689227760e1b47e79154415d5a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\package.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/package.json",
+      "sha256": "b2d1b128088c1773bfdefa2112907bea1e48f9c794846c07a988f26fa2f766cc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\main.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/main.ts",
+      "sha256": "ce6d443e44d4c920d7e7b184beaab83ef713b68b8f9cff4fc6d58499d5d14815"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\management\\client.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/management/client.ts",
+      "sha256": "471cf8299b306a4fbf02f417a65a7535a4f9952e4ad73be3aaea9ab7465b8281"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\management\\protocol.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/management/protocol.ts",
+      "sha256": "b49c62c95fef1c8fa1c1d9b34d8cc1aff545501fe8ab7c2665938dcf8cbef5b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\management\\reconnect.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/management/reconnect.ts",
+      "sha256": "0a66ef170f7dff5467e0a8d6c029221ba193d2449f3b37acb03215d8e060d169"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\pairing\\api.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/pairing/api.ts",
+      "sha256": "52ebf9e24fba7ce0ee88ff96c3c538bce4891e826fcfb46ee1db00b6d76daf14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\pairing\\identity.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/pairing/identity.ts",
+      "sha256": "854b880e20c33d52fa367f7217727d1d169773706f87f01285c3475da1368f59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\pairing\\session.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/pairing/session.ts",
+      "sha256": "75ae0e93130e205045f67539428e8095286bcf89f65d5d81e200f04758d0ec59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\protocol\\jws.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/protocol/jws.ts",
+      "sha256": "60e8d8f34cd26a806e7bcdd8fb108cc62911068d2b116b82f4eba46246132019"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\protocol\\pairing.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/protocol/pairing.ts",
+      "sha256": "fa78fdb1ae38dd096db2bb150caf5061d1a8f5ce8ae0bf7470a260510b2faa23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\styles.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/styles.css",
+      "sha256": "0109aa878dce55a26b539a81dd3aadfe9a3e94e651d82541cdd104ff348fafe2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\views\\binary.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/views/binary.ts",
+      "sha256": "fad4ed0bd71b4b8c51605836e17c29ee289b9e32065fd9cca95d230b49d3f1a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\views\\errors.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/views/errors.ts",
+      "sha256": "98f39fea9a160ab267195b23544e8a895aca7b1b0443ba2f9cbd5a4ea71a9a7d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\views\\raw-inspector-data.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/views/raw-inspector-data.ts",
+      "sha256": "ec0cdc563439ee7b474cf606aca6e812985f8bffe5810d8c485cde263d504ff4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\views\\raw-inspector.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/views/raw-inspector.css",
+      "sha256": "1d8151b021a980fd6ed9e79a1bdc728f3e8153bdb333bcb123c2c6d90e0b9d8a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\views\\raw-inspector.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/views/raw-inspector.ts",
+      "sha256": "d7782168fafccd26456c6862cbb3bb1e995d3e66a839002390c0d5c9a8bb3f79"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\views\\raw-json.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/views/raw-json.ts",
+      "sha256": "b0db7a20a2bb16b25522174ead6d11772c1805b16ca10a6f134fa37310613332"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\views\\records.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/views/records.ts",
+      "sha256": "aa7b65ee7b513ef964b8ab76b53d5d8c29eb94837e08b343cdc6b3cf96be5ee9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\src\\vite-env.d.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/src/vite-env.d.ts",
+      "sha256": "424faf9241dd699dda995b367ed36665732da1e6ec1f33b2fd40394488ecac92"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\api.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/api.test.ts",
+      "sha256": "0d577bb0f835e90657b74093067873dc1a938c91e563057f8af46a5043089b89"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\browser\\jws-browser.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/browser/jws-browser.ts",
+      "sha256": "4e8da0916f6ac27a5e21e53a7bc0b2f5fc93e684e8ed95066e6eec752ef6f5d9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\browser\\jws.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/browser/jws.html",
+      "sha256": "48d32c8da3ecf919551e8953bdc7f1b0acd1df4237065425830787d5869543dd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\browser\\raw-inspector.fixture.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/browser/raw-inspector.fixture.ts",
+      "sha256": "d4b693a8ae4339bb75b1f1c964916f9f536f79f92dcb19c7f417a0271f7cde9d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\browser\\raw-inspector.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/browser/raw-inspector.html",
+      "sha256": "1be6295241458579e32c2e34d0114f26d771339aa3645f5f983849153dd40e5b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\debug-lookup.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/debug-lookup.test.ts",
+      "sha256": "62a4c6889edb0994b1b22d403d7a68763cc37406d3b4b95fc7ad3c1cde7eb823"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\fixtures\\jws-v1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/fixtures/jws-v1.json",
+      "sha256": "4d4cc9061163eab340c37fbd167cff31d3607586bcf49b4681f191c85034656d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\independent-views\\allocation-classification.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/independent-views/allocation-classification.independent.test.ts",
+      "sha256": "3626d28a97708aa8280fe48e6273da279b4e0b1c4dd4a77154aa2cc5f02e5901"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\independent-views\\binary.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/independent-views/binary.independent.test.ts",
+      "sha256": "76e5dd1a298bcfe4378b87407f305086b0bdf346028efba37ae2ebe155a16b14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\independent-views\\raw-json.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/independent-views/raw-json.independent.test.ts",
+      "sha256": "8bca6346f4d424bfed5fd15d91818427fe5ac7052249b263d8270c3e3a4136ab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\independent-views\\records.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/independent-views/records.independent.test.ts",
+      "sha256": "7c53a389b9c3875dc9a03bec7d4cc7ca6d762547dc1c3fd1c30de280b83bab8c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\independent-views\\support.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/independent-views/support.ts",
+      "sha256": "a4b2280decbe8f74cc076ce43c356cc8b3abc304893a7a4aef1adaf9b7309599"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\jws.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/jws.test.ts",
+      "sha256": "b3af6826aed0169ba2b5adf83962d4d507589af48204a9b058838a3a61fccac4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\management.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/management.test.ts",
+      "sha256": "eef4221bf8c08ed5fa8438c8043a260bf6bafed8ce39d36549ba2ab65d4ea288"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\pairing.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/pairing.test.ts",
+      "sha256": "690a96ef1101c2756952062bd7d6e4bfb777a3c536d41f83dfa067b59f2b3cc9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\reconnect.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/reconnect.test.ts",
+      "sha256": "14093402f84ca3c053f0378c0304fc69490dc6997709d4be60bee36fe3737809"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\smoke.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/smoke.test.ts",
+      "sha256": "60cce0ccc09161e6cdb169ab720eaf411bf87d3ecf1c0bd047bbb47121a71e51"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\views\\binary.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/views/binary.test.ts",
+      "sha256": "def7eb7f8d269dfb82c41b9c2d8cbe3f84209689dc75b3f03145554eeb408ac9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\views\\raw-inspector-data.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/views/raw-inspector-data.test.ts",
+      "sha256": "57db77c5edbdb75a02b0dab62b260985852942be22550efdcbb2d3a093daec3f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\views\\raw-inspector.types.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/views/raw-inspector.types.ts",
+      "sha256": "0554dd1fba689001c3b76fd0c9443101f7a97e6c28e28078b3c162f8bba0d680"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\views\\raw-json.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/views/raw-json.test.ts",
+      "sha256": "dce902fb87c02b3d777e010fd5413a08ebc7a0a6ea977a74bc1c2d5714df11f0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tests\\views\\records.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tests/views/records.test.ts",
+      "sha256": "7758c95d85c672225d9861aa7dcd4832dc52646ccc8deeac561e595d5c07cc3f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\tsconfig.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/tsconfig.json",
+      "sha256": "eed51d8d10632044475e4a4f93822dedc9628be9d3387a24c143a8ae40f5d018"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\source\\clients\\web\\vite.config.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/source/clients/web/vite.config.ts",
+      "sha256": "b6ba04555219f648ae25dd47a6d080a538a125e3aa3684f369406bac3c710aae"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\change.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/change.json",
+      "sha256": "e8d3477edace484c8b0f9c1d1639a2b8a770e3e885c9e3e594069b474697666f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-build\\result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-build/result.json",
+      "sha256": "85560e89c6ae134f78128edc02b552b64aad7d9dda6972eafdf9a60fc77661d5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-build\\source-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-build/source-after.json",
+      "sha256": "a9aed4a7a67148ff42e624f48ed69d8f6c4df54e3792e8f2ac998b0974efe106"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-build\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-build/source-before.json",
+      "sha256": "e7f1276bd5c2de1e7eb21221bd16267db24884571dc23fe8a7e3783d02b44195"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-build\\stderr.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-build/stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-build\\stdout.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-build/stdout.txt",
+      "sha256": "a86dd94297b36f0c0f043cdcb419f39521f81a7dedf15022f551b741f182f3ce"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-check\\result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-check/result.json",
+      "sha256": "f1fbc7e66bc3cfe5b6174ef156dc6054cedc80142bb9ca6973f0e9b8e26a221d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-check\\source-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-check/source-after.json",
+      "sha256": "a9aed4a7a67148ff42e624f48ed69d8f6c4df54e3792e8f2ac998b0974efe106"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-check\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-check/source-before.json",
+      "sha256": "e7f1276bd5c2de1e7eb21221bd16267db24884571dc23fe8a7e3783d02b44195"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-check\\stderr.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-check/stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-check\\stdout.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-check/stdout.txt",
+      "sha256": "1e31d89069c30773d8d934f29c0bf7d9b9e51b250b2bae7fccb6ba11c87df56d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-test\\result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-test/result.json",
+      "sha256": "fbf5c3412b9231ff8b5f4d93162722747390e0d5cd591321c9f81e107216e0c2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-test\\source-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-test/source-after.json",
+      "sha256": "a9aed4a7a67148ff42e624f48ed69d8f6c4df54e3792e8f2ac998b0974efe106"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-test\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-test/source-before.json",
+      "sha256": "e7f1276bd5c2de1e7eb21221bd16267db24884571dc23fe8a7e3783d02b44195"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-test\\stderr.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-test/stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-test\\stdout.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-test/stdout.txt",
+      "sha256": "687f89d153a662ffb9d933f496020b9f6ea46645d67153614829f1782bb653fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\dark-controls-test\\vitest-results.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/dark-controls-test/vitest-results.json",
+      "sha256": "f26d249f72cc06f307cf1fc0a8122ccf1b03a1afec83fc4e02225d8dc538d0fc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\1280-dark-default.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/1280-dark-default.png",
+      "sha256": "93cabe13e6da9730de4a6e6610bb3cfaf13ecf5f999c6171c10e7659b20df9b3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\1280-dark-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/1280-dark-hover.png",
+      "sha256": "f8b1acbcb233eb034f22354450ba91d6f8914bdb18ead01d8fc21042556edc5d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\1280-light-default.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/1280-light-default.png",
+      "sha256": "318edd2fc0ed39e070706d6877bed2ed90cf0d98f1abbbaaa3a21c19ce15a2a3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\1280-light-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/1280-light-hover.png",
+      "sha256": "6c8725358387936163c13b34f3da67d657c63108a1669e62c0bfa76fa0d2e18e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\375-dark-default.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/375-dark-default.png",
+      "sha256": "fc56707a4f0593a85bda51099557d2fc46b511dd7c662b1502eae1d91258f093"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\375-dark-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/375-dark-hover.png",
+      "sha256": "4078448122abacd8bdf1d61c2782668483d292c2a177a5644af6c6638baa38f8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\375-light-default.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/375-light-default.png",
+      "sha256": "251af7c22868d846a34579fd252f2f603ae90a667cccf7b607e8c5bb25bcab80"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\375-light-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/375-light-hover.png",
+      "sha256": "28e41b48825cf924e6d4afc2131966ce811e4df4a392327344de47091fad17af"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\frames-in-progress.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/frames-in-progress.json",
+      "sha256": "52a2ebb47ec1463b18e1bd41fbf9d4e4381bd539f6c611047d65646ebaf6031c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\image-inspection.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/image-inspection.json",
+      "sha256": "03172869a07752b398b220a92d941e3ecee7e40512da59f0d13ef0558d4fb457"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\owned-temp-log-archive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/owned-temp-log-archive.json",
+      "sha256": "96cb3d4e6b68edba647b6d00c075f381b40d4094d844d843d254eed446b34a1b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\physical-after-archive-retry.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/physical-after-archive-retry.json",
+      "sha256": "f420c642c4dd5016d91fbe1e9ef283dd0250a46a4c80a918f05e3685730c3ed2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\physical-after.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/physical-after.json",
+      "sha256": "f420c642c4dd5016d91fbe1e9ef283dd0250a46a4c80a918f05e3685730c3ed2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\evidence\\developer-browser\\result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/evidence/developer-browser/result.json",
+      "sha256": "10baa0819693f42d7f4ed70ff4e7319fb1a4b2c469171d4fe64b66274abb88e2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\git-apply.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/git-apply.json",
+      "sha256": "d945d39b8846d72cb667766f278bb0019d8758756b3b5e0ed60a457ae841bb2a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\git-apply.stderr.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/git-apply.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\git-apply.stdout.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/git-apply.stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\git-check.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/git-check.json",
+      "sha256": "09d491bb5f8e4931cf608698918487ca0d0e4ab167f894b3c67a8f8cc02bba11"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\git-check.stderr.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/git-check.stderr.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\git-check.stdout.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/git-check.stdout.txt",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/HANDOFF.md",
+      "sha256": "e7cfbe58de388714e0f207273c0559c99888737de381f5f4af6c96efd01cbdaa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\parent-component-v1-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/parent-component-v1-freeze.json",
+      "sha256": "a01662c0e68ca6a1e92d8836188eb78d4d42e20848ce8c16c86294a51c79ab2c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\patch-verification.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/patch-verification.json",
+      "sha256": "85c31f582e3425a808d75b1e3e2c540b5bbc7101e4beed1e7a48042d33cda7d2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\root-relative.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/root-relative.patch",
+      "sha256": "0a344cff64bf0235a86ab276afe96c17bdea6d3003f1e66d0b4afa3f3a7d1b4a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-root-web-display\\implementation-v2-dark-controls\\candidate\\component-v2\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/candidate/freeze.json",
+      "sha256": "671c3a2de1eaef8015ac4d0089016335de0a1ad4a1af58a18b6bb2f5e16599d4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\ACCEPTANCE-FIXED.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/ACCEPTANCE-FIXED.md",
+      "sha256": "9c402c55bd4966ba619a4cf9ab425603467da9f30c401993e165385af5a6a89e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\actual-command.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/actual-command.json",
+      "sha256": "ee82c5b7daadc9de98e2e1ca0684327efcd8fb7e6237afb825690de1912849e5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\actual-command.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/actual-command.txt",
+      "sha256": "f74924acc64f0537d9da64d0fe910638c138384b6839fcc22f6ff5c2d027a079"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\addon-monitor-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/addon-monitor-final.json",
+      "sha256": "51415394c2403d7b25152ef31b984eade588dc79c7ee2cecf7ee7cd469c30028"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\addon-reset.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/addon-reset.json",
+      "sha256": "1afcb466973baa2196d901f666cec4d7a4d73243653613eb18466236e143e944"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\addon-server-process.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/addon-server-process.txt",
+      "sha256": "6700e595993e669067e9e4d6e5d9a85fc673a9942773f131d9a4a6328130e4c8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\addon-server-state.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/addon-server-state.json",
+      "sha256": "b34a9ba5c1434931dfca2387d03a0556ddb80ae7b3b4ece2a6c6e2dbfe703e4f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\addon-trusted-preload.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/addon-trusted-preload.json",
+      "sha256": "26ed087e15c9beb8715418bd6fc34793a0389e8cdea9aec8d387130397876c07"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\archives\\cv_debug.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/archives/cv_debug.log",
+      "sha256": "bdf86e692662ec6a09065eba82ab3de5775f366975e2eab361e87191d4cfd57c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\browser-owned-processes.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/browser-owned-processes.json",
+      "sha256": "bae2c59004aa3921f903f041b2179ef27da080cde8a1c49bb6294a6b6082a604"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\case-results-fixed.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/case-results-fixed.json",
+      "sha256": "375a82370cc761d3d1c57e5ca991573dc0a70fe4f073a18ae3824106673dca38"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\enabled-colors-fixed.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/enabled-colors-fixed.json",
+      "sha256": "73d7571b431dd4d1f5e35a4221a114f9d70d042d39d98f3460a5a46f3da0f29e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\image-review-fixed.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/image-review-fixed.json",
+      "sha256": "12337093fd4f7973fd3430d71d4e8c3546b6d5dccc7a4fd057b53274cea223ad"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\issue-closure.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/issue-closure.json",
+      "sha256": "0a4292169649a17ddfd4edd3ddbf160395df879644158297d369e6b95878496d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\known-temp-diagnostic-archive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/known-temp-diagnostic-archive.json",
+      "sha256": "4bc6d67537d00d3e4f6ac104bd55c1efdab8ac6db98e973452d8e34ab23072ba"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\network-fixed.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/network-fixed.json",
+      "sha256": "e3c061f69e9b7dcc2bdf2eac1c2a4782ae0bb7c3c2d6d8dd850ac264bad13e22"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\physical-after-knownlog-archive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/physical-after-knownlog-archive.json",
+      "sha256": "b2cb438263e48baf2e56c8dd0d522daa63bbe3619ce71fd314aa13163a91be0e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\physical-all-captured-before-archive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/physical-all-captured-before-archive.json",
+      "sha256": "f94e925eb1376f9b56475c29ccc70ca8b987fb3eaa4a72dcc1a297a36e448cec"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\physical-before-temp-archive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/physical-before-temp-archive.json",
+      "sha256": "6d051f903afbf5ac1eaf3d0c2202b9af1be6851ee8ef73ebbffb6e811a4e49b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\sample-result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/sample-result.json",
+      "sha256": "18e8e2d83df3d6c367fa61016ab9c8aa989d3d3befdadccb9bbedf2eb532ba00"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\server-close-0.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/server-close-0.json",
+      "sha256": "7e5c8c75c9f8a0357757dff53ef63f611bbe00fec60a93718de86dffc202b4a7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-dark-controls.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-dark-controls.png",
+      "sha256": "a4311096f8438c3d5fcdf8f64aaa1099410a6177491c59ac381b4d16b9f8a57b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-dark-huge-number.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-dark-huge-number.png",
+      "sha256": "6f19e679e43dc662a1a83bd3940c24b57d28eee3d0afb18e20f98f5d125d912e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-dark-last-page-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-dark-last-page-hover.png",
+      "sha256": "1dc2856e07b59183565c03ae747833844e56b1d4d3f0b4ec3bfc220c969f0784"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-dark-last-page.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-dark-last-page.png",
+      "sha256": "8e93089c32f54abaeb551f9c4d47015a9d2177655de32f8316652a575067baa7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-dark-long-key.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-dark-long-key.png",
+      "sha256": "210b8a4068a5ad9ca6fdadf3fbe7595d64031bfdf6b7b5f6e44cb5d5a238aecf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-dark-members-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-dark-members-hover.png",
+      "sha256": "f83131da6db2b08cc4f5afe8f6f351bb7ffdb9a4f11860cd754e25ba04e18f47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-dark-members.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-dark-members.png",
+      "sha256": "4e90b37330160b9cb460a41e64afbecf2d28e82d70f721336f887c221416e954"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-light-controls.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-light-controls.png",
+      "sha256": "743ec412007447d80281ca78fd0e3bc9f717e7fa72ed2666b537bb0d74c6910b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-light-huge-number.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-light-huge-number.png",
+      "sha256": "8cfda8ab35d6acafa5a0404c962b13c177019a71e9812ba058ebac139e18f862"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-light-last-page-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-light-last-page-hover.png",
+      "sha256": "bd49996e2ac35215f83bf6eddd3829cd4eee08d5c43d714fdb368bf94d1ab0a6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-light-last-page.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-light-last-page.png",
+      "sha256": "fa4da32247fffab182f2540976140eaeefa66fd9bccd89d8cce5976be7083213"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-light-long-key.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-light-long-key.png",
+      "sha256": "8ba451594c8066612b4eba56c8895bab51b5ebd61a04227bbcfc77462cf1e988"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-light-members-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-light-members-hover.png",
+      "sha256": "e97cefa623729ae0a29d3f493493324570d359c19d928a2c4531263022edc58e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-desktop-light-members.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-desktop-light-members.png",
+      "sha256": "4ee83d6d258b4ee067a408c845175cd1c61fb41d7d08ffe38ba284ba9990d270"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-controls.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-controls.png",
+      "sha256": "8d004143cf7163ed28c86134656f0a778e0f9304d8c489d73b21b5710e757ab9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-huge-number.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-huge-number.png",
+      "sha256": "90cbd4ba80ba09f178f006b2ec5ff88693df5022080e7f2b1a7b75a0220f09b6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-large-text-controls.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-large-text-controls.png",
+      "sha256": "d80d6aa4c95f036e009184b9d9b50ee3ddb3d401e4fa1a827d8f31a1e59648bd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-large-text-members-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-large-text-members-hover.png",
+      "sha256": "019fc3bafd08b5d0aca347e32f930ef5621f4c2ab91428a9efb34f6068d2e66b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-large-text-members.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-large-text-members.png",
+      "sha256": "0b1d6ede5d875949ac8f28901ff7ee2adfb2ec2027866a65a9387291820b04ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-last-page-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-last-page-hover.png",
+      "sha256": "8d25a246465eae88513e6c2251a1a2d0ca8260cc2158107559da58031ea5a477"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-last-page.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-last-page.png",
+      "sha256": "f622c179e954d510f93c4ae48936738bb410a388ccea77b6230971a1e7022237"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-long-key.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-long-key.png",
+      "sha256": "6c2854af352c95e3ea13c50ced224c5fc22350e53bb63e756d20cc2f9debf9e3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-members-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-members-hover.png",
+      "sha256": "6ac548d53e6c22816ed5ea5df358b85a55728d4833ab485dc730b8fbe2dca38d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-dark-members.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-dark-members.png",
+      "sha256": "06262bd47e8b0b3bfe2aa815b5f3db6ba27271b5d0b7959ad6a30b53fcc6ea31"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-light-controls.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-light-controls.png",
+      "sha256": "5a79e9e0022216215e7e7f42fab22da3d8ef84154ebbe205498aa7b1009a8bed"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-light-huge-number.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-light-huge-number.png",
+      "sha256": "30490d97592725c86ccf5566e1addcfa7880621e41291ad6f8ab64ad3f40fd64"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-light-last-page-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-light-last-page-hover.png",
+      "sha256": "f17a385a719ed96c263e2c10e6f2e0578ffe18bff626c1d3fbcd785aac257dcb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-light-last-page.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-light-last-page.png",
+      "sha256": "6a2b39f7f793d18e520e67db5d586b5ab036fd71cf5ad638647dbdf43fc2c8f0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-light-long-key.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-light-long-key.png",
+      "sha256": "223d7574b64495b0da419763f1d75852836c6b77effb7fb72f060e8368fb31af"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-light-members-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-light-members-hover.png",
+      "sha256": "f3018ed5ff7a7926f9df30e1ac09519e06885c6c164d79d81bc94ffa361caeea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\shots\\visual-narrow-light-members.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/shots/visual-narrow-light-members.png",
+      "sha256": "538710c5d0f4bb52cd6f2cea899a9ce1ff129c2af25985202ad0e88cb1e2aa5b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\source-and-delivery-fixed.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/source-and-delivery-fixed.json",
+      "sha256": "50adea7fd23220f4258c07bb3d4306bca0633907c9e1f99f563e411e12574a68"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\task-temp-before-import.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/task-temp-before-import.json",
+      "sha256": "8fc3bb6735575842633df2e0b4cea30002d5c4c18663f89fcd767e7451c73c19"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\task-temp-during-browser.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/task-temp-during-browser.json",
+      "sha256": "87942d78532194ffaedeb98d881ba27a37fb84fd9df555b69a932a64e59146b1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\task-temp-owner-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/task-temp-owner-before.json",
+      "sha256": "e9dba79286ea9eb584a3b1d65c678616ba994813ec1d279623c35951450a3367"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\typecheck.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/typecheck.json",
+      "sha256": "fdcb54bf9de6553cbe0daacb20fc444da3e5ffe58ac06448cf9ef2acf08e6f1f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-dark-controls.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-dark-controls.json",
+      "sha256": "fe0b1e5d23ad57aecdd2da730ad5d326342dfff1d78ffe693f317d3f425e498a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-dark-huge-number.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-dark-huge-number.json",
+      "sha256": "4b505c0c2ec93d35bbeafd50f4697e8ab6a7f9e2c5fe021f77ba4b0f5ba89bfa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-dark-last-page-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-dark-last-page-hover.json",
+      "sha256": "5f53895635472bcaa3f974c3b842c8607fd9a1ff9c73645cb4007f9de4ceed10"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-dark-last-page.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-dark-last-page.json",
+      "sha256": "b82a49298c7cccb79af7ec92af89ad75bb791f600c8220975dd27e76ae76a23b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-dark-long-key.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-dark-long-key.json",
+      "sha256": "874e56e97b68808792b6cecc81b34e88955427791871dd8ab13440c74bd2f30b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-dark-members-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-dark-members-hover.json",
+      "sha256": "87c6125d49292de1a96a2d841ced2289823a9fe81f3a314db2198ff42840c083"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-dark-members.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-dark-members.json",
+      "sha256": "0578da0461d2b99bfd788c5b6267d595fa652464c6388a8a06e7910c0d3cfcb8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-light-controls.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-light-controls.json",
+      "sha256": "ae754dd735f2af5e8428271055658f1716afaf06eeeb52d45fc2f2bece86f338"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-light-huge-number.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-light-huge-number.json",
+      "sha256": "fa9b7fbbb7b6bb3de7db818753e2039ffe97504c3fcbb0c5966df817685feef7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-light-last-page-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-light-last-page-hover.json",
+      "sha256": "4d434e6bc42f95a6a38c2ed742993c86aa5e834e67048bf0fde31c618e6be0c7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-light-last-page.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-light-last-page.json",
+      "sha256": "d6258f9d464f41409555639b5d00b511e09bbb2183ed41c979ad64521753effd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-light-long-key.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-light-long-key.json",
+      "sha256": "76ad9cf23b83971aecba27b1698491df9a7b3c5ec37da5e7af1406811ff2abc4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-light-members-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-light-members-hover.json",
+      "sha256": "207b41ac78d392d7a7bca3181b233d1fd39743f7533247057235db828cb3cfeb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-desktop-light-members.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-desktop-light-members.json",
+      "sha256": "9e1dfcf629be296e730b3e70c514aca589a8f0c0b1b66e146264bcface82d6dc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-journal.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-journal.json",
+      "sha256": "00c035f8400163fac64fd49c3c8b0d6010bc27338355eb860c0dabc149e21539"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-controls.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-controls.json",
+      "sha256": "8301a547ec8f46b9efbf4825438458e4fa77c635ecc75a58d2d41853a0340aae"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-huge-number.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-huge-number.json",
+      "sha256": "92dd51d4761f1949bd928beb0252a1c317594d4d1473d67c7e691931e79e0b93"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-large-text-controls.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-large-text-controls.json",
+      "sha256": "9ec58e9e0c69bbdd6cab05753a1eb43ebb5bf2a70cde55d3ada7e96244117096"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-large-text-members-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-large-text-members-hover.json",
+      "sha256": "a80e8d7a2dc20abc38e54bdadc47dc021e17714b87e7f6a315191634f649ca58"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-large-text-members.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-large-text-members.json",
+      "sha256": "fa9da457fa571e4c88d20c3437ea55f843baf8ecb78c3cbee4c3c7f4ece4d798"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-last-page-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-last-page-hover.json",
+      "sha256": "17a19fed4afe5646b33463114baddb20a120e535bbf4142e7e49831009b15484"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-last-page.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-last-page.json",
+      "sha256": "a18f9b0fb8b42658e69fb27aa1e990eb8faa221bcc8b56d39cd032eabc781d9f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-long-key.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-long-key.json",
+      "sha256": "4af47a9183af951000017e21f03c69a6981c3c9cff311fb1230603ec2a9a147e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-members-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-members-hover.json",
+      "sha256": "31754489cc1af9252275bef6881cd145de1d9581493aa85e556e98fcb1724ecf"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-dark-members.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-dark-members.json",
+      "sha256": "4b1927d3952f5e8f5c6a3e371d1fc189404b4ac98b818c7ef95c5baa14e84313"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-light-controls.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-light-controls.json",
+      "sha256": "6c9620fb704370ee6e07325f2c5783f3104dbd719982504338502bb49643ae8f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-light-huge-number.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-light-huge-number.json",
+      "sha256": "fc895160f2bc3c8b07c675b808ff3ea7a4de14f4f7b50491496604ab80ce54f4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-light-last-page-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-light-last-page-hover.json",
+      "sha256": "a18dd36f468592c0050a6cf5b70299be22a8256180aff37d14f0bda34e4fad70"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-light-last-page.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-light-last-page.json",
+      "sha256": "739635d29d6a932c1e570b17570dbd3bf209dd026f68ec1f17b748da14eda326"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-light-long-key.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-light-long-key.json",
+      "sha256": "27a44639d4f2e81a359386c3ef04e37f4f0bf79065129e9a36f531f75ae2206b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-light-members-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-light-members-hover.json",
+      "sha256": "3047b2b96df6615489e6c0a251e6f7a1a1f01bd459800e122f17d8012f7ba6cb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\visual-narrow-light-members.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/visual-narrow-light-members.json",
+      "sha256": "b15061ad9e78dae8d2ffb665adc2e129d041a3fce1e28157b3a04da8a4f04816"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/source-before.json",
+      "sha256": "84f0a46f1eb556e55500f809a2ebb1d59acba0870c6372f4f8181b180a7ce47e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\runtime-preparation.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/runtime-preparation.json",
+      "sha256": "739edcd302f7b458ccb47bd9a68d1212339eee9f01e8f3abd16de3423ffff052"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\visual-addon-build-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/visual-addon-build-manifest.json",
+      "sha256": "170fb0fb22a704438b9ee591cc697fd17a7c32d81cd1a2062e2684d88fa96aea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-fixed-visual.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/run-fixed-visual.mjs",
+      "sha256": "757bb7b01298ded50c4d605016db4fb24fba72fae866de1b28ac2eb076a64d0c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-owned-temp-wrapper.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/run-owned-temp-wrapper.mjs",
+      "sha256": "04b80c5a4e09898883065da3e2a67f4ab0608604503baa2473d8843891fab8a3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\archive-owned-diagnostic.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/archive-owned-diagnostic.mjs",
+      "sha256": "3c52e724038c4e67673338d319c9e2d1e28704a57b934a31245c5fc93637e2c2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\freeze-fixed-acceptance.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/freeze-fixed-acceptance.mjs",
+      "sha256": "e39385da85d8eb6609f3cec22aaafd4e82d4e55b3989c4afa090c6d8d45d9846"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\support\\original-guard.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/support/original-guard.mjs",
+      "sha256": "aaf2492d486bf9c8e60bcaf8a82745b727462bbb99cd1c844235fe426ef9eedb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\support\\real-cdp-adapter.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/support/real-cdp-adapter.mjs",
+      "sha256": "bc198f325e0f5d87c09f1e846fd42cc9a0f215ebee6b40adcac9db8de0b3b3c7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\support\\owned-static-server.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/support/owned-static-server.mjs",
+      "sha256": "fc6b7185fcf1a4873b0a73f61e38f2d36f262e0b8875273521b6bbfa448c1905"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\owned-server-runner.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/owned-server-runner.mjs",
+      "sha256": "0ec55d5647668b8cf331652ec3e2956462d8386538b3a14fef614707eaa14f6f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\toolchain.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/toolchain.json",
+      "sha256": "f7e0d4444ce67ad9bd36bb556dcb4e9d302255ea4146c53b3c44e35769efbfec"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\assets\\visual-fixture.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/assets/visual-fixture.ts",
+      "sha256": "afb2f331602b67309be9ea0930e2acf45ed90d2f094255e9cf1e9b2b7766e505"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\assets\\visual-fixture.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase6/assets/visual-fixture.html",
+      "sha256": "352f50ceecdcc7fa82e0080a8edf65e0a8aa72656cd3b44c3694563cc10bdc70"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase5\\run-v2\\freeze-visual-red-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase5/run-v2/freeze-visual-red-v2.json",
+      "sha256": "49a501e6d743a3fce742382dde1e43fe45cf180667e357d614bf7600fe1f609b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase5\\run-v1\\freeze-first-red.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/referenced-inputs/playwright-local-phase5/run-v1/freeze-first-red.json",
+      "sha256": "d1423f45e219a9a783cbbe6133e61035788540995cae92d3ad0efceebb960e75"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\freeze-fixed-acceptance.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/independent/freeze-fixed-acceptance.json",
+      "sha256": "121d1c314e25ea9667662e0f449670fdf8d17f5c73eb3786465ab89090fb3f63"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\asset-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/asset-manifest.json",
+      "sha256": "ae84976ef01f8ae2b17d0e5a7f1270e49bc54736a2b2b90a3b07b975413f404a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\browser-types-result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/browser-types-result.json",
+      "sha256": "610f89051f2d3e0ad0b46e9eadbc259279e240ffe41024cfb0b3967668882aa1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\browser-types-v2-result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/browser-types-v2-result.json",
+      "sha256": "2b06e4779b888f3c583d075b6e70f33f6733e190b5823a9ebf64a6fa030f79fc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\browser-types-v2.tsconfig.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/browser-types-v2.tsconfig.json",
+      "sha256": "e3a42e0c8790e0dc852f10d3aaf43aa21f563b6a2c97be04cd20c38a10a5ac05"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\browser-types.tsconfig.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/browser-types.tsconfig.json",
+      "sha256": "6463124f6991b47230d526f50623bfd7ab4f4495a70c1674bfd88cdc76d1c616"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\files\\clients\\web\\tests\\browser\\inspector-independent-visual.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/files/clients/web/tests/browser/inspector-independent-visual.html",
+      "sha256": "300f7b7ead2325ef9bd18eff24e75f33e2d39008fccbfed69ee1fa1a0268b05e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\files\\clients\\web\\tests\\browser\\inspector-independent-visual.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/files/clients/web/tests/browser/inspector-independent-visual.ts",
+      "sha256": "d2a951cbbeaea3ee1b508d9afb41597643dffab5a91e2dc24a7d3f0671c12744"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\files\\clients\\web\\tests\\browser\\inspector-independent.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/files/clients/web/tests/browser/inspector-independent.html",
+      "sha256": "2744580e9197b953175668f3d0f60c842fddd78ca45ce1307e3ad98dc70c8a48"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\files\\clients\\web\\tests\\browser\\inspector-independent.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/files/clients/web/tests/browser/inspector-independent.ts",
+      "sha256": "d6fe6086c67c03d1cf73130cfa7da7bcccb4370e3e8c706c201b034d9aaef615"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\files\\clients\\web\\tests\\independent-inspector\\data.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/files/clients/web/tests/independent-inspector/data.independent.test.ts",
+      "sha256": "50fe61aa87e816a8027fba7c39924da6aee24c0815389e919313344ce242f851"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/HANDOFF.md",
+      "sha256": "bf9d9ae68cd5fd08817c921d0f7575418dc5c83114838df8e2e6b8ad0b9fbf86"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\independent-web-assets.patch",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/independent-web-assets.patch",
+      "sha256": "8bc26746211ecbfb7d1f10c52ef364c3df40f91471558ca71356eaf7665ca745"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\patch-commands.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/patch-commands.json",
+      "sha256": "d329cb4f40829324ae5ab39cbe3767fb0e3adbd5854a210970c01d1b65eba05d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\approved-assets.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/approved-assets.json",
+      "sha256": "5fb615a925eb68c673594728f5ade50ee386e8b3ae90aa3d5cbf37f4312a0a67"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\approved-source.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/approved-source.json",
+      "sha256": "a54c6b8a4a986a71c8f9f78d32ec272c2075f3f6c8c63055685673a00b23b3e9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\archive-known-log.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/archive-known-log.mjs",
+      "sha256": "41d5708e8c4eadae90fb0c55f5da0e8da70dd3651ca144764c0dc2a6c9b7cde7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\build-and-run.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/build-and-run.mjs",
+      "sha256": "aa0de8d912072b7751888a789028c27c8c7da5c6fa2b00eac6969067bb528b0c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\capture-runtime.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/capture-runtime.mjs",
+      "sha256": "2fb18ea6ae578f07717c03c7bfaacea5bb0145537b150936dc0ec8124e241ce9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\owned-server-runner.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/owned-server-runner.mjs",
+      "sha256": "0ec55d5647668b8cf331652ec3e2956462d8386538b3a14fef614707eaa14f6f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\path-adaptation.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/path-adaptation.json",
+      "sha256": "cc5e5a95ce4fd3d5cf8d1099fb3cea82e430dc273f8ab90408d850d63d1a128b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\README.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/README.md",
+      "sha256": "ddc6c692e15532afd2651af19e65546184f0bd65378074f14a680b5c3c30e509"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\support\\original-guard.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/support/original-guard.mjs",
+      "sha256": "aaf2492d486bf9c8e60bcaf8a82745b727462bbb99cd1c844235fe426ef9eedb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\support\\owned-static-server.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/support/owned-static-server.mjs",
+      "sha256": "fc6b7185fcf1a4873b0a73f61e38f2d36f262e0b8875273521b6bbfa448c1905"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa\\support\\real-cdp-adapter.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa/support/real-cdp-adapter.mjs",
+      "sha256": "bc198f325e0f5d87c09f1e846fd42cc9a0f215ebee6b40adcac9db8de0b3b3c7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\qa-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/qa-manifest.json",
+      "sha256": "097da97929349d1e7a0b82ce02643c490adb7f8f9e1d68d1ea1798ab1002ae6c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\dist\\assets\\index-0luCBpbO.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/dist/assets/index-0luCBpbO.css",
+      "sha256": "59f460f235f69fc261ab0d97c4518ee9fb511717330afa09c4da71276c5b3880"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\dist\\assets\\index-DpQyfqZ1.js",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/dist/assets/index-DpQyfqZ1.js",
+      "sha256": "e7d2d3679eb07c5d5033e265a7fc8a2f308b41f5e00ec1a9749bdd3b820f355b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\dist\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/dist/index.html",
+      "sha256": "76cd985a6377fd5231fb01a18d59f2be9e5e54c17d35055417f52f20dea23c71"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\index.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/index.html",
+      "sha256": "f95ccd4eee548fae8b19034adc198c810a988cecc39e272850e265a9f39b968f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\package-lock.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/package-lock.json",
+      "sha256": "1212cdaa6f409a971a08b74e3ead7930b41032689227760e1b47e79154415d5a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\package.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/package.json",
+      "sha256": "b2d1b128088c1773bfdefa2112907bea1e48f9c794846c07a988f26fa2f766cc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\main.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/main.ts",
+      "sha256": "ce6d443e44d4c920d7e7b184beaab83ef713b68b8f9cff4fc6d58499d5d14815"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\management\\client.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/management/client.ts",
+      "sha256": "471cf8299b306a4fbf02f417a65a7535a4f9952e4ad73be3aaea9ab7465b8281"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\management\\protocol.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/management/protocol.ts",
+      "sha256": "b49c62c95fef1c8fa1c1d9b34d8cc1aff545501fe8ab7c2665938dcf8cbef5b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\management\\reconnect.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/management/reconnect.ts",
+      "sha256": "0a66ef170f7dff5467e0a8d6c029221ba193d2449f3b37acb03215d8e060d169"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\pairing\\api.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/pairing/api.ts",
+      "sha256": "52ebf9e24fba7ce0ee88ff96c3c538bce4891e826fcfb46ee1db00b6d76daf14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\pairing\\identity.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/pairing/identity.ts",
+      "sha256": "854b880e20c33d52fa367f7217727d1d169773706f87f01285c3475da1368f59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\pairing\\session.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/pairing/session.ts",
+      "sha256": "75ae0e93130e205045f67539428e8095286bcf89f65d5d81e200f04758d0ec59"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\protocol\\jws.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/protocol/jws.ts",
+      "sha256": "60e8d8f34cd26a806e7bcdd8fb108cc62911068d2b116b82f4eba46246132019"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\protocol\\pairing.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/protocol/pairing.ts",
+      "sha256": "fa78fdb1ae38dd096db2bb150caf5061d1a8f5ce8ae0bf7470a260510b2faa23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\styles.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/styles.css",
+      "sha256": "0109aa878dce55a26b539a81dd3aadfe9a3e94e651d82541cdd104ff348fafe2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\views\\binary.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/views/binary.ts",
+      "sha256": "fad4ed0bd71b4b8c51605836e17c29ee289b9e32065fd9cca95d230b49d3f1a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\views\\errors.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/views/errors.ts",
+      "sha256": "98f39fea9a160ab267195b23544e8a895aca7b1b0443ba2f9cbd5a4ea71a9a7d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\views\\raw-inspector-data.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/views/raw-inspector-data.ts",
+      "sha256": "ec0cdc563439ee7b474cf606aca6e812985f8bffe5810d8c485cde263d504ff4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\views\\raw-inspector.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/views/raw-inspector.css",
+      "sha256": "1d8151b021a980fd6ed9e79a1bdc728f3e8153bdb333bcb123c2c6d90e0b9d8a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\views\\raw-inspector.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/views/raw-inspector.ts",
+      "sha256": "d7782168fafccd26456c6862cbb3bb1e995d3e66a839002390c0d5c9a8bb3f79"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\views\\raw-json.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/views/raw-json.ts",
+      "sha256": "b0db7a20a2bb16b25522174ead6d11772c1805b16ca10a6f134fa37310613332"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\views\\records.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/views/records.ts",
+      "sha256": "aa7b65ee7b513ef964b8ab76b53d5d8c29eb94837e08b343cdc6b3cf96be5ee9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\src\\vite-env.d.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/src/vite-env.d.ts",
+      "sha256": "424faf9241dd699dda995b367ed36665732da1e6ec1f33b2fd40394488ecac92"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\api.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/api.test.ts",
+      "sha256": "0d577bb0f835e90657b74093067873dc1a938c91e563057f8af46a5043089b89"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\inspector-independent-visual.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/inspector-independent-visual.html",
+      "sha256": "300f7b7ead2325ef9bd18eff24e75f33e2d39008fccbfed69ee1fa1a0268b05e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\inspector-independent-visual.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/inspector-independent-visual.ts",
+      "sha256": "d2a951cbbeaea3ee1b508d9afb41597643dffab5a91e2dc24a7d3f0671c12744"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\inspector-independent.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/inspector-independent.html",
+      "sha256": "2744580e9197b953175668f3d0f60c842fddd78ca45ce1307e3ad98dc70c8a48"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\inspector-independent.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/inspector-independent.ts",
+      "sha256": "d6fe6086c67c03d1cf73130cfa7da7bcccb4370e3e8c706c201b034d9aaef615"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\jws-browser.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/jws-browser.ts",
+      "sha256": "4e8da0916f6ac27a5e21e53a7bc0b2f5fc93e684e8ed95066e6eec752ef6f5d9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\jws.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/jws.html",
+      "sha256": "48d32c8da3ecf919551e8953bdc7f1b0acd1df4237065425830787d5869543dd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\raw-inspector.fixture.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/raw-inspector.fixture.ts",
+      "sha256": "d4b693a8ae4339bb75b1f1c964916f9f536f79f92dcb19c7f417a0271f7cde9d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\browser\\raw-inspector.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/browser/raw-inspector.html",
+      "sha256": "1be6295241458579e32c2e34d0114f26d771339aa3645f5f983849153dd40e5b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\debug-lookup.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/debug-lookup.test.ts",
+      "sha256": "62a4c6889edb0994b1b22d403d7a68763cc37406d3b4b95fc7ad3c1cde7eb823"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\fixtures\\jws-v1.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/fixtures/jws-v1.json",
+      "sha256": "4d4cc9061163eab340c37fbd167cff31d3607586bcf49b4681f191c85034656d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\independent-inspector\\data.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/independent-inspector/data.independent.test.ts",
+      "sha256": "50fe61aa87e816a8027fba7c39924da6aee24c0815389e919313344ce242f851"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\independent-views\\allocation-classification.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/independent-views/allocation-classification.independent.test.ts",
+      "sha256": "3626d28a97708aa8280fe48e6273da279b4e0b1c4dd4a77154aa2cc5f02e5901"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\independent-views\\binary.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/independent-views/binary.independent.test.ts",
+      "sha256": "76e5dd1a298bcfe4378b87407f305086b0bdf346028efba37ae2ebe155a16b14"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\independent-views\\raw-json.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/independent-views/raw-json.independent.test.ts",
+      "sha256": "8bca6346f4d424bfed5fd15d91818427fe5ac7052249b263d8270c3e3a4136ab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\independent-views\\records.independent.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/independent-views/records.independent.test.ts",
+      "sha256": "7c53a389b9c3875dc9a03bec7d4cc7ca6d762547dc1c3fd1c30de280b83bab8c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\independent-views\\support.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/independent-views/support.ts",
+      "sha256": "a4b2280decbe8f74cc076ce43c356cc8b3abc304893a7a4aef1adaf9b7309599"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\jws.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/jws.test.ts",
+      "sha256": "b3af6826aed0169ba2b5adf83962d4d507589af48204a9b058838a3a61fccac4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\management.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/management.test.ts",
+      "sha256": "eef4221bf8c08ed5fa8438c8043a260bf6bafed8ce39d36549ba2ab65d4ea288"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\pairing.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/pairing.test.ts",
+      "sha256": "690a96ef1101c2756952062bd7d6e4bfb777a3c536d41f83dfa067b59f2b3cc9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\reconnect.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/reconnect.test.ts",
+      "sha256": "14093402f84ca3c053f0378c0304fc69490dc6997709d4be60bee36fe3737809"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\smoke.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/smoke.test.ts",
+      "sha256": "60cce0ccc09161e6cdb169ab720eaf411bf87d3ecf1c0bd047bbb47121a71e51"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\views\\binary.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/views/binary.test.ts",
+      "sha256": "def7eb7f8d269dfb82c41b9c2d8cbe3f84209689dc75b3f03145554eeb408ac9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\views\\raw-inspector-data.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/views/raw-inspector-data.test.ts",
+      "sha256": "57db77c5edbdb75a02b0dab62b260985852942be22550efdcbb2d3a093daec3f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\views\\raw-inspector.types.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/views/raw-inspector.types.ts",
+      "sha256": "0554dd1fba689001c3b76fd0c9443101f7a97e6c28e28078b3c162f8bba0d680"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\views\\raw-json.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/views/raw-json.test.ts",
+      "sha256": "dce902fb87c02b3d777e010fd5413a08ebc7a0a6ea977a74bc1c2d5714df11f0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tests\\views\\records.test.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tests/views/records.test.ts",
+      "sha256": "7758c95d85c672225d9861aa7dcd4832dc52646ccc8deeac561e595d5c07cc3f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\tsconfig.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/tsconfig.json",
+      "sha256": "eed51d8d10632044475e4a4f93822dedc9628be9d3387a24c143a8ae40f5d018"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\reconstruction\\clients\\web\\vite.config.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/reconstruction/clients/web/vite.config.ts",
+      "sha256": "b6ba04555219f648ae25dd47a6d080a538a125e3aa3684f369406bac3c710aae"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probe-results-v2.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probe-results-v2.json",
+      "sha256": "e0b5d68c2e6ce2afabc99f401a8d3a3096c0b6e34f3db3fbc908d154f7513e91"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probe-results-v3.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probe-results-v3.json",
+      "sha256": "fb0e00bfb7540cdfa60680f932cf0cc2d8c27ed46e523e284d57311e082485a0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v2\\negative-raw.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v2/negative-raw.json",
+      "sha256": "6ac88a26f79a7dbb7cbf30b481c26f48e5534e351e48f39d6bd8420c03ceabfa"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v2\\negative-raw.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v2/negative-raw.ts",
+      "sha256": "ce97ea44c6ec56d253bcdedcf523d77d5ac57a455455d6de55f40e24e4ac8194"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v2\\negative-readonly.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v2/negative-readonly.json",
+      "sha256": "b525e12d47237f37749e67a8877ef1a53f73a69b7c242d2bf768759aca4d798b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v2\\negative-readonly.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v2/negative-readonly.ts",
+      "sha256": "3db2cd327acc2886c128587304532f71100469447924cdb27b50d197f313ca1c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v2\\positive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v2/positive.json",
+      "sha256": "9c24105605d979258e311255f51d9ad8e492a86aaedd497e42ebe04712ff7635"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v2\\positive.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v2/positive.ts",
+      "sha256": "9c8bcbc3a5d067ffee10b4e0be7afe8d7295ee52213b785b695bc6cdf8bcc12b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v3\\negative-raw.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v3/negative-raw.json",
+      "sha256": "4e441ee2bb925e2f4e2b9112b177f83146a8082bb547868048f1a8749853b179"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v3\\negative-raw.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v3/negative-raw.ts",
+      "sha256": "826aca42006410f8b6caca3e0986de0cee3f000d4bd09f05771af9c7563edf42"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v3\\negative-readonly.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v3/negative-readonly.json",
+      "sha256": "4f209cfeb466a9bf919c48f6b8a5c7e011f56ec4dbbff2697834aca83e71fa62"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v3\\negative-readonly.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v3/negative-readonly.ts",
+      "sha256": "131f2474263b72b347600e8abb93ba06d1842610058813258221ef9bfe4149f8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v3\\positive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v3/positive.json",
+      "sha256": "c141e800958e7bc293586e89f7915503f16b6879779c82d765ea841d22c5fad7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-v1\\type-probes-v3\\positive.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-v1/type-probes-v3/positive.ts",
+      "sha256": "aaf56c2ac51b8cdf5c331608d11907f47c9807bf66c1c20137432e71981f3838"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\build-input\\visual-fixture.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/build-input/visual-fixture.html",
+      "sha256": "352f50ceecdcc7fa82e0080a8edf65e0a8aa72656cd3b44c3694563cc10bdc70"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\build-input\\visual-fixture.ts",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/build-input/visual-fixture.ts",
+      "sha256": "153e43c82f0f9bb909bd62b0240c630cd88bdba3262e8aaa8c6f80d81855a4d1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\capture-runtime.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/capture-runtime.mjs",
+      "sha256": "2fb18ea6ae578f07717c03c7bfaacea5bb0145537b150936dc0ec8124e241ce9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\owned-server-runner.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/owned-server-runner.mjs",
+      "sha256": "0ec55d5647668b8cf331652ec3e2956462d8386538b3a14fef614707eaa14f6f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\root-browser-types.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/root-browser-types.json",
+      "sha256": "e3a42e0c8790e0dc852f10d3aaf43aa21f563b6a2c97be04cd20c38a10a5ac05"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\actual-command.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/actual-command.json",
+      "sha256": "fa11333a02b3de890f8dbecf495ba708809519266e0c521dbb41aa00d08f739a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\actual-command.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/actual-command.txt",
+      "sha256": "2aaa1a094234084ef0882f7ac91e4c74902c51c4075847017882dd88d6f8024b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\addon-monitor-final.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/addon-monitor-final.json",
+      "sha256": "a77aa60fbea29a418e0e5485e644d3638adfbd04a46bb8bc7e1b497a1666a35e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\addon-reset.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/addon-reset.json",
+      "sha256": "6a5c57a0e80c15f85686d47d8e3ea0358223f929ffa34c5dde99d26fe4af1065"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\addon-server-process.txt",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/addon-server-process.txt",
+      "sha256": "631c4defcda8c5fb609dae70b0c1c483c34cbc404aa6166185684a7f04f65888"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\addon-server-state.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/addon-server-state.json",
+      "sha256": "61d9a04e832f3d0cc772bf450fa453d9e6ac9444c108f49b9052aab29396b37e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\addon-trusted-preload.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/addon-trusted-preload.json",
+      "sha256": "a6a702178dcba9043312d027786d7f4463b3221b0afb5dc620fcd306063c4084"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\archives\\cv_debug.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/archives/cv_debug.log",
+      "sha256": "df89ee020fbde42ba58f55d23586c89cca14f681fdc34c52735799116c3ad2a3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\browser-owned-processes.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/browser-owned-processes.json",
+      "sha256": "10d36c8b4de94fd59583ff4dcdcb6479c5c375b9c497854a384aaf2de9a7333b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\knownlog-archive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/knownlog-archive.json",
+      "sha256": "f40075035c76c12b0cbd96415e4936dd64943f0bb1e0951d0404ae998c75059c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\physical-before-knownlog-archive.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/physical-before-knownlog-archive.json",
+      "sha256": "62168c3fc99b762c67b4b9f26b8189cf1c3e9cd96d815b246a5c76ef04ca748f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\root-browser-types.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/root-browser-types.json",
+      "sha256": "72c9beb8fb8a5965a1214fc28322a5bf45b53380c91c9166455733f9702f1a41"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\sample-result.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/sample-result.json",
+      "sha256": "b084aa628166dbc39de0d90d672d0cb5fa3096b618a6619a69e14bb784283924"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\server-close-0.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/server-close-0.json",
+      "sha256": "3b7a228696a76179a9cc5b8ed0da42f00b10342d3c8fa4d92a39d176f5cd3e4f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\shots\\visual-desktop-dark-members-hover.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/shots/visual-desktop-dark-members-hover.png",
+      "sha256": "f83131da6db2b08cc4f5afe8f6f351bb7ffdb9a4f11860cd754e25ba04e18f47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\shots\\visual-desktop-dark-members.png",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/shots/visual-desktop-dark-members.png",
+      "sha256": "4e90b37330160b9cb460a41e64afbecf2d28e82d70f721336f887c221416e954"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\task-temp-before-import.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/task-temp-before-import.json",
+      "sha256": "f7fa6c21e75fef45248064fdaa4c41614f64f367e092a15d43ea17b4c9ae7079"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\task-temp-during-browser.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/task-temp-during-browser.json",
+      "sha256": "1996afda683f8de3aeae771705ea5e81955a3a7bcda20acb60ea42c00a2dcc41"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\task-temp-owner-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/task-temp-owner-before.json",
+      "sha256": "a5b08bb67f5f10076ebde84535c5bd808a65bad4ca6edfcc6e072b3d1a20b325"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\visual-desktop-dark-members-hover.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/visual-desktop-dark-members-hover.json",
+      "sha256": "3100f4bb43e76135c7a19f4978f1453d6bf786d4a8dff85c581a3c92f6214801"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\visual-desktop-dark-members.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/visual-desktop-dark-members.json",
+      "sha256": "3762ad799044e5c7b0a36ef6dab026494cf008d50c98cfa07b9f549077b1a8ad"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\run\\visual-journal.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/run/visual-journal.json",
+      "sha256": "4424c1a93fd5ea8349eb88cc70a269e8dc87f2562e2803556b2e185cbb99e580"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\SMOKE-VERIFICATION.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/SMOKE-VERIFICATION.json",
+      "sha256": "67f4bf852dfb2dc6f34e96036d13f32cd509829f1df7d914ea45ed09d6314a6a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\source-before.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/source-before.json",
+      "sha256": "79bd6ca3a0fb10d1e49806b45d66ee0246ebc99a4c23b2369c68e1f36626f86a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\static-fixture-dist-v1\\assets\\visual-fixture-C3tjv8hr.js",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/static-fixture-dist-v1/assets/visual-fixture-C3tjv8hr.js",
+      "sha256": "ad1b0fe7ecc31a20a273788fa180c7781d7687699518691bd1f50f0eec8fc195"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\static-fixture-dist-v1\\assets\\visual-fixture-DLp0618X.css",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/static-fixture-dist-v1/assets/visual-fixture-DLp0618X.css",
+      "sha256": "7a9cc2acdffa5f4df7cd093217a47be0e2eaa36bfec8d724b0b3a4c8f3ce28a5"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\static-fixture-dist-v1\\visual-fixture.html",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/static-fixture-dist-v1/visual-fixture.html",
+      "sha256": "609f118e6e16409003bead714e4beb47beb53753b89205814279f9dc4e2f9c15"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\support\\original-guard.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/support/original-guard.mjs",
+      "sha256": "aaf2492d486bf9c8e60bcaf8a82745b727462bbb99cd1c844235fe426ef9eedb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\support\\owned-static-server.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/support/owned-static-server.mjs",
+      "sha256": "fc6b7185fcf1a4873b0a73f61e38f2d36f262e0b8875273521b6bbfa448c1905"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\support\\real-cdp-adapter.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/support/real-cdp-adapter.mjs",
+      "sha256": "bc198f325e0f5d87c09f1e846fd42cc9a0f215ebee6b40adcac9db8de0b3b3c7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\toolchain.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/toolchain.json",
+      "sha256": "433d33783e9aa68ae51c96b1cd94fbb5298aecf8f2a005c6183b1eb7c32d62fb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\portable-smoke-v1\\visual-addon-build-manifest.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/portable-smoke-v1/visual-addon-build-manifest.json",
+      "sha256": "676680f8bfa1628ddd3cb9f26ead13f9c5b7bc22af8e48875c471e0a306e7da3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\run-v1\\freeze-fixed-acceptance.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/run-v1/freeze-fixed-acceptance.json",
+      "sha256": "121d1c314e25ea9667662e0f449670fdf8d17f5c73eb3786465ab89090fb3f63"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\FINAL-HANDOFF.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/FINAL-HANDOFF.md",
+      "sha256": "84a404504158debf096ac4ac28fa3fbba0259b59427486914a7b847b73784de3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\prepare-portable-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/prepare-portable-assets.mjs",
+      "sha256": "f264adbaea3698244ac1897eaeeeca409088e7615859a8f97cd31abb91c5ae12"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\prepare-portable-qa.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/prepare-portable-qa.mjs",
+      "sha256": "0c85f3b424b629be8ac8069ce0eb31c8cdf5d35f562b3753ab1b0041cef91202"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\check-portable-browser-types.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/check-portable-browser-types.mjs",
+      "sha256": "9588a6127cc5e36d12c0a525495a2c005fcb990b669ef6a03199c5c448e6ec5d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\check-portable-types-v2.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/check-portable-types-v2.mjs",
+      "sha256": "97672572b263d23eede7ec15baf19a51e85018cd2403e23c9b4b53c740244a58"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\check-portable-probes-v3.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/check-portable-probes-v3.mjs",
+      "sha256": "d9db1af98449d195db0711248a0acda5b3ab4c803aa5e9ef2a16e6ba9cd43633"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\freeze-portable-delivery.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/freeze-portable-delivery.mjs",
+      "sha256": "c6c41f93c252f944bb4ab45293532b9077abc918086885d5977d43cbf4c56fab"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-web-display-independent-tester\\implementation-v1\\playwright-local-phase6\\freeze-final-delivery.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-display-playwright-followup/portable-delivery/freeze-final-delivery.json",
+      "sha256": "c7962525bcf1be9b917d9654bb6d69ac7de60749e40fcecf612627bc4c78637b"
+    }
+  ]
+}

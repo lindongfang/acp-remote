@@ -1,0 +1,91 @@
+{
+  "scope": "Isolated private framing/buffer candidate, independent execution pending",
+  "frozenMembersVerified": 684,
+  "candidateInputs": 638,
+  "rootUnchanged": 636,
+  "changedPaths": 3,
+  "developerTests": 4,
+  "defaultAndAllFeaturesAllTargetsCompile": true,
+  "fmt": true,
+  "strictDefaultErrors": 13,
+  "strictAllFeatureErrors": 13,
+  "strictAllFeatureIncrementalWarning": 1,
+  "strictPassed": false,
+  "independentEI01To08Passed": false,
+  "rootIntegrated": false,
+  "wssNodeHarnessPassed": false,
+  "records": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/freeze.json",
+      "sha256": "f18cb38376ed07320ac617fd161f6638e2060122067a57e6403a73c4a9122d50"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/source-manifest.json",
+      "sha256": "3ed3bae5408ff4347cb859e094150de929065e0a1eb033bd9cb2a4731513a945"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/baseline-source-manifest.json",
+      "sha256": "e127897fb5e244f8b380496fedee41d5487488974ef11f21851b48b51f5f7939"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/component.patch",
+      "sha256": "7dddc30853b5a41475f4dbe388f7cb0f1b30886c9cabe4efdbc370cdcb6ce779"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/patch-verification.json",
+      "sha256": "0e396a32f94828c8d74dfb6a8e6ab80dd452670b8d4d4630fee1860a8de99294"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/checks.json",
+      "sha256": "5848081d8213e430d6bbc1a577284708259661d756e0c303c4eac502cfd58a56"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/strict-inventory.json",
+      "sha256": "be4a636533aa280cf624769e99137f47875e7e16907225d06d9cd3981ebf89a2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/development-executable.json",
+      "sha256": "acc9ab99973ade7a78c505a46bfbf726ad9f8f5a57a0b77a24753b7fdb2db872"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/REPORT.md",
+      "sha256": "876fe981715b1cb9d1ac831550ed7a1493aefb6bc5a160a09a1bfb5927527c49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/handoff.json",
+      "sha256": "2fe14e4c44ab191c07a3651cbb1bd2a7eb294459cdee7cbc96cd385a3e0d1f33"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/coding-gate.md",
+      "sha256": "8d1376d8eec25366981788dfeabeeb2023cfabde7d3980c5134c77b3ee8f59df"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/independent-definition.md",
+      "sha256": "030737f8de525f6d755b0d4323b5a9ca0481b882857373cdd59124f1284bcff8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/logs/dev-final.stdout",
+      "sha256": "4e5c3ad0ce28170ecaffc5794b0814091635f6be9ba80782ed3871236b309af3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/logs/dev-final.stderr",
+      "sha256": "ddd1c4c4c12d85ab7d7f782cf6f4b7225985975074d3e50d6f483f4a06f5fb02"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/logs/dev-final.json",
+      "sha256": "a28ac7df42dbbf89880bd48865f0ffaeab1df45b3fdc91401175b3da54d06854"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/source/app/src/management_ws.rs",
+      "sha256": "211f96bff8986e19f0c6af5dce97475c49bec2f8665ca301e3e8dabe32dc4372"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/source/app/src/management_ws/input_transfer.rs",
+      "sha256": "58d2a78caccbcf22eb71f35a26a3c5790d5d7cb198ff6178669cfa8982d2dfc0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-wss-e1-candidate/source/app/src/management_ws/input_transfer/dev_tests.rs",
+      "sha256": "7f88fad3cfa6d69f02651a0e536ae985a537da145aeaa956d7edefed068ee5d2"
+    }
+  ]
+}

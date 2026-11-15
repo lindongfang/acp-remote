@@ -1,0 +1,2794 @@
+{
+  "scope": "Original independent formal-v1 first red (487:486/1) and formal-v2 corrected acceptance (130 independent/490 total/check/build/six negative types). Byte-identical originals copied and verified, no new execution by copying. WPC-CODE001 closed by original independent tester and reviewed local. Candidate merge review included; actual Root final review remains separate. Full CL023/DOM/NodeWSS/Harness not signed.",
+  "copiedCount": 697,
+  "entries": [
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/assets.json",
+      "sha256": "d5667985ea96e4a911148c618f9dc20ca688caa47b016635d3b7d637f76d72c1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/build-v1.log",
+      "sha256": "37ffc4bb66d8279744a814f9839dc525f31400ff2dbfc05ee7eee384c5e1bed4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/capture.mjs",
+      "sha256": "c3b1ca843e3b0de79ba561eb4cc090c3c034a71234689f8f7d1ed3037b917859"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/case-status.json",
+      "sha256": "d84d4f60ea42f1c7209bb5abbd83abaa4d698e5cdb04672bb34ecc4e677c4510"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/check-attempt1-exit.json",
+      "sha256": "6abc50c0f6143604f99ce93095dd4f3fcb1b5a67314c4246e2b6ad0a46b635bb"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/check-attempt1.log",
+      "sha256": "bd667f70c99a6dfa7a4d9fb0d5650bd0566239e9d1b840e5f78735a9d8570b01"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/check-attempt2-exit.json",
+      "sha256": "0ba83c9ee3e952e8a9ba428e2bad78caa0198259d65f39ec9d12865725f86e60"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/check-attempt2.log",
+      "sha256": "341f44bbb423176e0cca38cc70a3a13041f1683434727a55eff28c5b5569a07f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/check-attempt3.log",
+      "sha256": "d06b123764e0e39bc1ee6dba1af42bbefa313ff9b992b5bc933f089d3de260a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/check-attempt4.log",
+      "sha256": "341f44bbb423176e0cca38cc70a3a13041f1683434727a55eff28c5b5569a07f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/constructor-allocation-red-compiled-exit.json",
+      "sha256": "5ee11891bcf45d81abc462ac278227508c99e09480bed3f624dd8021c79a8272"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/constructor-allocation-red-compiled.log",
+      "sha256": "e6473ac5d40cdf5b298b8d96fbd2ca9215dc85566518f9615a55106c145a0d2b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/constructor-allocation-red-exit.json",
+      "sha256": "f41b7f749204a49e9f86c0a9d9c6817b8a8c6488a749159938a58068997af080"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/constructor-allocation-red.log",
+      "sha256": "69be17ba49888aad3331e06277ebad69ae420592701daa44abca1f908ddcfc11"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/full-tests-red.json",
+      "sha256": "36085545a2051a81cbabbeb4e0ebdf02197647e32e16919237e3b9a86717e32a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/full-tests-red.log",
+      "sha256": "969996d7116803618aca35ae0645c46fca81e6f3b326aed670b2b550efb06a90"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/full-v1-exits.json",
+      "sha256": "01d9ef00d12055db471e74a20ad5d2dfc375e345d74c0ab09e0bf81b96fd1818"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/independent-attempt1-exit.json",
+      "sha256": "1e13b47bfb4e8d3b62a0bdc9c4136753528c62049c3c3c7b94ddbaddb9595490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/independent-attempt1.log",
+      "sha256": "40c5f9cd39b57dc48cbe8f1043c45b3c73929ca6b21b0dfcadc7983491c067e4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/issues.json",
+      "sha256": "8c9a16cdbd544d1afe113568d8a5d7927f6eadf8a2a330f8e2fec2f582a1481e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/original-regression-exits.json",
+      "sha256": "67aba870a71a911fa90c31d538363dbb0c42d294a426f72845888bcaf03a3e40"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/original-regression.json",
+      "sha256": "990f7740435fe8332d2b2d880f805695c5488a8ce2b9d7b13572ec99b6b942dc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/original-regression.log",
+      "sha256": "18ff3a28b07b1c6da780343aaa91a8550933eb9dcb11c44a6aee49cf8d9f224b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/prepare.mjs",
+      "sha256": "da87496363961ed09052f933b46c434c1cb3321648ad77bfbbcfad97cc0d4f86"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/REPORT.md",
+      "sha256": "44f0d339d9fe17d0072b2c34e9b6b1d891843ace86c7014a9ca4d5d31368a829"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/source-after.json",
+      "sha256": "3eeffa67a96ed7de9d1a7ec132cc4e94ebb89abe4abe51333f46cf63c9f0cbb3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/source-before.json",
+      "sha256": "eaeafd8691282c62763901c17233f29bd54eaa93c7f7c04bd60bf69617d2d4fa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/type-negative-classification.json",
+      "sha256": "8eb0de82e0f6169dd63fde0eb3e8ffb86bf984f5ccb94bf203684d24dfe0c161"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/type-negative-exit.json",
+      "sha256": "87003c1fa84a5a5b7576fc610d4d910f917029f4b7f1e8a82f1ddf696e008b9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/type-negative.log",
+      "sha256": "651241810e00c4432abfb521bf8d4b1befa993eb774b902583642531d227cdcd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/type-negative.mjs",
+      "sha256": "a1b862413c18917b6fd62f68a1529703d67ae45ada131082fe183ced01cb2ce8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/type-negative/projection.errors.ts",
+      "sha256": "27dad1e8203a520bee3cda59b8f297a96e44ae195ca58ecad8465670d629edff"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/dist/assets/index-0luCBpbO.css",
+      "sha256": "59f460f235f69fc261ab0d97c4518ee9fb511717330afa09c4da71276c5b3880"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/dist/assets/index-DpQyfqZ1.js",
+      "sha256": "e7d2d3679eb07c5d5033e265a7fc8a2f308b41f5e00ec1a9749bdd3b820f355b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/dist/index.html",
+      "sha256": "76cd985a6377fd5231fb01a18d59f2be9e5e54c17d35055417f52f20dea23c71"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/index.html",
+      "sha256": "f95ccd4eee548fae8b19034adc198c810a988cecc39e272850e265a9f39b968f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/package-lock.json",
+      "sha256": "1212cdaa6f409a971a08b74e3ead7930b41032689227760e1b47e79154415d5a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/package.json",
+      "sha256": "b2d1b128088c1773bfdefa2112907bea1e48f9c794846c07a988f26fa2f766cc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/main.ts",
+      "sha256": "ce6d443e44d4c920d7e7b184beaab83ef713b68b8f9cff4fc6d58499d5d14815"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/management/client.ts",
+      "sha256": "471cf8299b306a4fbf02f417a65a7535a4f9952e4ad73be3aaea9ab7465b8281"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/management/protocol.ts",
+      "sha256": "b49c62c95fef1c8fa1c1d9b34d8cc1aff545501fe8ab7c2665938dcf8cbef5b2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/management/reconnect.ts",
+      "sha256": "0a66ef170f7dff5467e0a8d6c029221ba193d2449f3b37acb03215d8e060d169"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/pairing/api.ts",
+      "sha256": "52ebf9e24fba7ce0ee88ff96c3c538bce4891e826fcfb46ee1db00b6d76daf14"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/pairing/identity.ts",
+      "sha256": "854b880e20c33d52fa367f7217727d1d169773706f87f01285c3475da1368f59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/pairing/session.ts",
+      "sha256": "75ae0e93130e205045f67539428e8095286bcf89f65d5d81e200f04758d0ec59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/protocol/jws.ts",
+      "sha256": "60e8d8f34cd26a806e7bcdd8fb108cc62911068d2b116b82f4eba46246132019"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/protocol/pairing.ts",
+      "sha256": "fa78fdb1ae38dd096db2bb150caf5061d1a8f5ce8ae0bf7470a260510b2faa23"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/styles.css",
+      "sha256": "0109aa878dce55a26b539a81dd3aadfe9a3e94e651d82541cdd104ff348fafe2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/binary.ts",
+      "sha256": "fad4ed0bd71b4b8c51605836e17c29ee289b9e32065fd9cca95d230b49d3f1a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/errors.ts",
+      "sha256": "98f39fea9a160ab267195b23544e8a895aca7b1b0443ba2f9cbd5a4ea71a9a7d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/projection-collection.ts",
+      "sha256": "1faf0f059bad83639afbc7b6b84764ab068a9996a406225a36057aaa7698f3de"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/projection.ts",
+      "sha256": "1066517bf7dfa522ee125317f1a150571eba4a07aa801a65858b444916be52f6"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/raw-inspector-data.ts",
+      "sha256": "ec0cdc563439ee7b474cf606aca6e812985f8bffe5810d8c485cde263d504ff4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/raw-inspector.css",
+      "sha256": "1d8151b021a980fd6ed9e79a1bdc728f3e8153bdb333bcb123c2c6d90e0b9d8a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/raw-inspector.ts",
+      "sha256": "d7782168fafccd26456c6862cbb3bb1e995d3e66a839002390c0d5c9a8bb3f79"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/raw-json.ts",
+      "sha256": "b0db7a20a2bb16b25522174ead6d11772c1805b16ca10a6f134fa37310613332"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/views/records.ts",
+      "sha256": "aa7b65ee7b513ef964b8ab76b53d5d8c29eb94837e08b343cdc6b3cf96be5ee9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/src/vite-env.d.ts",
+      "sha256": "424faf9241dd699dda995b367ed36665732da1e6ec1f33b2fd40394488ecac92"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/api.test.ts",
+      "sha256": "0d577bb0f835e90657b74093067873dc1a938c91e563057f8af46a5043089b89"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/inspector-independent-visual.html",
+      "sha256": "300f7b7ead2325ef9bd18eff24e75f33e2d39008fccbfed69ee1fa1a0268b05e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/inspector-independent-visual.ts",
+      "sha256": "d2a951cbbeaea3ee1b508d9afb41597643dffab5a91e2dc24a7d3f0671c12744"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/inspector-independent.html",
+      "sha256": "2744580e9197b953175668f3d0f60c842fddd78ca45ce1307e3ad98dc70c8a48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/inspector-independent.ts",
+      "sha256": "d6fe6086c67c03d1cf73130cfa7da7bcccb4370e3e8c706c201b034d9aaef615"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/jws-browser.ts",
+      "sha256": "4e8da0916f6ac27a5e21e53a7bc0b2f5fc93e684e8ed95066e6eec752ef6f5d9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/jws.html",
+      "sha256": "48d32c8da3ecf919551e8953bdc7f1b0acd1df4237065425830787d5869543dd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/raw-inspector.fixture.ts",
+      "sha256": "d4b693a8ae4339bb75b1f1c964916f9f536f79f92dcb19c7f417a0271f7cde9d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/browser/raw-inspector.html",
+      "sha256": "1be6295241458579e32c2e34d0114f26d771339aa3645f5f983849153dd40e5b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/debug-lookup.test.ts",
+      "sha256": "62a4c6889edb0994b1b22d403d7a68763cc37406d3b4b95fc7ad3c1cde7eb823"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/fixtures/jws-v1.json",
+      "sha256": "4d4cc9061163eab340c37fbd167cff31d3607586bcf49b4681f191c85034656d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-inspector/data.independent.test.ts",
+      "sha256": "50fe61aa87e816a8027fba7c39924da6aee24c0815389e919313344ce242f851"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/collection.independent.test.ts",
+      "sha256": "16a773171079fe26caa9058e04ea40650c33f5e104aeee561256a1c83c28be29"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/decoder.independent.test.ts",
+      "sha256": "d1610a17507917d4f76f82f88df6c62201b2604f9104b6982f8abd0f5df50142"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/failure.independent.test.ts",
+      "sha256": "56213f2cfcad697f856c119b457da913251f629f552eb98cebd5db28af305dc0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/consumer-index.json",
+      "sha256": "5133124c9f006026ba219a71f362d15840bdf7aac4e4908f6566df8ac71a81bb"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/manifest.json",
+      "sha256": "278689c649a1efb3a9f0ec30a60521239def5f2ae9018e0f5f876ddfb016992f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-001.json",
+      "sha256": "fe6f0852273ea77cf0f86744baad96b0f1b49d92d9b77433aa549ec83d440f64"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-005.json",
+      "sha256": "f528597a7e383289832b2378a98a6f8033f63e4a7a7688e7eff8288fa5b8c5a4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-006.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-007.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-008.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-009.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-010.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-011.json",
+      "sha256": "c92db8d38c96686a0b77095c351e94b41d16917c499810b6cc04e4cc3692fe89"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-012.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-001.json",
+      "sha256": "f85728bfce59db2020a2e70e72286baac31f8cfe0157fb046e564e8351f35b96"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-007.json",
+      "sha256": "bc22f3a43cf22012216a7008ee1a81665377486be8832ec69e54412497f89930"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-008.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-009.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-010.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-011.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-012.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-013.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-014.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-015.json",
+      "sha256": "616f8fe2ec632af89a42fae753a2995966b0d34dc91ea9141cd9d8476b056df2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-016.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-001.json",
+      "sha256": "fa344f1c90cd838de103c7a796f6857d6ed01149175d17264c9571c1887d6500"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-008.json",
+      "sha256": "b8315c7d1efac9e960a2a7146925a27afe2af111617b35082b1741fd26d56613"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-009.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-010.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-011.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-012.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-013.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-014.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-015.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-016.json",
+      "sha256": "2fdada4feb5cb195205b5e74b6d163c9c4d1398f4921d87efcb15a0c84986adb"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-017.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-001.json",
+      "sha256": "63da3d63d7375ac8a08117bde0a14b0b032707f033d58ad5b8085ec3aacaa543"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-009.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-010.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-011.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-012.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-013.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-014.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-015.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-016.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-017.json",
+      "sha256": "4e9b6431173de74f5c16714a4ced8f9f73e4517f625b6b904278d9949a4a2551"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-018.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-001.json",
+      "sha256": "be688e5df95edfc0ad7a0807c9cfded5b3767b125cfb8a0904a78acfa7501971"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-009.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-010.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-011.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-012.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-013.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-014.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-015.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-016.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-017.json",
+      "sha256": "b707b975b95f412348f58c342436b8e85c4a97465665e73cd205ceff2d2c9de8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-018.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-019.json",
+      "sha256": "50483882678538ca2e131f762989ca2ee6c597003ce4e0b7f407f6b19627f506"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-020.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-001.json",
+      "sha256": "be688e5df95edfc0ad7a0807c9cfded5b3767b125cfb8a0904a78acfa7501971"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-009.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-010.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-011.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-012.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-013.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-014.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-015.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-016.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-017.json",
+      "sha256": "b707b975b95f412348f58c342436b8e85c4a97465665e73cd205ceff2d2c9de8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-018.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-019.json",
+      "sha256": "50483882678538ca2e131f762989ca2ee6c597003ce4e0b7f407f6b19627f506"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-020.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/manifest.json",
+      "sha256": "1581ef719e94809bb9c33cd254a56f715c9193602ebecf452e6d0937b7268f5b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-001.json",
+      "sha256": "aaa829740bbaf2e1646e92c3ecbb814dd77ceea054de5e45afba1164afe11c42"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-004.json",
+      "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-008.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-009.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-010.json",
+      "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-011.json",
+      "sha256": "ae6367c793a98044f194eecd5af92393a6d3d284da52e70d062bba9d27a067be"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-012.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-013.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-014.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-015.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-016.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-017.json",
+      "sha256": "aea823513ecc350cb82cefe18ffb206de64726b9dc23aa23daf5e4c52eb3ed4a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-018.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-001.json",
+      "sha256": "488d4475359d35d8628975632454fb781049cbe77da3988cd5b4f53294581c37"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-004.json",
+      "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-010.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-011.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-012.json",
+      "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-013.json",
+      "sha256": "c54d5b0ca17df5f65244213507ab8cb6603305f98a2ea712383b340f9aa39f27"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-014.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-015.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-016.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-017.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-018.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-019.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-020.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-021.json",
+      "sha256": "3956d44c88882cd0e12145f712274fd44bd04b6899efa10cd8b5a38f02bdb3e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-022.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-001.json",
+      "sha256": "7ed6e8a01412043f3765260438677f08bfbac2054f325c551114606dc42b6eac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-004.json",
+      "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-011.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-012.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-013.json",
+      "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-014.json",
+      "sha256": "09cf4a426c308e1e4984e98801f14b58d6d16abe01780eb335d5e2bdeac98408"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-015.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-016.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-017.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-018.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-019.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-020.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-021.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-022.json",
+      "sha256": "4833df7082296facd4b1ca753ae26a9b7f1f22fb468c993abbdd3d4a36736507"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-023.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-001.json",
+      "sha256": "96105e0563bce2a19a7f3fd184c2f62096c7a2bde8dd59df4098a25a8835f679"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-004.json",
+      "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-012.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-013.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-014.json",
+      "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-015.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-016.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-017.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-018.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-019.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-020.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-021.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-022.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-023.json",
+      "sha256": "39b646e769871c387ff196c34e3a8ccb055ee1b310f54fb3405e7de9fa0f6c59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-024.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-001.json",
+      "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-004.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-012.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-013.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-014.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-015.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-016.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-017.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-018.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-019.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-020.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-021.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-022.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-023.json",
+      "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-024.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-025.json",
+      "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-026.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-001.json",
+      "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-004.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-012.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-013.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-014.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-015.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-016.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-017.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-018.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-019.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-020.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-021.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-022.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-023.json",
+      "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-024.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-025.json",
+      "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-026.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/node-builtins.d.ts",
+      "sha256": "a3cfdf33f243c59a377da6986a704d2b442a6b26c17e8f0f38993a5c07c023cf"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/projection.types.ts",
+      "sha256": "ef0ec589b29fa3acf8159d0b5b9ee89d452c5147d8760012d1558c8b83141c68"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/support.ts",
+      "sha256": "732786dbfa86c5c03c6cd8519c72b7be0253ab557ca5470255d5ca1afde99e60"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-projection/vectors.independent.test.ts",
+      "sha256": "520190b64462c784615dd32cc386b72163f04185eadad5fdb9180f2140cf1f05"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-views/allocation-classification.independent.test.ts",
+      "sha256": "3626d28a97708aa8280fe48e6273da279b4e0b1c4dd4a77154aa2cc5f02e5901"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-views/binary.independent.test.ts",
+      "sha256": "76e5dd1a298bcfe4378b87407f305086b0bdf346028efba37ae2ebe155a16b14"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-views/raw-json.independent.test.ts",
+      "sha256": "8bca6346f4d424bfed5fd15d91818427fe5ac7052249b263d8270c3e3a4136ab"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-views/records.independent.test.ts",
+      "sha256": "7c53a389b9c3875dc9a03bec7d4cc7ca6d762547dc1c3fd1c30de280b83bab8c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/independent-views/support.ts",
+      "sha256": "a4b2280decbe8f74cc076ce43c356cc8b3abc304893a7a4aef1adaf9b7309599"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/jws.test.ts",
+      "sha256": "b3af6826aed0169ba2b5adf83962d4d507589af48204a9b058838a3a61fccac4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/management.test.ts",
+      "sha256": "eef4221bf8c08ed5fa8438c8043a260bf6bafed8ce39d36549ba2ab65d4ea288"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/pairing.test.ts",
+      "sha256": "690a96ef1101c2756952062bd7d6e4bfb777a3c536d41f83dfa067b59f2b3cc9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/reconnect.test.ts",
+      "sha256": "14093402f84ca3c053f0378c0304fc69490dc6997709d4be60bee36fe3737809"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/smoke.test.ts",
+      "sha256": "60cce0ccc09161e6cdb169ab720eaf411bf87d3ecf1c0bd047bbb47121a71e51"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/views/binary.test.ts",
+      "sha256": "def7eb7f8d269dfb82c41b9c2d8cbe3f84209689dc75b3f03145554eeb408ac9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/views/projection.test.ts",
+      "sha256": "811204783a71b692564935666152d926d5df3aa098d50d22a8b666ed5e25e4c5"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/views/raw-inspector-data.test.ts",
+      "sha256": "57db77c5edbdb75a02b0dab62b260985852942be22550efdcbb2d3a093daec3f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/views/raw-inspector.types.ts",
+      "sha256": "0554dd1fba689001c3b76fd0c9443101f7a97e6c28e28078b3c162f8bba0d680"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/views/raw-json.test.ts",
+      "sha256": "dce902fb87c02b3d777e010fd5413a08ebc7a0a6ea977a74bc1c2d5714df11f0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tests/views/records.test.ts",
+      "sha256": "7758c95d85c672225d9861aa7dcd4832dc52646ccc8deeac561e595d5c07cc3f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/tsconfig.json",
+      "sha256": "eed51d8d10632044475e4a4f93822dedc9628be9d3387a24c143a8ae40f5d018"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/workspace/clients/web/vite.config.ts",
+      "sha256": "b6ba04555219f648ae25dd47a6d080a538a125e3aa3684f369406bac3c710aae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v1/freeze.json",
+      "sha256": "fc0fc19113d80950dc02099931ab757c88c3bf79f64e778fea2c8fc3d8ba3127"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/collection.independent.test.ts",
+      "sha256": "16a773171079fe26caa9058e04ea40650c33f5e104aeee561256a1c83c28be29"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-026.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-025.json",
+      "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-024.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-023.json",
+      "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-022.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-021.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-020.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-019.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-018.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-017.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-016.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-015.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-014.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-013.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-012.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-001.json",
+      "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-020.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-019.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-018.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-017.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-016.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-015.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-014.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-013.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-012.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-004.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-004.json",
+      "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-001.json",
+      "sha256": "96105e0563bce2a19a7f3fd184c2f62096c7a2bde8dd59df4098a25a8835f679"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-023.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-022.json",
+      "sha256": "4833df7082296facd4b1ca753ae26a9b7f1f22fb468c993abbdd3d4a36736507"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-021.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-020.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-019.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-018.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-017.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-016.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-011.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-012.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-004.json",
+      "sha256": "c3f1b122de49aac71c02f567a4a5b63fb911c99042bdb821f44e777668eff68d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-001.json",
+      "sha256": "2ff7e0c74e21719c612d03afb0799b19284154ea47ee1d216cd60294c3de1b58"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-04-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-024.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-023.json",
+      "sha256": "39b646e769871c387ff196c34e3a8ccb055ee1b310f54fb3405e7de9fa0f6c59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-021.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-022.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-020.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-019.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-018.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-017.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-016.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-015.json",
+      "sha256": "b19829a4e134cbcecb5101d159cb6f661cc1e96e5a837b6d44c136d02ae75a9f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-014.json",
+      "sha256": "fe2bfc7bc1e615cab99e01fa6d2d1f8fef5c31039da3ecdab0ddf16c55661722"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-013.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-03-record-021.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-022.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-023.json",
+      "sha256": "446943e3edac96532ee3ac714d359b0ca00654fa66fbca0f6ce815bf1ab761a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-024.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/raw-inspector.fixture.ts",
+      "sha256": "d4b693a8ae4339bb75b1f1c964916f9f536f79f92dcb19c7f417a0271f7cde9d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/jws.html",
+      "sha256": "48d32c8da3ecf919551e8953bdc7f1b0acd1df4237065425830787d5869543dd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/jws-browser.ts",
+      "sha256": "4e8da0916f6ac27a5e21e53a7bc0b2f5fc93e684e8ed95066e6eec752ef6f5d9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/inspector-independent.ts",
+      "sha256": "d6fe6086c67c03d1cf73130cfa7da7bcccb4370e3e8c706c201b034d9aaef615"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/inspector-independent.html",
+      "sha256": "2744580e9197b953175668f3d0f60c842fddd78ca45ce1307e3ad98dc70c8a48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/inspector-independent-visual.ts",
+      "sha256": "d2a951cbbeaea3ee1b508d9afb41597643dffab5a91e2dc24a7d3f0671c12744"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/inspector-independent-visual.html",
+      "sha256": "300f7b7ead2325ef9bd18eff24e75f33e2d39008fccbfed69ee1fa1a0268b05e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/api.test.ts",
+      "sha256": "0d577bb0f835e90657b74093067873dc1a938c91e563057f8af46a5043089b89"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/vite-env.d.ts",
+      "sha256": "424faf9241dd699dda995b367ed36665732da1e6ec1f33b2fd40394488ecac92"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/records.ts",
+      "sha256": "aa7b65ee7b513ef964b8ab76b53d5d8c29eb94837e08b343cdc6b3cf96be5ee9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/raw-json.ts",
+      "sha256": "b0db7a20a2bb16b25522174ead6d11772c1805b16ca10a6f134fa37310613332"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/raw-inspector.ts",
+      "sha256": "d7782168fafccd26456c6862cbb3bb1e995d3e66a839002390c0d5c9a8bb3f79"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/raw-inspector.css",
+      "sha256": "1d8151b021a980fd6ed9e79a1bdc728f3e8153bdb333bcb123c2c6d90e0b9d8a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/raw-inspector-data.ts",
+      "sha256": "ec0cdc563439ee7b474cf606aca6e812985f8bffe5810d8c485cde263d504ff4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/errors.ts",
+      "sha256": "98f39fea9a160ab267195b23544e8a895aca7b1b0443ba2f9cbd5a4ea71a9a7d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/binary.ts",
+      "sha256": "fad4ed0bd71b4b8c51605836e17c29ee289b9e32065fd9cca95d230b49d3f1a1"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/styles.css",
+      "sha256": "0109aa878dce55a26b539a81dd3aadfe9a3e94e651d82541cdd104ff348fafe2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/browser/raw-inspector.html",
+      "sha256": "1be6295241458579e32c2e34d0114f26d771339aa3645f5f983849153dd40e5b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/debug-lookup.test.ts",
+      "sha256": "62a4c6889edb0994b1b22d403d7a68763cc37406d3b4b95fc7ad3c1cde7eb823"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/fixtures/jws-v1.json",
+      "sha256": "4d4cc9061163eab340c37fbd167cff31d3607586bcf49b4681f191c85034656d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-inspector/data.independent.test.ts",
+      "sha256": "50fe61aa87e816a8027fba7c39924da6aee24c0815389e919313344ce242f851"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/projection.ts",
+      "sha256": "1066517bf7dfa522ee125317f1a150571eba4a07aa801a65858b444916be52f6"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/vite.config.ts",
+      "sha256": "b6ba04555219f648ae25dd47a6d080a538a125e3aa3684f369406bac3c710aae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tsconfig.json",
+      "sha256": "eed51d8d10632044475e4a4f93822dedc9628be9d3387a24c143a8ae40f5d018"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/views/records.test.ts",
+      "sha256": "7758c95d85c672225d9861aa7dcd4832dc52646ccc8deeac561e595d5c07cc3f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/views/raw-json.test.ts",
+      "sha256": "dce902fb87c02b3d777e010fd5413a08ebc7a0a6ea977a74bc1c2d5714df11f0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/views/raw-inspector.types.ts",
+      "sha256": "0554dd1fba689001c3b76fd0c9443101f7a97e6c28e28078b3c162f8bba0d680"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/views/raw-inspector-data.test.ts",
+      "sha256": "57db77c5edbdb75a02b0dab62b260985852942be22550efdcbb2d3a093daec3f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/views/binary.test.ts",
+      "sha256": "def7eb7f8d269dfb82c41b9c2d8cbe3f84209689dc75b3f03145554eeb408ac9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/protocol/pairing.ts",
+      "sha256": "fa78fdb1ae38dd096db2bb150caf5061d1a8f5ce8ae0bf7470a260510b2faa23"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/smoke.test.ts",
+      "sha256": "60cce0ccc09161e6cdb169ab720eaf411bf87d3ecf1c0bd047bbb47121a71e51"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/pairing.test.ts",
+      "sha256": "690a96ef1101c2756952062bd7d6e4bfb777a3c536d41f83dfa067b59f2b3cc9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/management.test.ts",
+      "sha256": "eef4221bf8c08ed5fa8438c8043a260bf6bafed8ce39d36549ba2ab65d4ea288"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/jws.test.ts",
+      "sha256": "b3af6826aed0169ba2b5adf83962d4d507589af48204a9b058838a3a61fccac4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-views/support.ts",
+      "sha256": "a4b2280decbe8f74cc076ce43c356cc8b3abc304893a7a4aef1adaf9b7309599"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-views/records.independent.test.ts",
+      "sha256": "7c53a389b9c3875dc9a03bec7d4cc7ca6d762547dc1c3fd1c30de280b83bab8c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-views/raw-json.independent.test.ts",
+      "sha256": "8bca6346f4d424bfed5fd15d91818427fe5ac7052249b263d8270c3e3a4136ab"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-views/binary.independent.test.ts",
+      "sha256": "76e5dd1a298bcfe4378b87407f305086b0bdf346028efba37ae2ebe155a16b14"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-views/allocation-classification.independent.test.ts",
+      "sha256": "3626d28a97708aa8280fe48e6273da279b4e0b1c4dd4a77154aa2cc5f02e5901"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/reconnect.test.ts",
+      "sha256": "14093402f84ca3c053f0378c0304fc69490dc6997709d4be60bee36fe3737809"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-015.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/protocol/jws.ts",
+      "sha256": "60e8d8f34cd26a806e7bcdd8fb108cc62911068d2b116b82f4eba46246132019"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/pairing/identity.ts",
+      "sha256": "854b880e20c33d52fa367f7217727d1d169773706f87f01285c3475da1368f59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/environment.json",
+      "sha256": "1a725f9951dbe6ae3be1fa5f859bb3bfdf388bcd5acf5664d1b9eebd32736f67"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/check-final.log",
+      "sha256": "341f44bbb423176e0cca38cc70a3a13041f1683434727a55eff28c5b5569a07f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/case-status.json",
+      "sha256": "92d493423dcd09e216ad4f6ec1501ac89036f568cdb965bc90cacd9c75c28559"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/build-final.log",
+      "sha256": "d570c9c371691d379b7a4fb58135cc5738bd728d5006d79722d2cc3e646dbf59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/assets.json",
+      "sha256": "27a8d1e3c9594130776f5a89ebbe5d25b207b55e30cfca71b322cb7d20df9e4c"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/ACCEPTANCE.md",
+      "sha256": "ba82911879bdb543f8e5d5a5660221d6fe04eed9508d05ca9f7b2c2370228569"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/type-negative/projection.errors.ts",
+      "sha256": "27dad1e8203a520bee3cda59b8f297a96e44ae195ca58ecad8465670d629edff"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/type-negative.mjs",
+      "sha256": "a1b862413c18917b6fd62f68a1529703d67ae45ada131082fe183ced01cb2ce8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/run-final.ps1",
+      "sha256": "d05ee71ca79fae973ffbc3047df2a6159482ce3ae795976b6fd6f11786a60819"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/capture.mjs",
+      "sha256": "f9ada5861896c783336020b6516a4ce9c895816b99825039efd1d9e35e3d3173"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/prepare.mjs",
+      "sha256": "f2455f173ff688a8a661209f6af4abf0fc0514b48324f238a5eaf799da2cdc79"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/vectors.independent.test.ts",
+      "sha256": "520190b64462c784615dd32cc386b72163f04185eadad5fdb9180f2140cf1f05"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/support.ts",
+      "sha256": "732786dbfa86c5c03c6cd8519c72b7be0253ab557ca5470255d5ca1afde99e60"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/projection.types.ts",
+      "sha256": "ef0ec589b29fa3acf8159d0b5b9ee89d452c5147d8760012d1558c8b83141c68"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/node-builtins.d.ts",
+      "sha256": "a3cfdf33f243c59a377da6986a704d2b442a6b26c17e8f0f38993a5c07c023cf"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-026.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-05-record-025.json",
+      "sha256": "ed348eb3cf05a9c3e6d448066bf9fe0bf4d1c1e906542fa80029b8df87bb578a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/final-exits.json",
+      "sha256": "28f18442fa942a1ad5416f38768895200a2ef3f00670cb3196b64bd9d8d73b97"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/full-tests-final.json",
+      "sha256": "cfc641731651409d072990a6d63aab5afe87b0a75d545812abc772c3dc2951f2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/full-tests-final.log",
+      "sha256": "227d2f78a16fcc0537f684a9435405b8ac0cdd867eef3948cdf8d45455d0ec68"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/independent-final.log",
+      "sha256": "5fb3749884fa125a19b2b178f750afdaaace6def5e8a2a77e7903594b82d43e7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/pairing/api.ts",
+      "sha256": "52ebf9e24fba7ce0ee88ff96c3c538bce4891e826fcfb46ee1db00b6d76daf14"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/management/reconnect.ts",
+      "sha256": "0a66ef170f7dff5467e0a8d6c029221ba193d2449f3b37acb03215d8e060d169"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/management/protocol.ts",
+      "sha256": "b49c62c95fef1c8fa1c1d9b34d8cc1aff545501fe8ab7c2665938dcf8cbef5b2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/management/client.ts",
+      "sha256": "471cf8299b306a4fbf02f417a65a7535a4f9952e4ad73be3aaea9ab7465b8281"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/main.ts",
+      "sha256": "ce6d443e44d4c920d7e7b184beaab83ef713b68b8f9cff4fc6d58499d5d14815"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/package.json",
+      "sha256": "b2d1b128088c1773bfdefa2112907bea1e48f9c794846c07a988f26fa2f766cc"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/package-lock.json",
+      "sha256": "1212cdaa6f409a971a08b74e3ead7930b41032689227760e1b47e79154415d5a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/index.html",
+      "sha256": "f95ccd4eee548fae8b19034adc198c810a988cecc39e272850e265a9f39b968f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/pairing/session.ts",
+      "sha256": "75ae0e93130e205045f67539428e8095286bcf89f65d5d81e200f04758d0ec59"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/dist/index.html",
+      "sha256": "76cd985a6377fd5231fb01a18d59f2be9e5e54c17d35055417f52f20dea23c71"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/dist/assets/index-0luCBpbO.css",
+      "sha256": "59f460f235f69fc261ab0d97c4518ee9fb511717330afa09c4da71276c5b3880"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/type-negative.log",
+      "sha256": "651241810e00c4432abfb521bf8d4b1befa993eb774b902583642531d227cdcd"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/type-negative-prepare.log",
+      "sha256": "c4f590ff5bb4eecd8416ffb7e6c5da56ba750e8afa95c9124319a9aafef2baac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/type-negative-classification.json",
+      "sha256": "8356cab7846025ef77026c6aa773452be698550c898f03e0f2ff251c9194df44"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/test-assets-delta.json",
+      "sha256": "4ec0bf61ede4ec40bfed06a2fe302c30d944daec28c16d0f7ccede26fb32ebfe"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/source-before.json",
+      "sha256": "539a3397bf53b873f38a25f1437f42a7feade09f8e1cde5694be09f6f46ded77"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/source-after.json",
+      "sha256": "b3b17281c426dbf0ad68e087a4ef5b615404a058d2e046d7c860fd566e59d8a7"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/issues.json",
+      "sha256": "dd8bba67fdb24472ecb8ca286a69c248e65e8e06536286834d4423a79a2d71b5"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/dist/assets/index-DpQyfqZ1.js",
+      "sha256": "e7d2d3679eb07c5d5033e265a7fc8a2f308b41f5e00ec1a9749bdd3b820f355b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-014.json",
+      "sha256": "09cf4a426c308e1e4984e98801f14b58d6d16abe01780eb335d5e2bdeac98408"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-013.json",
+      "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-012.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-001.json",
+      "sha256": "63da3d63d7375ac8a08117bde0a14b0b032707f033d58ad5b8085ec3aacaa543"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-017.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-016.json",
+      "sha256": "2fdada4feb5cb195205b5e74b6d163c9c4d1398f4921d87efcb15a0c84986adb"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-015.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-014.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-013.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-012.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-011.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-010.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-009.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-009.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-010.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-011.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-010.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-009.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-008.json",
+      "sha256": "b8315c7d1efac9e960a2a7146925a27afe2af111617b35082b1741fd26d56613"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-018.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-017.json",
+      "sha256": "4e9b6431173de74f5c16714a4ced8f9f73e4517f625b6b904278d9949a4a2551"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-016.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-015.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-014.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-013.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-03-record-012.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-001.json",
+      "sha256": "be688e5df95edfc0ad7a0807c9cfded5b3767b125cfb8a0904a78acfa7501971"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-011.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-012.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-011.json",
+      "sha256": "c92db8d38c96686a0b77095c351e94b41d16917c499810b6cc04e4cc3692fe89"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-010.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-009.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-008.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-007.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-006.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-005.json",
+      "sha256": "f528597a7e383289832b2378a98a6f8033f63e4a7a7688e7eff8288fa5b8c5a4"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-001.json",
+      "sha256": "fe6f0852273ea77cf0f86744baad96b0f1b49d92d9b77433aa549ec83d440f64"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-00-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/manifest.json",
+      "sha256": "278689c649a1efb3a9f0ec30a60521239def5f2ae9018e0f5f876ddfb016992f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/consumer-index.json",
+      "sha256": "5133124c9f006026ba219a71f362d15840bdf7aac4e4908f6566df8ac71a81bb"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/failure.independent.test.ts",
+      "sha256": "02ec4842b0a36c99e5e54dcabb5e6b79623cb4d568874951287e6206d64e1632"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/decoder.independent.test.ts",
+      "sha256": "d1610a17507917d4f76f82f88df6c62201b2604f9104b6982f8abd0f5df50142"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-001.json",
+      "sha256": "f85728bfce59db2020a2e70e72286baac31f8cfe0157fb046e564e8351f35b96"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-001.json",
+      "sha256": "fa344f1c90cd838de103c7a796f6857d6ed01149175d17264c9571c1887d6500"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-016.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-015.json",
+      "sha256": "616f8fe2ec632af89a42fae753a2995966b0d34dc91ea9141cd9d8476b056df2"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-014.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-02-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-013.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-011.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-010.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-009.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-008.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-007.json",
+      "sha256": "bc22f3a43cf22012216a7008ee1a81665377486be8832ec69e54412497f89930"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-01-record-012.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/src/views/projection-collection.ts",
+      "sha256": "f470b5c5e2a42c48375a78d519e0cc237316ea2aa886c5442b3b27554d95c423"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-012.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-014.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-012.json",
+      "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-011.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-010.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-004.json",
+      "sha256": "bca5dc8648a477dee7f7e469957b4511624a4d97783bac5177df3c567450f0e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-001.json",
+      "sha256": "488d4475359d35d8628975632454fb781049cbe77da3988cd5b4f53294581c37"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-018.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-017.json",
+      "sha256": "aea823513ecc350cb82cefe18ffb206de64726b9dc23aa23daf5e4c52eb3ed4a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-016.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-015.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-013.json",
+      "sha256": "c54d5b0ca17df5f65244213507ab8cb6603305f98a2ea712383b340f9aa39f27"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-014.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-015.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-016.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-011.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-010.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-009.json",
+      "sha256": "bde6eecf50fa78a266aa03227314d6edd26cf6286b1028e74c207dfbc23e499d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-008.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-004.json",
+      "sha256": "ca5951a4251ddbc3c42f49c20ea22e0762178de7383a2db004a126531dc1a366"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-014.json",
+      "sha256": "a7791b0f21d29ddadb54e3ac0781ba16970be8e771d9b20966eeb3bdb0b06ffa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-001.json",
+      "sha256": "7ed6e8a01412043f3765260438677f08bfbac2054f325c551114606dc42b6eac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-022.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-021.json",
+      "sha256": "3956d44c88882cd0e12145f712274fd44bd04b6899efa10cd8b5a38f02bdb3e9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-020.json",
+      "sha256": "7053e911e9a3c85c6b3230ec639005751d23ed9718f493457d3effc15292d5a9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-019.json",
+      "sha256": "a5555574c687bb030877afe19670f2679b2e9fd007447762399fe53aafb656c9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-018.json",
+      "sha256": "fa4534fe06178feba34ab27a26dc77978991866965fb1bd197c7eda179724121"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-01-record-017.json",
+      "sha256": "03672e35df1355dd0ef0fa2d46321599d4ff92dce0245f3dfe6822c76eb835e3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-02-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-013.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-013.json",
+      "sha256": "9598696563f2ddd485d4025308333e7ad2cbef1926452f2e09bd57ffa615cd1e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-011.json",
+      "sha256": "ae6367c793a98044f194eecd5af92393a6d3d284da52e70d062bba9d27a067be"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-010.json",
+      "sha256": "3efb15843e4c0ce85d95cd9a6d99558893bece37a7acace056b9e5a3a730c9aa"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-009.json",
+      "sha256": "47b121d943030f1af5437103eeea555f82d5944c4f90cb5af48fd33718cb3d49"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-008.json",
+      "sha256": "ab6c7e7882144deccb64331fba75579924ffbfb13b7d34ccb92293accddc337e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-007.json",
+      "sha256": "f6a1740c65b9b13481523fb9f733f830bfe635ed83b94b9e0b26dc327ed2ce48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-006.json",
+      "sha256": "b37e5edfbfa5b5daa9923e31cfac701f295803b86c4624e90d7d9c77470c2df0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-005.json",
+      "sha256": "d99d18d61ba6b7fd757f8ebb6f11bb8e7e557f87022b15a1cc47575727d7ff53"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-004.json",
+      "sha256": "33dd0cc108a694a629bdb768369cbb505cafbd9eea0d67726ee2ac299bd8c2f9"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-003.json",
+      "sha256": "cd96d6a3af40597b51adfef096f3f875ce5dd3c90f7b407b9cbf6279ffd18bf3"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-002.json",
+      "sha256": "c74d3d0f48ec0b9e4bbbec522cd620184c18406cf960e58f04541aeb4bc1144a"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-001.json",
+      "sha256": "be688e5df95edfc0ad7a0807c9cfded5b3767b125cfb8a0904a78acfa7501971"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-000.json",
+      "sha256": "c1490550e9c65de8cb88b6ab9bb262fd1d7ef4c0d0ffe91b2cf96eb68a3c0907"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-020.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-019.json",
+      "sha256": "50483882678538ca2e131f762989ca2ee6c597003ce4e0b7f407f6b19627f506"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-018.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-017.json",
+      "sha256": "b707b975b95f412348f58c342436b8e85c4a97465665e73cd205ceff2d2c9de8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-016.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-04-record-015.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-011.json",
+      "sha256": "019090693a4cefc8f4548a0200fb7369e7798f03bde430ceb74061c657e97e2e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-012.json",
+      "sha256": "2ed28d5b9472c0948a6c60f4aaea850f78328ce81bf8d1beab1be8c341f35761"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-013.json",
+      "sha256": "ecc0fcfef92fa8a41ac32dce9a7abad5e00ae35397e91f13b20dc3180f627490"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-014.json",
+      "sha256": "b3c3bba46b4c2f35f3422bff3054844bbc6cf288087b639a25307cdd5981e021"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-010.json",
+      "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-009.json",
+      "sha256": "a8f4df60182863b4c876bb9bcb3dc65ffa3f86e8af0c8dc9ca23118c0f97d86d"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-008.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-007.json",
+      "sha256": "4d44d403fb8e44ce6e15b75cad2ba73eabb02f1dbb0008deb667acb2ead64b48"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-006.json",
+      "sha256": "959f92142e3d90d23634e8055d8187e405baa60052f918bd2e1c7b3c10f9dbac"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-005.json",
+      "sha256": "aa2547f4156143140be71124573c72188752978c4a5dc870356dec47e69268ae"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-004.json",
+      "sha256": "2adad15b616e514ec289d54813d6440a4d703727ed72c7e96f54df234b926313"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-003.json",
+      "sha256": "fb95545ed1374ab7dbd4ae6682835e2eb57d306e87954636b2f22a06920dc032"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-012.json",
+      "sha256": "6f4a9db9a792607a2a5a3685646e4766dcce5da4a54defb582a59b8a41c09f65"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-002.json",
+      "sha256": "c18406060bbf516af9f209fafef17d7041514a92e03eb3b603e71ba6e63da240"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-000.json",
+      "sha256": "68e6f2c501fce5707db6b36a13319c9f2a710c7da9eb58290d3b7421dd61c836"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/manifest.json",
+      "sha256": "1581ef719e94809bb9c33cd254a56f715c9193602ebecf452e6d0937b7268f5b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-020.bin",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-019.json",
+      "sha256": "50483882678538ca2e131f762989ca2ee6c597003ce4e0b7f407f6b19627f506"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-018.json",
+      "sha256": "2015e2aafe8314909b008e74a564326964d49011e786e0ad1ce4204c14df4eb0"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-017.json",
+      "sha256": "b707b975b95f412348f58c342436b8e85c4a97465665e73cd205ceff2d2c9de8"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-016.json",
+      "sha256": "e163b3bf44bb21b3779467a1d4ad5097c4310745ab324fcb996a8e86b7267a0f"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v1/stage-05-record-015.json",
+      "sha256": "602df1886d5ac54139012a942a1b511f0b0dfc24b45f531239ad418c72b7c48b"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/independent-projection/fixtures/rust-v7/v2/stage-00-record-001.json",
+      "sha256": "aaa829740bbaf2e1646e92c3ecbb814dd77ceea054de5e45afba1164afe11c42"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/workspace/clients/web/tests/views/projection.test.ts",
+      "sha256": "cf7e2184f43cec5b4a417cbbaa62be75abb99146f2ce1ba304bcb5c0d8e2f25e"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/formal-v2/freeze.json",
+      "sha256": "b864af4cfd79ec8434bf79a1e3101c9c7a7f55e161061272271e14d79a7e1401"
+    },
+    {
+      "path": "testing/runs/deliver-codex-session-loop/q3-web-projection-independent/candidate-delivery-review.md",
+      "sha256": "a0648a4c3d94c609f5a7929090304551482c1e86e60733c9d9bf78a2a3e2c791"
+    }
+  ]
+}

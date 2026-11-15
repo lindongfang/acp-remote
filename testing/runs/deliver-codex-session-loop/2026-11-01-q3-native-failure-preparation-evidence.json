@@ -1,0 +1,1226 @@
+{
+  "scope": "Independent preparation only, formal Native80=0; v11 actual FK/caller drop green, report-loss not executed; v13 actual Owned branches green, Revoked not executed; v14 NOOWNER001 and v15 PRECLOSE001/002 remain Open. Root hash-verified all fixed source inputs; original failures preserved.",
+  "sources": [
+    {
+      "version": 11,
+      "count": 378,
+      "location": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\workspace",
+      "embedded": false
+    },
+    {
+      "version": 13,
+      "count": 379,
+      "location": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\workspace",
+      "embedded": false
+    },
+    {
+      "version": 14,
+      "count": 380,
+      "location": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\workspace",
+      "embedded": false
+    },
+    {
+      "version": 15,
+      "count": 381,
+      "location": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\workspace",
+      "embedded": false
+    }
+  ],
+  "entries": [
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\assets\\native_sql_faults.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/assets/native_sql_faults.rs",
+      "sha256": "4e9715aae4ffb55bd2fbe56de3572ebf0b1071e60627e23d380f2b8c8efaecde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\assets\\prepare-source.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/assets/prepare-source.mjs",
+      "sha256": "8c734694e9d95829f868951eca4dab97db9296dfbe055fd74140f65173e60277"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\compile-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/compile-assets.mjs",
+      "sha256": "6e45ee45bf6a7606d245dfe940e79f062ffb26b9a4f01821fd968dd22fbe7b47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\freeze-v11.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/freeze-v11.mjs",
+      "sha256": "33c1f1dbed01003d3394e679d08f80d69e62d688ec13ec4b6283823740ca00e7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\history\\first-compile-source.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/history/first-compile-source.json",
+      "sha256": "152a8ae7b02a0dbe2ec0ef7199473a2c08cef295a1fefa74a09ae40e39414d12"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\history\\first-compile-source\\app\\tests\\native_dispatch_acceptance\\native_sql_faults.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/history/first-compile-source/app/tests/native_dispatch_acceptance/native_sql_faults.rs",
+      "sha256": "4e9715aae4ffb55bd2fbe56de3572ebf0b1071e60627e23d380f2b8c8efaecde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\history\\first-compile-source\\app\\tests\\native_dispatch_acceptance\\park_real_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/history/first-compile-source/app/tests/native_dispatch_acceptance/park_real_sql.rs",
+      "sha256": "51c97c17e474ba3219e0e1e16c7da0fb59f89d9df7928be82cae86dbe42c354b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\inputs-v11.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/inputs-v11.json",
+      "sha256": "4ce14c1ab2e5d95badf994d65c9107a14b429ef2d860862c9bd9e6f93bfe82b7"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-real-commit-787.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-real-commit-787.json",
+      "sha256": "e584b380a0338a529f165ba1b684db8d2cf520c4505c64751a1cb47773143a89"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-real-commit-787.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-real-commit-787.stderr.log",
+      "sha256": "88da39d7b553d4a2146c0f965fb357cbd0427841c2cac6e9abc9ccdf8ee5fcfe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-real-commit-787.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-real-commit-787.stdout.log",
+      "sha256": "f60d1d2bbb0262fed3925d5cee4ddb9a47cae59bbde5552cce93f5cdf4ffc52e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-sql-faults-compile-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-sql-faults-compile-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-sql-faults-compile-child.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-sql-faults-compile-child.stderr.log",
+      "sha256": "72dcd0b70cc4db27c3b94195493797091889cd0e3927bb4ec88157c64b20b8fc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-sql-faults-compile-child.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-sql-faults-compile-child.stdout.jsonl",
+      "sha256": "0e5d822de9f8d51f5942fee806f98cdd843e49f67ab7dfa383dafb08491ebf57"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-sql-faults-compile-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-sql-faults-compile-lib.json",
+      "sha256": "21c0baedd4c8d44373e889a7e66cf2ad42484f82f6303f2c032bb7367510ec72"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-sql-faults-compile-lib.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-sql-faults-compile-lib.stderr.log",
+      "sha256": "ab8d6f0cb7d0f18a8a33a4c3f65e5791c79c01c8d2d190a7a796fa5ec3f6da76"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\logs\\native-sql-faults-compile-lib.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/logs/native-sql-faults-compile-lib.stdout.jsonl",
+      "sha256": "a2806b22fe87b882617743a2290f66b388a054f9a7b0986c0b73647f88c18b37"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\mount-sql-faults.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/mount-sql-faults.mjs",
+      "sha256": "2bedd163d6efe174ff1d72617b5c1fb6529a07146180efd31baaf5652854dc32"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\native-sql-preparation-report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/native-sql-preparation-report.md",
+      "sha256": "55865c9322dffa8e03a6cf9af0252091ef034acc77c4ebd89ffbdc9283cbb5bb"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\Cargo.toml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/Cargo.toml",
+      "sha256": "1672ffd396e9ab60483f472039a5041a1bdfaac9e1ff821f013ab14e12678981"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\adapters\\acp\\native_dispatch.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/adapters/acp/native_dispatch.rs",
+      "sha256": "a1da4e034f5fcc45691b48fcdfaeafc3fc598f47d58287e7a0fb4c265c1573a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\application\\native_dispatch\\control.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/application/native_dispatch/control.rs",
+      "sha256": "4ef3873e8929dc77b2d546174cc4c7ea0d51b806e929348a73ff06e2faf2a4c8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/application/native_dispatch/environment.rs",
+      "sha256": "38b72ebd33bc0acd7a79929b3268c2b59ef19060048516ab8067f35456e32fcc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\application\\native_dispatch\\mod.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/application/native_dispatch/mod.rs",
+      "sha256": "ed8ae6996cae9814047b8c86ed8d7a63f8c144f6a3e50a96f80b1863c2b5d5de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/application/native_dispatch/observation.rs",
+      "sha256": "b25098d7ec84eff07944070947bc1927d69ba81bebc97231f9b3a1597f35cea3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/application/queue_owner/native.rs",
+      "sha256": "5b538768fb72bb27914f68d0865f24474df8ddcce92c17de8a7a04f08fd9f9e6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/lib.rs",
+      "sha256": "3178435381d791d37a1d1a4231fe12168ff1f23d1ae62b86d95ba64fd5fe562f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\src\\session_storage\\schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/src/session_storage/schema.rs",
+      "sha256": "d04772e2dec36195475b60e136b57a4617c940574a5091440e6343e90f9d6084"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\closure_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/closure_stages.rs",
+      "sha256": "a47aed564f1f7e7fc7c0b1358310ffbf30d3ff950e69c47313c8d2986b87c2b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\controlled_io.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\delivery4.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/delivery4.rs",
+      "sha256": "83c259d74c7dbbffdac6cfec8d007fd749e5c61806043c2ef22752264ff4314c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\factory_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/factory_preparation.rs",
+      "sha256": "eb1747690acb98cc9d0020b4d685a28b03ce946cb8297aea675ed2e6ead76858"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\legacy_fixtures.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/legacy_fixtures.rs",
+      "sha256": "694dc9ae93759d070929f6f1ddb1a744c96b6fc8b411d8e6a1e74878bd94e242"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\native_commit_unknown.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/native_commit_unknown.rs",
+      "sha256": "0054b02c52039620fd0099d741817637861983b6c86545e077269c8ffcd0488e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\native_sql_faults.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/native_sql_faults.rs",
+      "sha256": "4e9715aae4ffb55bd2fbe56de3572ebf0b1071e60627e23d380f2b8c8efaecde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "5e66c0ef2a220e13519b09cf85b3ffe389c185f3472330477cd6aae015be60ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\park_abi_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/park_abi_preparation.rs",
+      "sha256": "b5d596e873d212a4f33136147dae77dc4d07cfd19da65103084c69211b1e9210"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\park_more_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/park_more_sql.rs",
+      "sha256": "cbf18f2188b6692166f2a2e8632c0417349def7bf001ec3c0d15798821b3aaef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\park_real_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/park_real_sql.rs",
+      "sha256": "51c97c17e474ba3219e0e1e16c7da0fb59f89d9df7928be82cae86dbe42c354b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\park_sql_failure.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/park_sql_failure.rs",
+      "sha256": "d937e4c39b10ee782aed480012970c8e2368cd9fd754eb1788212c24f6744236"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\priority_late_cancel.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/priority_late_cancel.rs",
+      "sha256": "a28774b505b80bcc3173f1f1bf89ac8498ddc4dcddd2d65b030d91678f8517c6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\protocol_child.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/protocol_child.rs",
+      "sha256": "e9e2bb3b5bb3f6c7e0cf7f88b52711f6b1e6db313ac9bc5cf4301819b370ca44"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\registration-schema5.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/registration-schema5.sql",
+      "sha256": "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\replay_port.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/replay_port.rs",
+      "sha256": "c60ae0bd750eac17bcbe6def84f54504bc886fb82cce48b3ac5476bd13958f23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\replay_snapshot.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/replay_snapshot.rs",
+      "sha256": "bc95e8b11632de3d6795d8299dd743f270b951110484c3fadf9c91f6f086151b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\shared_live.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/shared_live.rs",
+      "sha256": "a9a467e4a328e20c6d76f347a73e9db0d6788cb40139ca43e1fe11b95051e475"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\shutdown_caller_drop.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/shutdown_caller_drop.rs",
+      "sha256": "3c210eb52ba81c1b880beb33771585021b1f696bd6bf96b9a7fc4f0223ad6fa9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\portable\\app\\tests\\native_dispatch_acceptance\\v2_sequencing.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/portable/app/tests/native_dispatch_acceptance/v2_sequencing.rs",
+      "sha256": "23d6f1f03acfec7de1c1f3ccb07ef95baa78bd9c2dfeeeb87e3ff992d217a030"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\run-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/run-assets.mjs",
+      "sha256": "9433f40b2e80e25c91c5eb820003b7c543f3eb89176e4e69877fb4752cb76f5e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\source-stage.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/source-stage.mjs",
+      "sha256": "514c14995de5bf1a41bcb375f6b6ee47eef581f69eabd198f6790a833e123689"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\source-v11.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/source-v11.json",
+      "sha256": "804f942c88e3f14db2e212117752c57403df56d4dfa031843d27d18406b2e18e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v11\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v11/freeze.json",
+      "sha256": "8c72615c103ef1ae9f353168fcf7aaad9bebb9b64b72d85176f5bf6dbd997515"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\assets\\launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/assets/launch_stages.rs",
+      "sha256": "b97b386b5fcb3fdd847b17e3b688440d08cff3e62e1db0610423891b2dce5eb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\assets\\prepare-source.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/assets/prepare-source.mjs",
+      "sha256": "f4fd56f1806f752d358e27e247a562182a6228c15b5dada906f24fd812bbf01b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\compile-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/compile-assets.mjs",
+      "sha256": "6e45ee45bf6a7606d245dfe940e79f062ffb26b9a4f01821fd968dd22fbe7b47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\finalize-v13.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/finalize-v13.mjs",
+      "sha256": "a44f50b5b93a3cc5ce6840d515d8b411d9e06732a11600c356622544e7418fe1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\history\\v12-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/history/v12-freeze.json",
+      "sha256": "ab2d862467f8de85916c54e761ff73fd49a3e7fdc4bcaead5c1d7f1f5b132ad3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\history\\v12-source.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/history/v12-source.json",
+      "sha256": "42dec964f4d34fc7578d92fea0ab92532c62a9bdbdbf802f6b68ef52104ecf8c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\inputs-v13.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/inputs-v13.json",
+      "sha256": "a53f8629c88930ce27ad017c5b2bfd4438be935d800ad43e90672b7272963c1a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-compile-01-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-compile-01-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-compile-01-child.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-compile-01-child.stderr.log",
+      "sha256": "4c0b9fdb8b4deaf499a4db0891adc8e1705b9bc2a8091b7abac33366253f1c32"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-compile-01-child.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-compile-01-child.stdout.jsonl",
+      "sha256": "094384259dfe3942c52cf1c5d589bb5f6738ff6d97f27c60086cd37ae6f30324"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-compile-01-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-compile-01-lib.json",
+      "sha256": "21c0baedd4c8d44373e889a7e66cf2ad42484f82f6303f2c032bb7367510ec72"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-compile-01-lib.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-compile-01-lib.stderr.log",
+      "sha256": "47c563886f9bc282092b093d3a00ee3a20db79288c23d6308192662c5407470a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-compile-01-lib.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-compile-01-lib.stdout.jsonl",
+      "sha256": "10b67ce10d89b7373198cddd54fdcb8855144c7837b16e57ad1bcb07b0dbab79"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-stage-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-stage-first.json",
+      "sha256": "53af117302bb1e9afc1377fe82ae4d92a9bf055f36c5f456b36971c498abed9a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-stage-first.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-stage-first.stderr.log",
+      "sha256": "9bd22e62efc4d5b8a9469664bfd9e31f424d39bb97d175100e26cc15afe56e23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\logs\\launch-stage-first.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/logs/launch-stage-first.stdout.log",
+      "sha256": "b446af9fea9cb237324049609899c75fb7f39f418de5d10644c59c3e3d787b27"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\Cargo.toml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/Cargo.toml",
+      "sha256": "1672ffd396e9ab60483f472039a5041a1bdfaac9e1ff821f013ab14e12678981"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\adapters\\acp\\native_dispatch.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/adapters/acp/native_dispatch.rs",
+      "sha256": "a1da4e034f5fcc45691b48fcdfaeafc3fc598f47d58287e7a0fb4c265c1573a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\application\\native_dispatch\\control.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/application/native_dispatch/control.rs",
+      "sha256": "4ef3873e8929dc77b2d546174cc4c7ea0d51b806e929348a73ff06e2faf2a4c8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/application/native_dispatch/environment.rs",
+      "sha256": "38b72ebd33bc0acd7a79929b3268c2b59ef19060048516ab8067f35456e32fcc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\application\\native_dispatch\\mod.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/application/native_dispatch/mod.rs",
+      "sha256": "ed8ae6996cae9814047b8c86ed8d7a63f8c144f6a3e50a96f80b1863c2b5d5de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/application/native_dispatch/observation.rs",
+      "sha256": "b25098d7ec84eff07944070947bc1927d69ba81bebc97231f9b3a1597f35cea3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/application/queue_owner/native.rs",
+      "sha256": "5b538768fb72bb27914f68d0865f24474df8ddcce92c17de8a7a04f08fd9f9e6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/lib.rs",
+      "sha256": "3178435381d791d37a1d1a4231fe12168ff1f23d1ae62b86d95ba64fd5fe562f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\src\\session_storage\\schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/src/session_storage/schema.rs",
+      "sha256": "d04772e2dec36195475b60e136b57a4617c940574a5091440e6343e90f9d6084"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\closure_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/closure_stages.rs",
+      "sha256": "a47aed564f1f7e7fc7c0b1358310ffbf30d3ff950e69c47313c8d2986b87c2b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\controlled_io.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\delivery4.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/delivery4.rs",
+      "sha256": "83c259d74c7dbbffdac6cfec8d007fd749e5c61806043c2ef22752264ff4314c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\factory_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/factory_preparation.rs",
+      "sha256": "eb1747690acb98cc9d0020b4d685a28b03ce946cb8297aea675ed2e6ead76858"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/launch_stages.rs",
+      "sha256": "b97b386b5fcb3fdd847b17e3b688440d08cff3e62e1db0610423891b2dce5eb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\legacy_fixtures.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/legacy_fixtures.rs",
+      "sha256": "694dc9ae93759d070929f6f1ddb1a744c96b6fc8b411d8e6a1e74878bd94e242"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\native_commit_unknown.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/native_commit_unknown.rs",
+      "sha256": "0054b02c52039620fd0099d741817637861983b6c86545e077269c8ffcd0488e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\native_sql_faults.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/native_sql_faults.rs",
+      "sha256": "4e9715aae4ffb55bd2fbe56de3572ebf0b1071e60627e23d380f2b8c8efaecde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "5e66c0ef2a220e13519b09cf85b3ffe389c185f3472330477cd6aae015be60ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\park_abi_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/park_abi_preparation.rs",
+      "sha256": "b5d596e873d212a4f33136147dae77dc4d07cfd19da65103084c69211b1e9210"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\park_more_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/park_more_sql.rs",
+      "sha256": "cbf18f2188b6692166f2a2e8632c0417349def7bf001ec3c0d15798821b3aaef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\park_real_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/park_real_sql.rs",
+      "sha256": "8325dc1846d8408a30b06377eb4fe47c9c6feec77f0481a7a3497e309520ad7e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\park_sql_failure.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/park_sql_failure.rs",
+      "sha256": "d937e4c39b10ee782aed480012970c8e2368cd9fd754eb1788212c24f6744236"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\priority_late_cancel.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/priority_late_cancel.rs",
+      "sha256": "a28774b505b80bcc3173f1f1bf89ac8498ddc4dcddd2d65b030d91678f8517c6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\protocol_child.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/protocol_child.rs",
+      "sha256": "e9e2bb3b5bb3f6c7e0cf7f88b52711f6b1e6db313ac9bc5cf4301819b370ca44"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\registration-schema5.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/registration-schema5.sql",
+      "sha256": "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\replay_port.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/replay_port.rs",
+      "sha256": "c60ae0bd750eac17bcbe6def84f54504bc886fb82cce48b3ac5476bd13958f23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\replay_snapshot.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/replay_snapshot.rs",
+      "sha256": "bc95e8b11632de3d6795d8299dd743f270b951110484c3fadf9c91f6f086151b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\shared_live.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/shared_live.rs",
+      "sha256": "a9a467e4a328e20c6d76f347a73e9db0d6788cb40139ca43e1fe11b95051e475"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\shutdown_caller_drop.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/shutdown_caller_drop.rs",
+      "sha256": "3c210eb52ba81c1b880beb33771585021b1f696bd6bf96b9a7fc4f0223ad6fa9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\portable\\app\\tests\\native_dispatch_acceptance\\v2_sequencing.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/portable/app/tests/native_dispatch_acceptance/v2_sequencing.rs",
+      "sha256": "23d6f1f03acfec7de1c1f3ccb07ef95baa78bd9c2dfeeeb87e3ff992d217a030"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/report.md",
+      "sha256": "7092e8d60a54f54f1559bd6c09ab5077f59c4e3e18eb42992ad19509c593ce60"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\run-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/run-assets.mjs",
+      "sha256": "9433f40b2e80e25c91c5eb820003b7c543f3eb89176e4e69877fb4752cb76f5e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\source-v13.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/source-v13.json",
+      "sha256": "dc2a7cd36f0e493720bd0a332369c90f35f71e109f7c9af11072bc8ae6011d45"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v13\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v13/freeze.json",
+      "sha256": "04bbe27d51bfab5ec3e05d3ff3da152d419a694371f9240cc20724d835453311"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\assets\\launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/assets/launch_stages.rs",
+      "sha256": "b97b386b5fcb3fdd847b17e3b688440d08cff3e62e1db0610423891b2dce5eb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\assets\\prepare-source.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/assets/prepare-source.mjs",
+      "sha256": "f4fd56f1806f752d358e27e247a562182a6228c15b5dada906f24fd812bbf01b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\assets\\unknown_provider.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/assets/unknown_provider.rs",
+      "sha256": "4715f6f3a2453ff99a1c253ff37be91c4c0d54e56c32afd752055c41df9b25fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\cleanup-first-failure.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/cleanup-first-failure.ps1",
+      "sha256": "cee1946434b2a548c4493dacad936418695b3a35602a4a7daccdc5cadad4347a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\compile-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/compile-assets.mjs",
+      "sha256": "6e45ee45bf6a7606d245dfe940e79f062ffb26b9a4f01821fd968dd22fbe7b47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\finalize-v14.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/finalize-v14.mjs",
+      "sha256": "79e62bbdfc72f2cc9b6686a8ad87e1bfc4fd6d80ab796478802c5be9009edb40"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\history\\v13-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/history/v13-freeze.json",
+      "sha256": "04bbe27d51bfab5ec3e05d3ff3da152d419a694371f9240cc20724d835453311"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\history\\v13-source-v13.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/history/v13-source-v13.json",
+      "sha256": "dc2a7cd36f0e493720bd0a332369c90f35f71e109f7c9af11072bc8ae6011d45"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\inputs-v14.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/inputs-v14.json",
+      "sha256": "d215f3930e68b9dea57c246a17c70c012ec50551cc938e831a2f6e8acb062b02"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\provider-compile-01-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/provider-compile-01-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\provider-compile-01-child.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/provider-compile-01-child.stderr.log",
+      "sha256": "6108cdef648783f3e8c6d4b92b835a7b05dd41055085cfba571542da8a013bc0"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\provider-compile-01-child.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/provider-compile-01-child.stdout.jsonl",
+      "sha256": "0ce79d1c7dc8a72ca552c16ca212732705caeebedfc1f651395f03863866f0e4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\provider-compile-01-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/provider-compile-01-lib.json",
+      "sha256": "21c0baedd4c8d44373e889a7e66cf2ad42484f82f6303f2c032bb7367510ec72"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\provider-compile-01-lib.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/provider-compile-01-lib.stderr.log",
+      "sha256": "19a65f188c9dd2e40af4a99d84afba24f82697e4d00a50991185c506977f9a99"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\provider-compile-01-lib.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/provider-compile-01-lib.stdout.jsonl",
+      "sha256": "282a7154467d9c6e974299be3d941a3c6fe26a33415c8d3a54eddebe2a718669"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\unknown-provider-first-post-exit-cleanup.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/unknown-provider-first-post-exit-cleanup.json",
+      "sha256": "8cafeb9197cc9c8cd8df18612ad41bd47954842ba1dbe3e3faca941db7a42a65"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\unknown-provider-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/unknown-provider-first.json",
+      "sha256": "f51c395616db1c2cd63b1c3e5db2f611af8ed6496f4e5502d02358b6bff3e4ba"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\unknown-provider-first.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/unknown-provider-first.stderr.log",
+      "sha256": "d345e3602854d3f3167e9638c5346f517b4cbd4aeed59baeb5a031c2a5135361"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\logs\\unknown-provider-first.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/logs/unknown-provider-first.stdout.log",
+      "sha256": "52bbdc8c1cd7f8192450703d18ee63f8a1dec78373623eedd4f26e340fd5aff3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\Cargo.toml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/Cargo.toml",
+      "sha256": "1672ffd396e9ab60483f472039a5041a1bdfaac9e1ff821f013ab14e12678981"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\adapters\\acp\\native_dispatch.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/adapters/acp/native_dispatch.rs",
+      "sha256": "a1da4e034f5fcc45691b48fcdfaeafc3fc598f47d58287e7a0fb4c265c1573a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\application\\native_dispatch\\control.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/application/native_dispatch/control.rs",
+      "sha256": "4ef3873e8929dc77b2d546174cc4c7ea0d51b806e929348a73ff06e2faf2a4c8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/application/native_dispatch/environment.rs",
+      "sha256": "38b72ebd33bc0acd7a79929b3268c2b59ef19060048516ab8067f35456e32fcc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\application\\native_dispatch\\mod.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/application/native_dispatch/mod.rs",
+      "sha256": "ed8ae6996cae9814047b8c86ed8d7a63f8c144f6a3e50a96f80b1863c2b5d5de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/application/native_dispatch/observation.rs",
+      "sha256": "b25098d7ec84eff07944070947bc1927d69ba81bebc97231f9b3a1597f35cea3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/application/queue_owner/native.rs",
+      "sha256": "5b538768fb72bb27914f68d0865f24474df8ddcce92c17de8a7a04f08fd9f9e6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/lib.rs",
+      "sha256": "3178435381d791d37a1d1a4231fe12168ff1f23d1ae62b86d95ba64fd5fe562f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\src\\session_storage\\schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/src/session_storage/schema.rs",
+      "sha256": "d04772e2dec36195475b60e136b57a4617c940574a5091440e6343e90f9d6084"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\closure_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/closure_stages.rs",
+      "sha256": "a47aed564f1f7e7fc7c0b1358310ffbf30d3ff950e69c47313c8d2986b87c2b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\controlled_io.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\delivery4.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/delivery4.rs",
+      "sha256": "83c259d74c7dbbffdac6cfec8d007fd749e5c61806043c2ef22752264ff4314c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\factory_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/factory_preparation.rs",
+      "sha256": "eb1747690acb98cc9d0020b4d685a28b03ce946cb8297aea675ed2e6ead76858"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/launch_stages.rs",
+      "sha256": "b97b386b5fcb3fdd847b17e3b688440d08cff3e62e1db0610423891b2dce5eb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\legacy_fixtures.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/legacy_fixtures.rs",
+      "sha256": "694dc9ae93759d070929f6f1ddb1a744c96b6fc8b411d8e6a1e74878bd94e242"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\native_commit_unknown.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/native_commit_unknown.rs",
+      "sha256": "0054b02c52039620fd0099d741817637861983b6c86545e077269c8ffcd0488e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\native_sql_faults.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/native_sql_faults.rs",
+      "sha256": "4e9715aae4ffb55bd2fbe56de3572ebf0b1071e60627e23d380f2b8c8efaecde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "5e66c0ef2a220e13519b09cf85b3ffe389c185f3472330477cd6aae015be60ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\park_abi_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/park_abi_preparation.rs",
+      "sha256": "b5d596e873d212a4f33136147dae77dc4d07cfd19da65103084c69211b1e9210"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\park_more_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/park_more_sql.rs",
+      "sha256": "cbf18f2188b6692166f2a2e8632c0417349def7bf001ec3c0d15798821b3aaef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\park_real_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/park_real_sql.rs",
+      "sha256": "b74e0314235ee1e2e4223a0a4042d52fbdeaf777469a093bf675ebfbde5caff3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\park_sql_failure.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/park_sql_failure.rs",
+      "sha256": "d937e4c39b10ee782aed480012970c8e2368cd9fd754eb1788212c24f6744236"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\priority_late_cancel.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/priority_late_cancel.rs",
+      "sha256": "a28774b505b80bcc3173f1f1bf89ac8498ddc4dcddd2d65b030d91678f8517c6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\protocol_child.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/protocol_child.rs",
+      "sha256": "e9e2bb3b5bb3f6c7e0cf7f88b52711f6b1e6db313ac9bc5cf4301819b370ca44"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\registration-schema5.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/registration-schema5.sql",
+      "sha256": "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\replay_port.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/replay_port.rs",
+      "sha256": "c60ae0bd750eac17bcbe6def84f54504bc886fb82cce48b3ac5476bd13958f23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\replay_snapshot.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/replay_snapshot.rs",
+      "sha256": "bc95e8b11632de3d6795d8299dd743f270b951110484c3fadf9c91f6f086151b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\shared_live.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/shared_live.rs",
+      "sha256": "a9a467e4a328e20c6d76f347a73e9db0d6788cb40139ca43e1fe11b95051e475"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\shutdown_caller_drop.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/shutdown_caller_drop.rs",
+      "sha256": "3c210eb52ba81c1b880beb33771585021b1f696bd6bf96b9a7fc4f0223ad6fa9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\unknown_provider.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/unknown_provider.rs",
+      "sha256": "4715f6f3a2453ff99a1c253ff37be91c4c0d54e56c32afd752055c41df9b25fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\portable\\app\\tests\\native_dispatch_acceptance\\v2_sequencing.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/portable/app/tests/native_dispatch_acceptance/v2_sequencing.rs",
+      "sha256": "23d6f1f03acfec7de1c1f3ccb07ef95baa78bd9c2dfeeeb87e3ff992d217a030"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\prepare-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/prepare-assets.mjs",
+      "sha256": "673fbf63a2f8e2087338d36262fb6f8bcd254859da9d97aea1e336c1e05d007e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/report.md",
+      "sha256": "a3ff7069aa743c2703902bf22cb0d059ed6b0ae4431f020b672314edba3f182f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\run-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/run-assets.mjs",
+      "sha256": "9433f40b2e80e25c91c5eb820003b7c543f3eb89176e4e69877fb4752cb76f5e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\source-v14.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/source-v14.json",
+      "sha256": "7f005282eed78f281de8bb9cbbc2c670fb3a6584112eaf26c7849e16d12f19e3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v14\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v14/freeze.json",
+      "sha256": "ba239789f8d5c09ad96b67394e2b30d10c58a17443a1139fd9c40d429c9aebf2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\assets\\launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/assets/launch_stages.rs",
+      "sha256": "b97b386b5fcb3fdd847b17e3b688440d08cff3e62e1db0610423891b2dce5eb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\assets\\prepare-source.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/assets/prepare-source.mjs",
+      "sha256": "f4fd56f1806f752d358e27e247a562182a6228c15b5dada906f24fd812bbf01b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\assets\\replay_port.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/assets/replay_port.rs",
+      "sha256": "2ef1210097684930f5b6df4d73f2a6336e52866ce0a44a3b1b2dba3a068fbe16"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\assets\\sql_launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/assets/sql_launch_stages.rs",
+      "sha256": "a2f191378068ac7ce21ef98ab24e288a158ffc618a038bbd8c10c14276be1199"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\assets\\unknown_provider.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/assets/unknown_provider.rs",
+      "sha256": "4715f6f3a2453ff99a1c253ff37be91c4c0d54e56c32afd752055c41df9b25fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\capture-failed-sql.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/capture-failed-sql.mjs",
+      "sha256": "5014e1726515b9f2f0c44a471033a36d3d03f27408fc4b9aade84cd313c021cd"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\cleanup-own-failed.ps1",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/cleanup-own-failed.ps1",
+      "sha256": "1dc93eec1131424a54fcbdbce1bc97cf201bd43fb8b4126fc3f98cf7fcb61545"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\compile-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/compile-assets.mjs",
+      "sha256": "6e45ee45bf6a7606d245dfe940e79f062ffb26b9a4f01821fd968dd22fbe7b47"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\finalize-v15.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/finalize-v15.mjs",
+      "sha256": "754144b01afcb7a84f1456daf3d39e35ec30270841b5443c5fae2815422a8444"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\fix-reader-wrapper.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/fix-reader-wrapper.mjs",
+      "sha256": "baa23732c3fec3d2514416f9cf8ceb29573659e801443631e4f7e4eaee0a8c2a"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\history\\replay-port-before-reader-decoration.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/history/replay-port-before-reader-decoration.rs",
+      "sha256": "c60ae0bd750eac17bcbe6def84f54504bc886fb82cce48b3ac5476bd13958f23"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\history\\sql-launch-stages-initial-private-field-compile.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/history/sql-launch-stages-initial-private-field-compile.rs",
+      "sha256": "492cd5ae00d6b720d620ca2f5c0ddd361e65b8a4dcd258c84b4c1cd5e45705c1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\history\\v14-freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/history/v14-freeze.json",
+      "sha256": "ba239789f8d5c09ad96b67394e2b30d10c58a17443a1139fd9c40d429c9aebf2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\history\\v14-source-v14.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/history/v14-source-v14.json",
+      "sha256": "7f005282eed78f281de8bb9cbbc2c670fb3a6584112eaf26c7849e16d12f19e3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\inputs-v15.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/inputs-v15.json",
+      "sha256": "0ddd4f407feed60fbf2ba532e4ec5e5997a4e98d50f4ce0abf533ec50bc2d058"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-launch-stages-first-post-exit-cleanup.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-launch-stages-first-post-exit-cleanup.json",
+      "sha256": "ddc082845e53d0022879db0f61bc76bcc9e6ff98b7add03b11a0e9c06c72df3b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-launch-stages-first-post-exit-sql.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-launch-stages-first-post-exit-sql.json",
+      "sha256": "5b6b23eaa879caeb6ddb05551c809878f36c5dbc8028c7038267dcc9324e98be"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-launch-stages-first.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-launch-stages-first.json",
+      "sha256": "9de1550d810a14eb903491baef52d5e243f1372f50a2966c51f2eaca3a351733"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-launch-stages-first.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-launch-stages-first.stderr.log",
+      "sha256": "09e29641e12bc6b4739df326ab6525e718a4e416f5db30442c73b33e21aa46a4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-launch-stages-first.stdout.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-launch-stages-first.stdout.log",
+      "sha256": "4a4aa2fdb9ed1991601736ccddb0b9cd27889a7f03873100a56fc4b0ba683013"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-01-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-01-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-01-child.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-01-child.stderr.log",
+      "sha256": "d9cb906a6dde5409f52b660643f7062cf23cd5119f0865603716c4af9bee0d08"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-01-child.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-01-child.stdout.jsonl",
+      "sha256": "3a90eb5a21039f069199f4fdc30fa110bb2888309cd5eb1ecda48a7a3a73da28"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-01-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-01-lib.json",
+      "sha256": "1623e3a4d353542bddf971b70b789df778559ec32ca9433eec462b897f85dcec"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-01-lib.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-01-lib.stderr.log",
+      "sha256": "1b05fbb09d118ce73ec2917cc21dbdd3e4f57d111997b9b9d09592b122c7aaf6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-01-lib.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-01-lib.stdout.jsonl",
+      "sha256": "f2ad989878713cedfab73cfbd3ee0530b08df7f43625f991730926598e99cb17"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-02-child.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-02-child.json",
+      "sha256": "cb7a26b36ca21d33ff4eba0933f0b5f7e0aae4a96e21ff2aea19361a4c0b1895"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-02-child.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-02-child.stderr.log",
+      "sha256": "4618eeba4e21359898995b7f544b56cd4d474efe9641525e1447388aaa8fabe6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-02-child.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-02-child.stdout.jsonl",
+      "sha256": "9146955a539bbb867bda3e925366124ad7b5c49249fe1ba192f87b4a72ffcd98"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-02-lib.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-02-lib.json",
+      "sha256": "21c0baedd4c8d44373e889a7e66cf2ad42484f82f6303f2c032bb7367510ec72"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-02-lib.stderr.log",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-02-lib.stderr.log",
+      "sha256": "00f3e0a48cb8174a25af5e21ee6faa8022f6f508abd8c35a3e6d28478f9321bc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\logs\\sql-stage-compile-02-lib.stdout.jsonl",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/logs/sql-stage-compile-02-lib.stdout.jsonl",
+      "sha256": "2ba35a77d4946c0f7aa5b108b292ccdd9206c1401dd6526768732e93df9bcb0c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\Cargo.toml",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/Cargo.toml",
+      "sha256": "1672ffd396e9ab60483f472039a5041a1bdfaac9e1ff821f013ab14e12678981"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\adapters\\acp\\native_dispatch.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/adapters/acp/native_dispatch.rs",
+      "sha256": "a1da4e034f5fcc45691b48fcdfaeafc3fc598f47d58287e7a0fb4c265c1573a1"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\application\\native_dispatch\\control.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/application/native_dispatch/control.rs",
+      "sha256": "4ef3873e8929dc77b2d546174cc4c7ea0d51b806e929348a73ff06e2faf2a4c8"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\application\\native_dispatch\\environment.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/application/native_dispatch/environment.rs",
+      "sha256": "38b72ebd33bc0acd7a79929b3268c2b59ef19060048516ab8067f35456e32fcc"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\application\\native_dispatch\\mod.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/application/native_dispatch/mod.rs",
+      "sha256": "ed8ae6996cae9814047b8c86ed8d7a63f8c144f6a3e50a96f80b1863c2b5d5de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\application\\native_dispatch\\observation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/application/native_dispatch/observation.rs",
+      "sha256": "b25098d7ec84eff07944070947bc1927d69ba81bebc97231f9b3a1597f35cea3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\application\\queue_owner\\native.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/application/queue_owner/native.rs",
+      "sha256": "5b538768fb72bb27914f68d0865f24474df8ddcce92c17de8a7a04f08fd9f9e6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\lib.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/lib.rs",
+      "sha256": "3178435381d791d37a1d1a4231fe12168ff1f23d1ae62b86d95ba64fd5fe562f"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\src\\session_storage\\schema.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/src/session_storage/schema.rs",
+      "sha256": "d04772e2dec36195475b60e136b57a4617c940574a5091440e6343e90f9d6084"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\closure_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/closure_stages.rs",
+      "sha256": "a47aed564f1f7e7fc7c0b1358310ffbf30d3ff950e69c47313c8d2986b87c2b2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\controlled_io.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/controlled_io.rs",
+      "sha256": "d45305ec14b3ee0c4e0559aa0595ca33791c3ab2a1e90f15d5ff86280909ccd2"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\delivery4.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/delivery4.rs",
+      "sha256": "83c259d74c7dbbffdac6cfec8d007fd749e5c61806043c2ef22752264ff4314c"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\expected-schema6.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/expected-schema6.sql",
+      "sha256": "3b890668844b26d4e9b01161dfef5bf7ec7545ebf16bfa43c6b1192dd99ca3de"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\factory_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/factory_preparation.rs",
+      "sha256": "eb1747690acb98cc9d0020b4d685a28b03ce946cb8297aea675ed2e6ead76858"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/launch_stages.rs",
+      "sha256": "b97b386b5fcb3fdd847b17e3b688440d08cff3e62e1db0610423891b2dce5eb3"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\legacy_fixtures.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/legacy_fixtures.rs",
+      "sha256": "694dc9ae93759d070929f6f1ddb1a744c96b6fc8b411d8e6a1e74878bd94e242"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\native_commit_unknown.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/native_commit_unknown.rs",
+      "sha256": "0054b02c52039620fd0099d741817637861983b6c86545e077269c8ffcd0488e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\native_sql_faults.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/native_sql_faults.rs",
+      "sha256": "4e9715aae4ffb55bd2fbe56de3572ebf0b1071e60627e23d380f2b8c8efaecde"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\observed_io_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/observed_io_preparation.rs",
+      "sha256": "5e66c0ef2a220e13519b09cf85b3ffe389c185f3472330477cd6aae015be60ea"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\park_abi_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/park_abi_preparation.rs",
+      "sha256": "b5d596e873d212a4f33136147dae77dc4d07cfd19da65103084c69211b1e9210"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\park_more_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/park_more_sql.rs",
+      "sha256": "cbf18f2188b6692166f2a2e8632c0417349def7bf001ec3c0d15798821b3aaef"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\park_real_sql.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/park_real_sql.rs",
+      "sha256": "46ccfade8b4ffcd0a7bfde0ebc270de3baa49f6bb0d23d7c1ab68a79821f3f42"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\park_sql_failure.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/park_sql_failure.rs",
+      "sha256": "d937e4c39b10ee782aed480012970c8e2368cd9fd754eb1788212c24f6744236"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\priority_late_cancel.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/priority_late_cancel.rs",
+      "sha256": "a28774b505b80bcc3173f1f1bf89ac8498ddc4dcddd2d65b030d91678f8517c6"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\protocol_child.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/protocol_child.rs",
+      "sha256": "e9e2bb3b5bb3f6c7e0cf7f88b52711f6b1e6db313ac9bc5cf4301819b370ca44"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\registration-schema5.sql",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/registration-schema5.sql",
+      "sha256": "ba49b4012f96c42220744c0dd9c975035408f0649209eb77ac983aef04fc8a1d"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\replay_port.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/replay_port.rs",
+      "sha256": "2ef1210097684930f5b6df4d73f2a6336e52866ce0a44a3b1b2dba3a068fbe16"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\replay_snapshot.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/replay_snapshot.rs",
+      "sha256": "bc95e8b11632de3d6795d8299dd743f270b951110484c3fadf9c91f6f086151b"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_ordinal_787.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/schema6_ordinal_787.rs",
+      "sha256": "1c8923a3b7cef0570c78d4c93467fee7033bc0d2e8a5374f55ee9ffae1fa8508"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\schema6_preparation.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/schema6_preparation.rs",
+      "sha256": "e0e7014071e84d2f2ba4013fe853085975063ca61103132bff808f2a223228ca"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\shared_live.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/shared_live.rs",
+      "sha256": "a9a467e4a328e20c6d76f347a73e9db0d6788cb40139ca43e1fe11b95051e475"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\shutdown_caller_drop.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/shutdown_caller_drop.rs",
+      "sha256": "3c210eb52ba81c1b880beb33771585021b1f696bd6bf96b9a7fc4f0223ad6fa9"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\sql_launch_stages.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/sql_launch_stages.rs",
+      "sha256": "a2f191378068ac7ce21ef98ab24e288a158ffc618a038bbd8c10c14276be1199"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\unknown_provider.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/unknown_provider.rs",
+      "sha256": "4715f6f3a2453ff99a1c253ff37be91c4c0d54e56c32afd752055c41df9b25fe"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\portable\\app\\tests\\native_dispatch_acceptance\\v2_sequencing.rs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/portable/app/tests/native_dispatch_acceptance/v2_sequencing.rs",
+      "sha256": "23d6f1f03acfec7de1c1f3ccb07ef95baa78bd9c2dfeeeb87e3ff992d217a030"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\prepare-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/prepare-assets.mjs",
+      "sha256": "e2993b06f06287a05d92057de53cde5c18df88ea0ed0e41bc1222f9d3ab2e7e4"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\report.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/report.md",
+      "sha256": "217b33b564d37ad375f52184d578531bd8c8569c8a1ccba610f5d0b520684214"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\run-assets.mjs",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/run-assets.mjs",
+      "sha256": "9433f40b2e80e25c91c5eb820003b7c543f3eb89176e4e69877fb4752cb76f5e"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\source-v15.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/source-v15.json",
+      "sha256": "2db2ef365ca24ebc982f1234b5add98c1a8a8670b9b5ba105c2125e4c067e9be"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\implementation-v15\\freeze.json",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/v15/freeze.json",
+      "sha256": "22b1a62751c6a9159695e4b23eb51173b58095636a8d9deeb217b6b225412824"
+    },
+    {
+      "source": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-native-dispatch-tester\\round-v13-v15-handoff.md",
+      "path": "testing/runs/deliver-codex-session-loop/q3-native-failure-preparation/round-v13-v15-handoff.md",
+      "sha256": "3914d6dd1d8e42d19d38fe7f7cd6ae53ebb3d8e5f0c709a93150431e637984b4"
+    }
+  ]
+}

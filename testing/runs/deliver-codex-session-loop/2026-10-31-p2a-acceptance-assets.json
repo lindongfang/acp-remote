@@ -1,0 +1,46 @@
+[
+  {
+    "path": "p2a-probe/Cargo.toml",
+    "sha256": "303ca29a88c226ddb4323ccd7b8a3103e0ce9fc2ac49025978855a2446991270"
+  },
+  {
+    "path": "p2a-probe/Cargo.lock",
+    "sha256": "1f6605492889dea436d30f96ead4e3d1c21a28cb1bfad0844b2b745e1e4604c0"
+  },
+  {
+    "path": "p2a-probe/src/lib.rs",
+    "sha256": "af3a686d2f4d08977749a77bd227e1552c2242f9d5aaa975d0bbec8a6a6e74e1"
+  },
+  {
+    "path": "p2a-probe/tests/anchors.rs",
+    "sha256": "b15310c25ece70fb3b8a96cef28ee909de74fa03c2d03643562b9121e4ba2fd7"
+  },
+  {
+    "path": "p2a-probe/tests/support/mod.rs",
+    "sha256": "e733dbcbb617189e698ce757685d9375ed0479b721a0966a6f339139cd8484bf"
+  },
+  {
+    "path": "p2a-negative/Cargo.toml",
+    "sha256": "6fcbd983bb4517e40ad5cceae62cc87a06060a94634a9dae6ecb34b85a087cbd"
+  },
+  {
+    "path": "p2a-negative/Cargo.lock",
+    "sha256": "3a9836d44b3529006ccdac3e85ab4463204dcd2d30db76ac4057e7f0d33a70b3"
+  },
+  {
+    "path": "run-p2a-final.ps1",
+    "sha256": "3409498c4a0aa242b2d17d295b73640d3a552997cae13b75001bd4ffc3fbb1de"
+  },
+  {
+    "path": "run-p2a-negative.mjs",
+    "sha256": "6686c85400195b67114a838201c2637ae6b5dd010015dbf6c6cfa0a213387c9b"
+  },
+  {
+    "path": "capture-p2a-evidence.mjs",
+    "sha256": "6e21fc389690fe8633ef7a3400f59351c5af97a9e3253788f1bbd052d38f65bd"
+  },
+  {
+    "path": "p2a-tool-anchor-definition.md",
+    "sha256": "faa72a83e9a168059a5662eefe9ff54a076bee10a0ea76c16226d670e08e259a"
+  }
+]

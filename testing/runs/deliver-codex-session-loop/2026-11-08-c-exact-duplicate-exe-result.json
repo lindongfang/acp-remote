@@ -1,0 +1,24 @@
+{
+  "date": "2026-11-08",
+  "scope": "exact SHA-256 duplicate executables in four session-owned author/tester trees",
+  "completed": true,
+  "plan": "D:\\Project\\acp-remote\\testing\\runs\\deliver-codex-session-loop\\2026-11-08-c-exact-duplicate-exe-plan.json",
+  "planSha256": "528BDA9E603A224AD4361A672A62479F81F6B7FD6D5A1C6D52410885D2974B12",
+  "groups": 28,
+  "deletedCopies": 50,
+  "logicalBytes": 835015680.0,
+  "remainingCopies": 0,
+  "freeAfterBytes": 161940766720,
+  "preserved": [
+    "unique source snapshots",
+    "reports, logs, failure evidence and databases",
+    "unique test executables and runtime DLLs",
+    "repository source and uncommitted changes",
+    "Git index and registered worktrees",
+    "ACPI and Source v4 review packages"
+  ],
+  "limitations": [
+    "Only exact SHA-256 duplicate executables were deleted; unique executables and all source/evidence trees remain.",
+    "Unrelated C-drive user directories were not scanned or modified."
+  ]
+}

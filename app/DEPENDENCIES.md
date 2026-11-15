@@ -96,3 +96,9 @@
 PLAT-T001 修订：继承系统环境与调用方 overrides 分开校验。仅对继承来源保留 Windows `=<ASCII字母>:` 隐藏驱动器当前目录条目及其原值；显式 overrides 仍拒绝任何含 `=` 的名称。没有删除、清空或过滤整个父环境。真实 cmd 的 `cd /d` 创建隐藏驱动器条目后运行子测试，验证空 override 的正常启动、隐藏值跨 OwnedProcess 原样继承以及显式保留键拒绝。旧开发环境9项通过与独立tester环境2过7失败分别保留；修订后的开发通过不自行关闭独立问题。
 
 PR #199 CI 修订：`npm run check:rust` 的 cmd 命令链还会继承前一外部命令留下的 `=ExitCode`，非零字符退出码另可留下 `=ExitCodeAscii`，原驱动器条目白名单错误拒绝了正常启动。继承来源现额外保留这两个精确名称及其原值，不放行其他保留名称或显式 overrides。新增开发回归由真实 cmd 执行 `exit 37` 建立这些条目，确认空 override 启动、驱动器条目与退出码跨 OwnedProcess 原样继承，以及显式保留键/变体仍拒绝。此修订不修改既有独立验收的历史结论，当前验证另记。
+
+## SQLite 本地同锁补丁与生命周期监督
+
+`sqlx-sqlite` 使用 [vendor/sqlx-sqlite](vendor/sqlx-sqlite) 中的完整同锁驱动；来源归档摘要、上游提交及许可见该目录的 `PROVENANCE.md` 文件与原许可证。依赖名称、版本、特性及第三方图沿用原锁；应用补丁不改 `sqlx-core` 或连接池算法。原 SQL close／ACK 与实际线程 join 分开记录。
+
+[sqlite_lifecycle.rs](src/session_storage/sqlite_lifecycle.rs) 负责同原 Tokio runtime 上的打开宿主、原 worker 的 blocking join 槽及其 Tokio handle 观察；[Storage](src/storage.rs)、[schema](src/session_storage/schema.rs) 与原 registry 收据传递同一 worker 域。Node 在数据库打开前将宿主登记到原 acquisition 槽，预算只观察原关闭操作；main 保持原 runtime 直到 `join_actual`。最后观察者 Drop 只请求停止，未确认状态继续保有原根资源与句柄。开发检查和独立验收结果由各自冻结证据记录，源码接线不表示全产品已验收。

@@ -1,0 +1,26 @@
+# Shared两fixture profile与默认纯parser：有限门槛
+
+结论：**PASS — limited four-path test assembly**。准NEW固定f44/451副本应用唯一`7ab6054201d8b798f611fe955e17f6cc31dbf6c349ea1c698e8a2ebb31c4df14`，生成452源；不修改Root636、不准把未启用fixture当执行通过。仅必要四路径格式维护，任何额外cfg/生产观察口须另报。
+
+提案freeze `8c51fbe6bfff5b57dc53cce728fbea79851129d31199a52881045eb4a32cc586`32成员、24引用输入与f44 freeze `f44dc5613f4ae2570f376a37954e2efbacdf8b793b24b2b7104cd0099ef981b6`482成员实SHA核同。自有scratch严格check/apply各0，四后像raw准确。新parser叶`f0d6201e599fe8c249e9b96601db7f9a712ae61a77b03479f01621a55f44cbe1`插回module_cases原位后，整个原叶raw精确恢复。
+
+## 为什么这个profile范围成立
+
+实读Node的LocalViewAuthFixture：`first_close_observation`与`node_shutdown_observation`及后者所持probe字段确为feature-only，不是cfg(test)即可取得。if_support:493/498/502确实调用同原auth实例的两方法；Module和transfer两个新入口当前仅test+windows，故默认报E0599真实成立。
+
+已独立扫描固定app全部302个Rust文件，两getter的定义/调用只在三个文件：Node定义、原public module support及当前IF support。原public integration自身已有windows+feature header。两个IF入口是本次精确缺口，原controller/tests/transfer001/reader/Node等没有该调用；不因它们也属Shared就扩大门控。原feature及Cargo/锁不改，不公开新getter或换Node掩盖首关闭责任。
+
+直接整模块加feature会隐藏纯parser，故本补丁额外保留其默认轴是必要且准确的：原纯`#[test]`与函数完整正文移到单叶，module_cases仅原位include；默认Windows用互斥的同名私有inline host include同叶，feature配置用原同名path host。两个cfg恰好互斥，完整原函数路径保持，无重复/空叶/第二份oracle。非Windows继续原限制，普通非test库两个host均不存在。
+
+transfer入口只加相同feature。原transfer_cases、if_support、三个inspect_err、所有原函数/断言/credit/真实raw/完整first-close清理不动。四after分别为Module `22b7300c2ec7df732ae0f53d615272ac5e2e4fceb072824db7d3b30676ca59c6`、transfer `0107cb1e45354dbd8fb67b4735d9a33021e6aa968c0e0c9555e895f6da97d640`、module_cases `5131ab9ae7e3483e25ba63b58f429c263e49a5b0520b8e5705ad7a7af5584612`及上述新叶。其余448原路径保护；不把新增源算作451前后同。
+
+## 获准后的最小真实验证
+
+- 自有target/TMP、真实源cwd/原锁，保存安装前后/EXE/命令首红；实际fmt，default与allfeatures适用all-targets check及strict。f44的allfeature strict0/default3个E0599原件保，不称本版已绿。
+- default：原纯parser完整路径list唯一1并exact运行1；两fixture各list0，明确excluded/not-run。其它默认纯测试入口保持，不能把整个Shared默认覆盖说已执行。
+- 显式shared-view-acceptance-fixtures：编译/list原三个完整函数各唯一1；纯parser exact一次；quiet exact一次保原[V1,V2]、两组最终真实InvalidCredit/显式Credit1/两完整raw/quiet/RPCprovider0/正常原首关闭尾；原prefix-complete-lateflush切面exact一次，保真实prefix/Response/晚BrokenPipe及故意Io精确约束，不将false/SomeIo改true、不豁免Unknown/JoinUnconfirmed。
+- allfeatures：编译/list同三函数各唯一1，未实际执行的profile只记编译/列举，不用其list替代功能或自动外推显式feature的运行结果。若另有真实运行按实际profile/次数分列，不刷失败样本或扩大预算。
+
+原quiet或cut失败即保首错，不泛重试；纯parser运行不代两个fixture。f7f6双版旧绿不是f44或新452运行证据，cut仍只签原支持切面，不能冒已经读取新的candidate全文。
+
+本门不签IF30/83/RF18/CL023、Node/WSS/Harness、精确同步锁内return/pollPending、RF06公开data或历史FIO/Busy；所有父false及级别保持。原两次换行逆验证脚本错误属于工具准备记录，不是产品红，本门没有执行Rust/产品/SQL。机器记录：`fixture-profile-review/verification.json`。

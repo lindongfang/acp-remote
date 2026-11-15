@@ -1,0 +1,34 @@
+{
+  "observed_at": "2026-11-02T19:45:46.730Z",
+  "proposal": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-c-reviewed-composition-proposal-v1",
+  "proposal_freeze": "ebb790f767198260cc1e49ebaf865668d3a5c1f74bb2654be81e13071d1fccb6",
+  "source_count": 810,
+  "modified_from_oracle": 11,
+  "preserved_from_oracle": 799,
+  "overlap_between_two_change_sets": false,
+  "gate": {
+    "dir": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-continuation-reviewer-2026-11-02\\followup-c-reviewed-composition-execution-gate-2026-11-03",
+    "freeze": "bd156c746cf4a93f8d89b4a406f55d2b936d9649bb14a8bd99fbab6b1ebf10c2",
+    "members": 3,
+    "root_verified": true,
+    "scope": "isolated development combination execution only; no Root install"
+  },
+  "execution": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-c-composition-terminal-candidate-v1",
+  "actual_check": {
+    "exit": 0,
+    "all_targets": true,
+    "all_features": true,
+    "locked_offline": true,
+    "source_unchanged": true
+  },
+  "actual_configuration_test": {
+    "started": true,
+    "result": "pending"
+  },
+  "terminal_single_leaf": {
+    "design": "C:\\Users\\jack\\.codex\\visualizations\\2026\\10\\30\\01a18dc1-45b2-7f82-981e-964264221cef\\session-loop-q003-node-terminal-report-design-v1",
+    "gate": "pending",
+    "source_edited": false
+  },
+  "root_installed": false
+}
