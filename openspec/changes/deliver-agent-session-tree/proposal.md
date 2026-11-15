@@ -58,7 +58,7 @@
 
 ## Impact
 
-- 依赖：[deliver-history-navigation](../deliver-history-navigation/proposal.md) 和基础原生身份/读取端口；各 Harness 按自身已接入能力独立验收，不以 ZCode/DeepSeek 全部完成作为通用子树交付前置。跨 change 依赖由[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)维护，CLI不会自动强制执行。
+- 依赖：[deliver-history-navigation](../deliver-history-navigation/proposal.md) 和基础原生身份/读取端口；各 Harness 按自身已接入能力独立验收，不以其他 Harness 接入完成作为通用子树交付前置。跨 change 依赖由[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)维护，CLI不会自动强制执行。
 - 影响范围：上述能力对应的入口、领域模块、适配器、存储与验收资产；具体文件写范围由后续 plan 定义。
 - 尚未新增运行依赖、实现文件、数据库迁移或长期规格；本提案不预选具体库和后端。
 

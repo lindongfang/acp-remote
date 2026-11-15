@@ -38,7 +38,7 @@ Q-001当前引用：无重放也可按实际能力接入，历史与其他能力
 
 本轮文档修订范围为 SR-003/SR-004：引用主树加载归属，并区分关系展示、有界子历史及可靠轮次分页。独立 tester 增补 tests.md 本轮用例，独立 reviewer 检查能力不足分支及父子隔离；历史导航提供分页端口与条件，本 change 提供关系及步骤展示，不能由关系可读推导分页可用。以下旧工作包仍待全面重基准，不恢复实现。
 
-本轮仅补齐文档到待实现状态，不执行以下产品任务。依赖 deliver-history-navigation、integrate-zcode-harness、integrate-deepseek-harness 的真实交付；先读取其最终规格、实现与验收证据重基准，不能因上游文档齐备而视为已可运行。角色按 openspec/role/coder.md、tester.md、reviewer.md：coder实现，独立tester验收，另一独立reviewer检视，不继承开发对话。保护当前Git未提交改动，不自动提交/发布。
+本轮仅补齐文档到待实现状态，不执行以下产品任务。依赖 deliver-history-navigation 的真实交付；先读取其最终规格、实现与验收证据重基准，不能因上游文档齐备而视为已可运行。角色按 openspec/role/coder.md、tester.md、reviewer.md：coder实现，独立tester验收，另一独立reviewer检视，不继承开发对话。保护当前Git未提交改动，不自动提交/发布。
 
 开始实现先记录基线、未提交文件及删除项SHA-256、真实工具版本和隔离数据根。目录沿上游单Rust应用app/与TypeScript clients/web/；以下为未来具体写范围，WP1须在真实上游树核对路径，不存在的检查入口先建立再执行。不得推定三款均暴露完整子历史；保留无正文participant身份链并与未来删除Session链接边界一致。
 
@@ -56,13 +56,13 @@ WP2/3复用03通用参数与游标合同：父倒序、子在步骤内正序分�
 
 ## Parallel Assessment
 
-WP1串行：上游未交付及合同未固定前不能开始产品实现。WP2节点与WP3 Web在WP1冻结接口后可在独立工作区并行，禁止同工作区并行写入，各自独立端口、测试数据和CARGO_TARGET_DIR。WP4在两者合入后独立编写验收程序并测试；正式同版本tester验收与reviewer只读检视可并行，但最终结论须等全部必需用例结果。多个change涉及平台注册、存储模式、网关与Web注册文件时按能力地图依赖串行集成；无依赖的ZCode/DeepSeek适配器可隔离并行，harness/mod.rs和registry.ts统一按ZCode后DeepSeek顺序合入并重跑双方合同及上游回归。
+WP1串行：上游未交付及合同未固定前不能开始产品实现。WP2节点与WP3 Web在WP1冻结接口后可在独立工作区并行，禁止同工作区并行写入，各自独立端口、测试数据和CARGO_TARGET_DIR。WP4在两者合入后独立编写验收程序并测试；正式同版本tester验收与reviewer只读检视可并行，但最终结论须等全部必需用例结果。多个change涉及平台注册、存储模式、网关与Web注册文件时按能力地图依赖串行集成；涉及harness/mod.rs和registry.ts等共享注册文件的修改须串行合入并重跑受影响合同及上游回归。
 
 ## Work Packages
 
 | ID | Goal / Scenarios | Dependencies | Agent | Write Scope | Deliverable | Verify |
 | --- | --- | --- | --- | --- | --- | --- |
-| WP1 | 上游重基准、版本/能力及真实检查入口门禁 | deliver-history-navigation、integrate-zcode-harness、integrate-deepseek-harness真实交付 | 主执行者与独立reviewer | README.md检查入口段；本change design.md及proposal.md受影响依据；实际新增依赖对应锁文件与CI检查配置（仅确有需要时） | 上游版本与合同映射、入口命令清单、依赖审查；阻断未知未解不进入实现 | AT-001、AT-002；独立方案/用例检视通过 |
+| WP1 | 上游重基准、版本/能力及真实检查入口门禁 | deliver-history-navigation真实交付 | 主执行者与独立reviewer | README.md检查入口段；本change design.md及proposal.md受影响依据；实际新增依赖对应锁文件与CI检查配置（仅确有需要时） | 上游版本与合同映射、入口命令清单、依赖审查；阻断未知未解不进入实现 | AT-001、AT-002；独立方案/用例检视通过 |
 | WP2 | 可靠参与者parent/root身份、可靠子会话身份、多次委派与父步骤内原位展开的节点实现及开发单元/合同测试 | WP1 | coder | app/src/policy/agent_tree/；app/src/storage/agent_tree/；app/src/storage/migrations/agent_tree/；app/src/gateway/agent_tree/；app/tests/agent_tree_contract.rs；docs/implementation/agent-tree.md | 节点diff、对应单元测试与运行限制文档，不改tester预期 | AT-003、AT-004及AT-005、AT-006、AT-007、AT-008及AT-011–015的节点断言 |
 | WP3 | Web可观察入口、限制及错误反馈 | WP1冻结接口 | coder | clients/web/src/features/agent-tree/；clients/web/src/features/sessions/navigation.ts；clients/web/tests/agent-tree/；docs/implementation/agent-tree-web.md | Web diff、交互测试及使用说明 | AT-005、AT-006、AT-007、AT-008、AT-011–015；构建/类型/静态检查由WP1核定真实入口 |
 | WP4 | 独立验收程序、故障注入与真实闭环 | WP2、WP3合入 | 独立tester | app/tests/acceptance/agent-tree/；clients/web/tests/acceptance/agent-tree/；testing/runs/deliver-agent-session-tree/tester/；本change tests.md（仅tester有依据修订） | 真实验收程序与逐ID结果、清理/限制证据，不能以mock代真实Harness | AT-001、AT-002、AT-003、AT-004、AT-005、AT-006、AT-007、AT-008、AT-009、AT-011–015 |

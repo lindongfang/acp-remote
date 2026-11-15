@@ -2,13 +2,15 @@
 
 # 重建能力地图与 change 依赖
 
-更新：2026-10-31。产品行为以 [总体设计](HARNESS_CONTROL_PLANE_REDESIGN.md) 为权威，本文只维护能力归属、依赖与交付边界。会话数据权威已改为 Harness，所有会话实现暂停。
+更新：2026-11-16。产品行为以 [总体设计](HARNESS_CONTROL_PLANE_REDESIGN.md) 为权威，本文只维护能力归属、依赖与交付边界。会话数据权威已改为 Harness，各未归档 change 的实施门禁以其当前规划为准。
+
+接入范围按总体设计的 2026-11-16 确认调整：DeepSeek Harness 和 ZCode 暂不适配，对应 change 已移除，不再作为其他 change 的交付或验收前置。同日新增 Pi、OMP 两项独立接入规划，均未实施或真实验收。
 
 Q-001取代旧R2冲突规则：节点登记请求、受理授权接管、共享队列和节点时间取代每动作签名/固定输入期限/回退水位。必要管理状态失效停止相关动作，附加审计失败告警可继续，批准决定仍严格保存。
 
 ARCH-001：用户确认本轮只修订设计与规格。原生工作及审批有效性、内容展示与资源引用安全由通用闭环负责；缓存外续读和目标重新定位由 history-navigation 负责；自动回收能力分层、完整活动及关闭窗口证据由 session-resource-policy 负责，harness-management 只呈现能力边界。父步骤展开复用通用内容安全及分页规则，不新增厂商读取器。其他会话能力不被自动回收受限取代，容量计数继续适用；本轮无代码、数据迁移或新版产品验收，旧 tests/plan/tasks 仍待独立重基准。
 
-Q-001最新确认：重放不再是共同准入门槛，无重放Harness按实际能力接入并提供当前连接模式，明显提示历史不完整及缓存无法补回；不加厂商读取器或平台正文档案。DeepSeek原rc.5无重放调研不能据此整体阻断，其他能力仍须真实核验。
+Q-001最新确认：重放不再是共同准入门槛，无重放Harness按实际能力接入并提供当前连接模式，明显提示历史不完整及缓存无法补回；不加厂商读取器或平台正文档案。其他能力仍须真实核验。
 
 DC-001 补充归属：显式接入来源与默认环境继承由通用闭环负责，实际重放刷新计时及不形成任务保护由资源策略负责，接管复用同来源身份。来源配置不等于自动验证物理存储等价；不新增厂商身份探测、环境白名单或指纹门禁。原生范围在当前规格中沿用为接入来源命名空间，游标、子关系、删除授权和备份引用均按该来源区分；原生组件的一致性及删除授权范围校验仍分别遵循对应规格，不因来源配置而宣称已经证明。详细行为见总体设计及当前规格。
 
@@ -16,16 +18,16 @@ DC-001 补充归属：显式接入来源与默认环境继承由通用闭环负�
 
 [establish-node-access](../openspec/changes/archive/2026-10-30-establish-node-access/proposal.md) 已归档，节点与信任规格、33例原范围验收继续有效；不代表会话能力已交付。归档资料不改写。
 
-9个活动 change 已有六类规划产物，本次调整 proposal、specs、design，并在 tests/plan/tasks 标明旧方案待重基准。文件齐备或 CLI planning complete 不代表可恢复编码。旧用例 ID、预期、任务勾选及审查记录保留原快照归属，受影响范围必须由独立 tester/reviewer 重新处理；本次没有新版独立验收或检视通过声明。
+[deliver-codex-session-loop](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/proposal.md) 已于 2026-11-16 归档，证据范围以归档记录为准。移除 DeepSeek/ZCode 并建立 Pi/OMP 计划后，当前有 8 个活动 change，均已有六类规划产物。文件齐备或 CLI planning complete 不代表可恢复编码。旧用例 ID、预期、任务勾选及审查记录保留原快照归属，受影响范围必须由独立 tester/reviewer 重新处理；本次没有新版独立验收或检视通过声明。
 
 ## 能力归属与调整
 
 | Change | 能力路径 | 本轮职责 | 集成依据 |
 |---|---|---|---|
-| [deliver-codex-session-loop](../openspec/changes/deliver-codex-session-loop/proposal.md) | harness-management、workspace-registration、session-execution、permission-approvals、structured-history、native-session-recovery、management-audit、acp-platform-constraints | 建立共享队列、额外限制核对、执行、安全及基础原生发现/读取；重新定义内容缓存与管理事务 | 已归档节点接入 |
+| [deliver-codex-session-loop（已归档）](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/proposal.md) | harness-management、workspace-registration、session-execution、permission-approvals、structured-history、native-session-recovery、management-audit、acp-platform-constraints | 建立共享队列、额外限制核对、执行、安全及基础原生发现/读取；重新定义内容缓存与管理事务 | 已归档节点接入 |
+| [integrate-pi-harness](../openspec/changes/integrate-pi-harness/proposal.md) | pi-harness-compatibility | Pi 与候选外部 ACP 服务端的配置及独立真实验证 | 通用闭环实际合同，不依赖 OMP |
+| [integrate-omp-harness](../openspec/changes/integrate-omp-harness/proposal.md) | omp-harness-compatibility | OMP 原生 ACP 入口的配置及独立真实验证 | 通用闭环实际合同，不依赖 Pi |
 | [deliver-history-navigation](../openspec/changes/deliver-history-navigation/proposal.md) | history-navigation | 在标准重放视图上分页及衔接实时内容，不建立永久平台历史档案 | 通用重放及可证明轮次 |
-| [integrate-zcode-harness](../openspec/changes/integrate-zcode-harness/proposal.md) | zcode-harness-compatibility | 接入配置与真实能力验收，历史能力独立报告 | 通用闭环 |
-| [integrate-deepseek-harness](../openspec/changes/integrate-deepseek-harness/proposal.md) | deepseek-harness-compatibility | 接入配置与真实能力验收，不从恢复推断历史可读 | 通用闭环 |
 | [deliver-agent-session-tree](../openspec/changes/deliver-agent-session-tree/proposal.md) | agent-session-tree | 读取原生身份、关系与子历史，在父步骤内展开 | 历史导航及具备关系/读取能力的接入，分别验收 |
 | [deliver-session-capacity](../openspec/changes/deliver-session-capacity/proposal.md) | session-resource-policy | 保留30分钟/50主会话与活动保护；查看引起的实际加载计数 | 通用资源所有权和活动判断端口；未知目标保守保护 |
 | [deliver-native-session-import](../openspec/changes/deliver-native-session-import/proposal.md) | native-session-import | 显式执行接管与重新校验，不再导入正文 | 基础原生身份/加载端口及容量；子树场景独立验收 |
@@ -40,8 +42,8 @@ DC-001 补充归属：显式接入来源与默认环境继承由通用闭环负�
 flowchart TD
   A[已归档节点接入] --> B[通用闭环及基础原生读取]
   B --> C[历史分页与实时衔接]
-  B --> D[ZCode实际接入]
-  B --> E[DeepSeek实际接入]
+  B --> D[Pi接入与兼容验收]
+  B --> E[OMP接入与兼容验收]
   C --> F[原生子身份与父步骤展开]
   B --> G[容量与安全资源回收]
   B --> H[显式执行接管]
@@ -63,7 +65,7 @@ PV-001：通用闭环负责“优先最高共同可用协议”的版本选择�
 
 五项审查收口见各能力规格与 [领域术语表](../openspec/GLOSSARY.md)：原生身份跨启动入口稳定；加载/恢复审批关联真实操作而非伪造 Run；节点按 Harness 连接代际共享当前连接视图；平台处理、当前协议能力及安全条件决定准入，实测报告独立呈现；通用资源及查询机制按接入分别交付。
 
-2026-10-30 职责补充：三个 Harness 相关 change 的专项部分面向能力调研、真实验证及接入配置。通用闭环另承担共用协议与业务实现，ZCode/DeepSeek 不另建厂商协议实现。受测版本仅限定证据；运行时每次连接协商并绑定协议版本及能力，不建立 Harness 到 ACP 版本的硬编码映射，也不把旧探测结果缓存为下次连接的协商结论。
+通用闭环以 Codex 首验，Pi 与 OMP 分别规划接入与真实验收，通用闭环承担共用协议与业务实现，不另建厂商协议实现。受测版本仅限定证据；运行时每次连接协商并绑定协议版本及能力，不建立 Harness 到 ACP 版本的硬编码映射，也不把旧探测结果缓存为下次连接的协商结论。
 
 - 标准 ACP 行为按实际协议版本及能力复用，v1/v2 目标和逐版验证原则保留。不因新数据权威自动授权私有桥接、私有文件解析或厂商专属生命周期。
 - 标准重放、列表、平台分页及可选原生分页、身份、更新、附件、激活、删除和备份分别取证。无重放仍可按实际能力接入；不能把恢复或握手当重放支持，不建立永久平台历史或厂商读取器兜底。

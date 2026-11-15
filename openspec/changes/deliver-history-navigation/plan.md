@@ -124,7 +124,7 @@ mode: required
 
 ## Handoff
 
-只交接用户确认（Windows+Web、Codex/ZCode/DeepSeek、分页10轮、保存500ms/64KiB）、AGENTS/config/角色、当前proposal/spec/design/tests、上游固定版本及写范围。交接测试数据/端口/目录所有权，不继承开发对话或代签结论。
+只交接用户确认（Windows+Web、Codex、分页10轮、保存500ms/64KiB）、AGENTS/config/角色、当前proposal/spec/design/tests、上游固定版本及写范围。交接测试数据/端口/目录所有权，不继承开发对话或代签结论。
 
 ## Findings
 

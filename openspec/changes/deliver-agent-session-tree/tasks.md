@@ -20,7 +20,7 @@ Q-001当前引用：无重放也可按实际能力接入，历史与其他能力
 
 ## 1. 上游与实施门禁
 
-- [ ] 1.1 WP1 核对Git基线、用户未提交修改及deliver-history-navigation、integrate-zcode-harness、integrate-deepseek-harness真实交付，重基准合同并固定版本/文件摘要；完成判据为可读依赖证据与精确路径映射，无阻断未知。
+- [ ] 1.1 WP1 核对Git基线、用户未提交修改及deliver-history-navigation真实交付，重基准合同并固定版本/文件摘要；完成判据为可读依赖证据与精确路径映射，无阻断未知。
 - [ ] 1.2 WP1 读取README与实际工程建立/核对真实构建、静态、合同和验收命令，审查新增依赖并更新所需锁文件/入口文档；完成判据为AT-001、AT-002入口可执行且不把规划校验作产品通过。
 - [ ] 1.3 WP1 独立reviewer检视specs/design/tests/plan/tasks及能力门禁；完成判据为独立结论和稳定问题ID闭环，未通过不得进入WP2/WP3。
 

@@ -1,5 +1,7 @@
 # Harness Control Plane 重新设计：讨论结论
 
+> 接入范围调整（2026-11-16）：用户确认暂不适配 DeepSeek Harness 和 ZCode，移除 `integrate-deepseek-harness`、`integrate-zcode-harness` 活跃变更；后续同日用户要求建立 Pi 与 OMP 接入 change，当前目标范围为 Codex、Pi、OMP，其中 Pi/OMP 仅完成规划、不声明兼容。下文涉及 DeepSeek、ZCode 的既有调研和历史确认仅作历史依据，不再构成实施或验收要求；通用 ACP 能力规则不变。
+
 > Q-003（2026-11-02）最新确认：尽可能直接复用ACP标准能力，Harness不支持直接报错，不建立额外平台能力准入或兼容兜底；管理审计默认保留与工具原位更新以通用闭环当前harness-management、management-audit、structured-history规格为准。先同步spec与关联定义再继续实现，历史报告不因本次修订自动覆盖新要求。
 
 > Q-001（2026-10-31）最新确认：本轮共享输入队列、受理授权、能力独立、审计和容量取舍以通用闭环当前八份specs为准，取代下方RP/R2等冲突历史规则。仅修订规划，不代表代码、迁移或验收完成。
@@ -20,7 +22,7 @@
 
 ## 1. 一页摘要
 
-ACP Remote 的目标调整为：基于 ACP 和 Tailscale 网络路径，统一管理 Harness 的实例、会话生命周期、执行调度、状态、权限审批和审计。Harness 是实际运行任务的程序，首批重点支持 Codex、ZCode、DeepSeek Harness。
+ACP Remote 的目标调整为：基于 ACP 和 Tailscale 网络路径，统一管理 Harness 的实例、会话生命周期、执行调度、状态、权限审批和审计。Harness 是实际运行任务的程序，当前重点接入目标为 Codex、Pi、OMP；Pi/OMP 尚处于规划阶段。
 
 已确认的核心原则：
 
@@ -63,7 +65,7 @@ Web / Mobile / CLI / IDE
            ACP
             |
             v
-Codex / ZCode / DeepSeek Harness
+Codex / Pi / OMP
             |
             v
 Magpie / Models / MCP / Tools
@@ -420,13 +422,15 @@ ARCH-001 追加规格场景覆盖：Run 结束后后台审批及 Agent 自发前
 
 本节记录本轮调研，不是已执行的兼容性测试报告。查阅的是官方文档与 ACP 适配器主分支；主分支不等于已发布版本，实施时必须固定版本并验证。
 
-首批范围现为 Codex、ZCode、DeepSeek Harness。此前 Claude 的调研不再作为当前接入依据；ZCode 尚未完成能力调研，不能将下表其他 Harness 的接口或行为套用于它。
+当前目标范围为 Codex、Pi、OMP，Pi/OMP 尚未进行真实兼容性验收。DeepSeek Harness 和 ZCode 已于 2026-11-16 暂时移出接入计划，下表保留其历史调研状态，不作为当前交付要求。此前 Claude 的调研也不作为当前接入依据。
 
 | Harness | 本轮发现 | 对设计的含义 |
 |---|---|---|
 | Codex | App Server 提供按原线程 ID 恢复和独立历史读取；codex-acp 有 resume/load 路径 | 既有调研不能证明当前 ACP 路径支持完整历史读取、分页及外部更新，须按固定版本重新核验 |
-| ZCode | 待核实实际程序、固定版本、ACP 接入路径与协商能力 | 原生恢复、历史读取/重放、审批、取消、关闭及子 Agent 能力均需验证；缺少必需能力时记录阻断，不虚报支持 |
-| DeepSeek Harness | 2026-10-30 发布的 dsh-v0.2.1-rc.5，ACP 文档及方法注册仍仅提供 list/resume/close 等，无 session/load、历史重放及删除；本轮未升级或实测该版本 | 无重放不再整体阻断，按当前实际能力和通用路径接入；原版本调研不代表新版执行、审批、资源或历史已验收 |
+| Pi（新增规划） | 用户称本地已安装；本会话未定位路径和版本，外部 ACP 服务端为候选 | 见 [Pi 接入规划](../openspec/changes/integrate-pi-harness/proposal.md)，程序及适配器分别固定证据，不将 RPC 当 ACP |
+| OMP（新增规划） | 按 Oh My Pi 规划，候选为原生 ACP 入口；安装与版本未知 | 见 [OMP 接入规划](../openspec/changes/integrate-omp-harness/proposal.md)，独立验证，不继承 Pi 能力结论 |
+| ZCode（历史规划，暂不适配） | 尚未核实实际程序、固定版本、ACP 接入路径与协商能力 | 已移出当前接入范围；既有规划不代表真实兼容性已验收 |
+| DeepSeek Harness（历史调研，暂不适配） | 2026-10-30 发布的 dsh-v0.2.1-rc.5，ACP 文档及方法注册仍仅提供 list/resume/close 等，无 session/load、历史重放及删除；本轮未升级或实测该版本 | 已移出当前接入范围；原版本调研不代表新版执行、审批、资源或历史已验收 |
 
 原始来源：
 
