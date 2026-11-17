@@ -2,7 +2,7 @@
 
 ## Purpose
 
-定义管理 WebSocket 的 ACPI 输入上传、命令结果、确认帧、错误关闭、撤销与取消行为。本文件是 `deliver-codex-session-loop` 的 `management-input-upload` 活动增量；`acpi-route-v10` 已通过独立 tester/reviewer 的 Rust 认证 WSS 路由编码门。上传复用节点已有能力，不新增 Harness 能力准入或私有替代；上传完成不等于队列受理、Harness 派发或执行完成。
+定义管理 WebSocket 的 ACPI 输入上传、命令结果、确认帧、错误关闭、撤销与取消行为。上传复用节点已有能力，不新增 Harness 能力准入或私有替代；上传完成不等于队列受理、Harness 派发或执行完成。
 
 ## Requirements
 

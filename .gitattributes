@@ -1,5 +1,7 @@
 * text=auto
+.gitattributes text eol=lf
 openspec/** text eol=lf
+testing/suites/** text eol=lf
 .agents/** text eol=lf
 .husky/** text eol=lf
 *.mjs text eol=lf

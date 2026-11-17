@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Universal structural & traceability validator for OpenSpec changes and durable test suites.
-// Checks artifact definitions, WP↔tasks bindings, Main E2E YAML, and spec/test coverage only.
+// Universal structural & traceability validator for OpenSpec changes, archived changes, and durable test suites.
+// Checks schema boundaries, Living Document hygiene, relative links, WP↔tasks bindings, Main E2E YAML, and 100% spec/test coverage.
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -9,7 +9,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const CASE_HEADING_RE = /^### ([A-Z][A-Z0-9]*-[A-Z0-9-]*\d{2,3}) (.+)$/gm;
 const CASE_ID_TOKEN_RE = /\b[A-Z][A-Z0-9]*-[A-Z0-9-]*\d{2,3}\b/g;
 const CASE_LEVEL_RE = /^(?:L[1-6]|LX)(?:[、/]\s*(?:L[1-6]|LX))*(?:（[^）]+）|\([^)]+\))?$/;
+const CAPABILITY_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const ARCHIVE_DIR_NAME_RE = /^\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const DELTA_OP_TITLE_RE = /^(ADDED|MODIFIED|REMOVED|RENAMED) Requirements$/;
 const CASE_FIELDS = ['用例级别', '操作步骤', '预期结果'];
+const ALLOWED_SCHEMAS = new Set(['spec-only', 'spec-driven']);
+const ALLOWED_META_KEYS = new Set([
+  'schema',
+  'created',
+  'skip_specs',
+  'retire_capabilities',
+  'affected_areas',
+  'initiative',
+]);
+// In-flight legacy change nearing closeout; exempt from newly introduced Living Document / extra-file / link checks until archived.
+const LEGACY_HYGIENE_EXEMPT_CHANGES = new Set(['deliver-session-capacity']);
 const PROPOSAL_SECTIONS = [
   'Why',
   'Success Criteria',
@@ -43,13 +57,12 @@ const exists = relPath => fs.existsSync(abs(relPath));
 const read = relPath => fs.readFileSync(abs(relPath), 'utf8').replaceAll('\r\n', '\n');
 
 function parseArgs(argv) {
-  const options = {change: null, specOnly: false, strictCoverage: false, help: false};
+  const options = {change: null, specOnly: false, help: false};
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === '--help' || arg === '-h') options.help = true;
     else if (arg === '--all') options.change = null;
     else if (arg === '--spec-only') options.specOnly = true;
-    else if (arg === '--strict-coverage') options.strictCoverage = true;
     else if (arg === '--change') {
       const value = argv[i + 1];
       if (!value || value.startsWith('--')) {
@@ -72,6 +85,10 @@ function stripComments(markdown) {
 
 function stripCommentsAndFences(markdown) {
   return stripComments(markdown).replace(/^```[^\n]*\n[\s\S]*?^```[ \t]*$/gm, '');
+}
+
+function stripInlineCode(markdown) {
+  return markdown.replace(/`+[^`\n]*`+/g, '');
 }
 
 function stripYamlInlineComment(line) {
@@ -141,16 +158,199 @@ function parseMarkdownTables(sectionText) {
   return tables;
 }
 
-function parseSkipSpecs(changeDir) {
-  const metaPath = `${changeDir}/.openspec.yaml`;
-  if (!exists(metaPath)) return false;
-  return /^skip_specs:\s*true\s*$/m.test(read(metaPath));
+function validateMarkdownRelativeLinks(relPath, check) {
+  if (!exists(relPath)) return;
+  const cleaned = stripInlineCode(stripCommentsAndFences(read(relPath)));
+  const baseDir = path.dirname(abs(relPath));
+
+  for (const match of cleaned.matchAll(/!?\[[^\]]*\]\(([^)\n]+)\)/g)) {
+    const rawTarget = match[1].trim().replace(/^<|>$/g, '');
+    const withoutTitle = rawTarget.split(/\s+['"]/)[0].trim();
+    if (!withoutTitle || withoutTitle.startsWith('#')) continue;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(withoutTitle)) continue;
+
+    const cleanTarget = withoutTitle.split('#')[0].trim();
+    if (!cleanTarget) continue;
+
+    let decodedTarget = cleanTarget;
+    try {
+      decodedTarget = decodeURIComponent(cleanTarget);
+    } catch {
+      // Keep raw path if percent-decoding fails.
+    }
+    const resolved = path.resolve(baseDir, decodedTarget);
+    check(
+      fs.existsSync(resolved),
+      `${relPath}: Markdown 相对链接目标不存在 -> "${cleanTarget}"`,
+    );
+  }
 }
 
-function parseSpecScenarios(specText, specPath, check, deltaOnly = false) {
+function validateOpenSpecConfig(check) {
+  const configPath = 'openspec/config.yaml';
+  check(exists(configPath), `缺少 ${configPath}`);
+  for (const schemaName of ALLOWED_SCHEMAS) {
+    const schemaPath = `openspec/schemas/${schemaName}/schema.yaml`;
+    check(exists(schemaPath), `缺少自定义工作流 Schema: ${schemaPath}`);
+  }
+
+  const roleDir = 'openspec/role';
+  if (exists(roleDir)) {
+    for (const entry of fs.readdirSync(abs(roleDir), {withFileTypes: true})) {
+      if (entry.isFile() && entry.name.endsWith('.md')) {
+        validateMarkdownRelativeLinks(`${roleDir}/${entry.name}`, check);
+      }
+    }
+  }
+  if (exists('openspec/GLOSSARY.md')) {
+    validateMarkdownRelativeLinks('openspec/GLOSSARY.md', check);
+  }
+
+  if (!exists(configPath)) return;
+
+  const lines = read(configPath).split('\n');
+  let blockIndent = null;
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const indent = line.match(/^ */)?.[0].length ?? 0;
+
+    if (blockIndent !== null) {
+      if (indent > blockIndent) continue;
+      blockIndent = null;
+    }
+    if (/:\s*[|>][+-]?\s*$/.test(line)) {
+      blockIndent = indent;
+      continue;
+    }
+
+    const listMatch = line.match(/^\s*-\s+(.*)$/);
+    if (listMatch) {
+      const val = stripYamlInlineComment(listMatch[1]).trim();
+      const isQuoted =
+        (val.startsWith("'") && val.endsWith("'")) || (val.startsWith('"') && val.endsWith('"'));
+      if (!isQuoted && /:\s/.test(val)) {
+        check(
+          false,
+          `${configPath}:${i + 1}: 未加引号的 YAML 列表项包含 ": "（会导致 OpenSpec CLI 解析失败并静默忽略整个 config.yaml），请用单引号包裹该行`,
+        );
+      }
+    }
+  }
+}
+
+function parseChangeMeta(changeDir, check) {
+  const metaPath = `${changeDir}/.openspec.yaml`;
+  check(exists(metaPath), `${changeDir}: 缺少 .openspec.yaml`);
+  if (!exists(metaPath)) {
+    return {schema: null, skipSpecs: false};
+  }
+  const raw = read(metaPath);
+  const lines = raw.split('\n');
+  const seenKeys = new Set();
+  for (let i = 0; i < lines.length; i += 1) {
+    const stripped = stripYamlInlineComment(lines[i]);
+    const trimmed = stripped.trim();
+    if (!trimmed) continue;
+    if (/^\s+/.test(stripped)) continue;
+    const kv = stripped.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
+    check(Boolean(kv), `${metaPath}:${i + 1}: 无法解析顶层元数据行 "${trimmed}"`);
+    if (!kv) continue;
+    const [, key, rawVal] = kv;
+    check(
+      ALLOWED_META_KEYS.has(key),
+      `${metaPath}:${i + 1}: 未知或拼写错误的元数据键 "${key}"（仅允许 ${[...ALLOWED_META_KEYS].join(', ')}）`,
+    );
+    check(!seenKeys.has(key), `${metaPath}:${i + 1}: 重复元数据键 "${key}"`);
+    seenKeys.add(key);
+    if (key === 'skip_specs' || key === 'retire_capabilities') {
+      const val = rawVal.trim();
+      check(
+        val === 'true' || val === 'false',
+        `${metaPath}:${i + 1}: ${key} 必须为布尔值 true 或 false（当前为 "${val}"）`,
+      );
+    }
+  }
+
+  const schemaMatch = raw.match(/^schema:\s*(\S+)\s*$/m);
+  const schema = schemaMatch?.[1]?.trim() ?? '';
+  check(
+    ALLOWED_SCHEMAS.has(schema),
+    `${metaPath}: schema 必须显式为 spec-only 或 spec-driven（当前为 "${schema || '缺失'}"）`,
+  );
+  const skipSpecs = /^skip_specs:\s*true\s*$/m.test(raw);
+  return {schema: ALLOWED_SCHEMAS.has(schema) ? schema : null, skipSpecs};
+}
+
+function validateLivingDocumentMarkdown(relPath, check, allowDeltaH2Start = false) {
+  if (!exists(relPath)) return;
+  const raw = read(relPath);
+  const withoutComments = stripComments(raw).trimStart();
+  const validStart = allowDeltaH2Start
+    ? /^(?:# \S|## (?:Purpose|(?:ADDED|MODIFIED|REMOVED|RENAMED) Requirements)\b)/.test(
+        withoutComments,
+      )
+    : /^# \S/.test(withoutComments);
+  check(
+    validStart,
+    allowDeltaH2Start
+      ? `${relPath}: 增量规格必须以 "# <标题>" 或 "## Purpose / ## ADDED|MODIFIED|REMOVED|RENAMED Requirements" 起始（不得在顶部堆叠修订横幅）`
+      : `${relPath}: Living Document 必须以一级标题 "# <标题>" 起始（不得在标题上方堆叠修订横幅或说明）`,
+  );
+
+  const cleaned = stripCommentsAndFences(raw);
+  const seenH2 = new Set();
+  for (const match of cleaned.matchAll(/^## (.+)$/gm)) {
+    const heading = match[1].trim();
+    check(
+      !seenH2.has(heading),
+      `${relPath}: 存在重复二级标题 "## ${heading}"（请原地合并章节内容，避免堆叠多轮补丁小节）`,
+    );
+    seenH2.add(heading);
+  }
+}
+
+function validateChangeDirectoryHygiene(changeName, changeDir, schema, skipSpecs, check) {
+  if (LEGACY_HYGIENE_EXEMPT_CHANGES.has(changeName)) return;
+
+  const allowedFiles =
+    schema === 'spec-only'
+      ? new Set(['.openspec.yaml', 'proposal.md', 'design.md'])
+      : new Set(['.openspec.yaml', 'proposal.md', 'design.md', 'tests.md', 'plan.md', 'tasks.md']);
+  const entries = fs.readdirSync(abs(changeDir), {withFileTypes: true});
+  for (const entry of entries) {
+    if (entry.isDirectory()) {
+      check(
+        entry.name === 'specs' && !skipSpecs,
+        `${changeDir}/${entry.name}: 变更目录根下仅允许 specs/ 子目录（skip_specs: true 时不允许 specs/）`,
+      );
+    } else if (entry.isFile()) {
+      check(
+        allowedFiles.has(entry.name),
+        `${changeDir}/${entry.name}: 不允许在变更目录根下放置非 Schema 文件（契约请写入 design.md 子章节或 docs/implementation/，过程与审查记录请写入 plan.md 或 testing/runs/）`,
+      );
+    }
+  }
+
+  const mdArtifacts =
+    schema === 'spec-only'
+      ? ['proposal.md', 'design.md']
+      : ['proposal.md', 'design.md', 'tests.md', 'plan.md', 'tasks.md'];
+  for (const name of mdArtifacts) {
+    const relArtifact = `${changeDir}/${name}`;
+    validateLivingDocumentMarkdown(relArtifact, check);
+    validateMarkdownRelativeLinks(relArtifact, check);
+  }
+}
+
+function parseSpecScenarios(specText, specPath, check, deltaOnly = false, deltaContext = null) {
   const cleaned = stripCommentsAndFences(specText);
   const scenarioSet = new Set();
   const byRequirement = new Map();
+
+  const extractReqNames = blockText =>
+    [...blockText.matchAll(/^### Requirement:\s*(.+)$/gm)].map(m => m[1].trim());
 
   const parseBlock = (blockText, activeForCoverage) => {
     const reqs = [...blockText.matchAll(/^### Requirement:\s*(.+)$/gm)];
@@ -171,16 +371,125 @@ function parseSpecScenarios(specText, specPath, check, deltaOnly = false) {
 
   if (deltaOnly) {
     const h2 = [...cleaned.matchAll(/^## (.+)$/gm)];
+    let deltaOpCount = 0;
+    let hasPurpose = false;
+    let nonEmptyPurpose = false;
     for (let i = 0; i < h2.length; i += 1) {
       const title = h2[i][1].trim();
-      const body = cleaned.slice(h2[i].index, h2[i + 1]?.index ?? cleaned.length);
-      const isAddedOrModified = /^(ADDED|MODIFIED) Requirements$/.test(title);
-      if (isAddedOrModified) {
+      const bodyStart = h2[i].index + h2[i][0].length;
+      const bodyEnd = h2[i + 1]?.index ?? cleaned.length;
+      const body = cleaned.slice(h2[i].index, bodyEnd);
+      const innerBody = cleaned.slice(bodyStart, bodyEnd).trim();
+      const isDeltaOp = DELTA_OP_TITLE_RE.test(title);
+      check(
+        title === 'Purpose' || isDeltaOp,
+        `${specPath}: 非法增量规格二级标题 "## ${title}"（仅允许 Purpose 与 ADDED/MODIFIED/REMOVED/RENAMED Requirements）`,
+      );
+      if (title === 'Purpose') {
+        hasPurpose = true;
+        nonEmptyPurpose = innerBody.length > 0;
+      }
+      if (isDeltaOp) deltaOpCount += 1;
+
+      if (title === 'ADDED Requirements') {
         check(/^### Requirement:/m.test(body), `${specPath} "## ${title}": 缺少 ### Requirement:`);
         parseBlock(body, true);
+        if (deltaContext?.baseReqSet) {
+          for (const reqName of extractReqNames(body)) {
+            check(
+              !deltaContext.baseReqSet.has(reqName),
+              `${specPath} "## ADDED Requirements": Requirement "${reqName}" 已存在于长期规格 ${deltaContext.longTermSpec}（修改既有需求请使用 ## MODIFIED Requirements）`,
+            );
+          }
+        }
+      } else if (title === 'MODIFIED Requirements') {
+        check(
+          !deltaContext?.isNewCapability,
+          `${specPath}: 新增能力增量规格不得使用 "## MODIFIED Requirements"`,
+        );
+        check(/^### Requirement:/m.test(body), `${specPath} "## ${title}": 缺少 ### Requirement:`);
+        parseBlock(body, true);
+        if (deltaContext?.baseReqSet) {
+          for (const reqName of extractReqNames(body)) {
+            check(
+              deltaContext.baseReqSet.has(reqName),
+              `${specPath} "## MODIFIED Requirements": Requirement "${reqName}" 在长期规格 ${deltaContext.longTermSpec} 中不存在（请核对需求标题是否完全一致）`,
+            );
+          }
+        }
+      } else if (title === 'REMOVED Requirements') {
+        check(
+          !deltaContext?.isNewCapability,
+          `${specPath}: 新增能力增量规格不得使用 "## REMOVED Requirements"`,
+        );
+        check(/^### Requirement:/m.test(body), `${specPath} "## ${title}": 缺少 ### Requirement:`);
+        if (deltaContext?.baseReqSet) {
+          for (const reqName of extractReqNames(body)) {
+            check(
+              deltaContext.baseReqSet.has(reqName),
+              `${specPath} "## REMOVED Requirements": Requirement "${reqName}" 在长期规格 ${deltaContext.longTermSpec} 中不存在`,
+            );
+          }
+        }
+      } else if (title === 'RENAMED Requirements') {
+        check(
+          !deltaContext?.isNewCapability,
+          `${specPath}: 新增能力增量规格不得使用 "## RENAMED Requirements"`,
+        );
+        const fromReqs = [
+          ...innerBody.matchAll(/^(?:-\s*)?FROM:\s*`?### Requirement:\s*(.+?)`?\s*$/gm),
+        ].map(m => m[1].trim());
+        const toReqs = [
+          ...innerBody.matchAll(/^(?:-\s*)?TO:\s*`?### Requirement:\s*(.+?)`?\s*$/gm),
+        ].map(m => m[1].trim());
+        check(
+          fromReqs.length > 0 && fromReqs.length === toReqs.length,
+          `${specPath} "## RENAMED Requirements": 必须包含成对的 FROM/TO Requirement 重命名声明`,
+        );
+        if (deltaContext?.baseReqSet) {
+          for (const oldName of fromReqs) {
+            check(
+              deltaContext.baseReqSet.has(oldName),
+              `${specPath} "## RENAMED Requirements": FROM Requirement "${oldName}" 在长期规格 ${deltaContext.longTermSpec} 中不存在`,
+            );
+          }
+          for (const newName of toReqs) {
+            check(
+              !deltaContext.baseReqSet.has(newName),
+              `${specPath} "## RENAMED Requirements": TO Requirement "${newName}" 已存在于长期规格 ${deltaContext.longTermSpec}`,
+            );
+          }
+        }
       }
     }
+    if (deltaContext) {
+      if (deltaContext.isNewCapability) {
+        check(
+          hasPurpose && nonEmptyPurpose,
+          `${specPath}: 新增能力增量规格必须包含非空 "## Purpose" 章节`,
+        );
+      } else {
+        check(
+          !hasPurpose,
+          `${specPath}: 既有能力增量规格不得包含 "## Purpose" 章节（仅新增能力需要）`,
+        );
+      }
+    }
+    check(
+      deltaOpCount > 0,
+      `${specPath}: 增量规格必须至少包含一个 ## ADDED/MODIFIED/REMOVED/RENAMED Requirements 章节`,
+    );
   } else {
+    validateLivingDocumentMarkdown(specPath, check);
+    const sections = extractH2Sections(specText, false);
+    check(Boolean(sections.get('Purpose')), `${specPath}: 缺少或为空的章节 "## Purpose"`);
+    check(Boolean(sections.get('Requirements')), `${specPath}: 缺少或为空的章节 "## Requirements"`);
+    for (const heading of sections.keys()) {
+      check(
+        !DELTA_OP_TITLE_RE.test(heading),
+        `${specPath}: 长期规格不得残留增量标题 "## ${heading}"`,
+      );
+    }
     check(/^### Requirement:/m.test(cleaned), `${specPath}: 缺少 ### Requirement:`);
     parseBlock(cleaned, true);
   }
@@ -338,16 +647,21 @@ function recordMappingEntry({
   }
 }
 
-function validateChange(changeName, requireImplementationArtifacts, forceStrictCoverage, check, warn, stats) {
+function validateChange(changeName, explicitMode, check, stats) {
   const changeDir = `openspec/changes/${changeName}`;
   check(exists(changeDir), `变更目录不存在: ${changeDir}`);
   if (!exists(changeDir)) return;
+
+  const {schema, skipSpecs} = parseChangeMeta(changeDir, check);
+  if (!schema) return;
 
   const proposalPath = `${changeDir}/proposal.md`;
   const designPath = `${changeDir}/design.md`;
   check(exists(proposalPath), `${changeDir}: 缺少 proposal.md`);
   check(exists(designPath), `${changeDir}: 缺少 design.md`);
   if (!exists(proposalPath)) return;
+
+  validateChangeDirectoryHygiene(changeName, changeDir, schema, skipSpecs, check);
 
   const proposalText = read(proposalPath);
   const proposalSections = extractH2Sections(proposalText);
@@ -361,21 +675,43 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
     check(read(designPath).trim().length > 0, `${designPath}: 内容不能为空`);
   }
 
-  const skipSpecs = parseSkipSpecs(changeDir);
   const deltaSpecMap = new Map();
   const allDeltaScenarios = new Set();
 
-  if (!skipSpecs && proposalSections.get('Capabilities')) {
+  if (skipSpecs) {
+    check(
+      schema === 'spec-driven',
+      `${changeDir}/.openspec.yaml: schema: spec-only 变更不得设置 skip_specs: true`,
+    );
+    check(
+      !exists(`${changeDir}/specs`),
+      `${changeDir}: skip_specs: true 时不得同时存在 ${changeDir}/specs 目录`,
+    );
+  } else if (proposalSections.get('Capabilities')) {
     const capSubsections = extractSubsections(proposalSections.get('Capabilities'), '###');
     const newCaps = parseCapabilityBullets(capSubsections.get('New Capabilities') ?? '');
     const modCaps = parseCapabilityBullets(capSubsections.get('Modified Capabilities') ?? '');
+    const newCapSet = new Set(newCaps);
+    const modCapSet = new Set(modCaps);
     const declaredCaps = new Set([...newCaps, ...modCaps]);
-    check(declaredCaps.size > 0, `${proposalPath}: Capabilities 未声明任何有效能力路径`);
+    check(declaredCaps.size > 0, `${proposalPath}: Capabilities 未声明任何有效扁平 kebab-case 能力路径`);
+
+    for (const cap of newCapSet) {
+      check(
+        !modCapSet.has(cap),
+        `${proposalPath}: 能力 "${cap}" 不能同时声明在 New Capabilities 与 Modified Capabilities 中`,
+      );
+    }
 
     for (const cap of newCaps) {
       const relSpec = `specs/${cap}/spec.md`;
       const fullSpec = `${changeDir}/${relSpec}`;
+      const longTermSpec = `openspec/specs/${cap}/spec.md`;
       check(exists(fullSpec), `${proposalPath}: New Capability "${cap}" 缺少 ${fullSpec}`);
+      check(
+        !exists(longTermSpec),
+        `${proposalPath}: New Capability "${cap}" 已存在于长期规格 ${longTermSpec}（修改既有能力请归入 Modified Capabilities）`,
+      );
     }
     for (const cap of modCaps) {
       const relSpec = `specs/${cap}/spec.md`;
@@ -389,17 +725,45 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
     }
 
     const specsRoot = `${changeDir}/specs`;
+    check(exists(specsRoot), `${changeDir}: 缺少 specs/ 目录`);
     if (exists(specsRoot)) {
-      const diskCaps = fs
-        .readdirSync(abs(specsRoot), {withFileTypes: true})
-        .filter(d => d.isDirectory())
-        .map(d => d.name);
-      for (const diskCap of diskCaps) {
+      const entries = fs.readdirSync(abs(specsRoot), {withFileTypes: true});
+      for (const entry of entries) {
+        check(entry.isDirectory(), `${specsRoot}/${entry.name}: specs/ 下只允许单层能力目录`);
+        if (!entry.isDirectory()) continue;
+        const diskCap = entry.name;
+        check(
+          CAPABILITY_NAME_RE.test(diskCap),
+          `${specsRoot}/${diskCap}: 能力目录名必须为扁平单层 kebab-case`,
+        );
+        const capEntries = fs.readdirSync(abs(`${specsRoot}/${diskCap}`), {withFileTypes: true});
+        for (const subEntry of capEntries) {
+          check(
+            subEntry.isFile() && subEntry.name === 'spec.md',
+            `${specsRoot}/${diskCap}/${subEntry.name}: 能力目录下只允许 spec.md，禁止多级嵌套或其他文件`,
+          );
+        }
+
         const relSpec = `specs/${diskCap}/spec.md`;
         const fullSpec = `${changeDir}/${relSpec}`;
         check(declaredCaps.has(diskCap), `${fullSpec}: 未在 proposal.md Capabilities 中声明`);
         if (exists(fullSpec)) {
-          const parsed = parseSpecScenarios(read(fullSpec), relSpec, check, true);
+          if (!LEGACY_HYGIENE_EXEMPT_CHANGES.has(changeName)) {
+            validateLivingDocumentMarkdown(fullSpec, check, true);
+            validateMarkdownRelativeLinks(fullSpec, check);
+          }
+          const isNewCapability = newCapSet.has(diskCap);
+          const longTermSpec = `openspec/specs/${diskCap}/spec.md`;
+          const baseReqSet =
+            !isNewCapability && exists(longTermSpec)
+              ? new Set(
+                  parseSpecScenarios(read(longTermSpec), longTermSpec, () => {}, false).byRequirement.keys(),
+                )
+              : null;
+          const deltaContext = declaredCaps.has(diskCap)
+            ? {isNewCapability, longTermSpec, baseReqSet}
+            : null;
+          const parsed = parseSpecScenarios(read(fullSpec), relSpec, check, true, deltaContext);
           deltaSpecMap.set(relSpec, parsed.byRequirement);
           for (const key of parsed.scenarioSet) allDeltaScenarios.add(key);
         }
@@ -408,17 +772,35 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
   }
 
   const implFiles = ['tests.md', 'plan.md', 'tasks.md'];
-  const presentImpl = implFiles.filter(name => exists(`${changeDir}/${name}`));
-  if (!requireImplementationArtifacts && presentImpl.length === 0) {
+  if (schema === 'spec-only') {
+    for (const name of implFiles) {
+      check(
+        !exists(`${changeDir}/${name}`),
+        `${changeDir}/${name}: schema: spec-only 远期变更不得包含施工产物（正式开工请先将 .openspec.yaml 改为 schema: spec-driven）`,
+      );
+    }
+    if (explicitMode === 'impl') {
+      check(
+        false,
+        `${changeDir}: 当前为 schema: spec-only 远期规划态，不能进入实施门禁；获准开工时请先将 .openspec.yaml 改为 schema: spec-driven 并补齐 tests.md、plan.md、tasks.md（若仅校验规划定义请加 --spec-only）`,
+      );
+      return;
+    }
+    stats.specOnlyChanges += 1;
+    return;
+  }
+
+  if (explicitMode === 'spec-only') {
     stats.specOnlyChanges += 1;
     return;
   }
 
   stats.implChanges += 1;
+  const presentImpl = implFiles.filter(name => exists(`${changeDir}/${name}`));
   for (const name of implFiles) {
     check(
       exists(`${changeDir}/${name}`),
-      `${changeDir}: 进入实施准备门禁时必须同时具备 tests.md、plan.md、tasks.md（当前缺少 ${name}）`,
+      `${changeDir}: schema: spec-driven 变更必须具备完整施工产物 tests.md、plan.md、tasks.md（当前缺少 ${name}；若属未排期远期规划请改为 schema: spec-only）`,
     );
   }
   if (presentImpl.length < implFiles.length) return;
@@ -460,18 +842,19 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
 
   // 2. Validate tasks.md <-> plan.md bidirectional WP binding
   const tasksPath = `${changeDir}/tasks.md`;
-  const tasksCleaned = stripCommentsAndFences(read(tasksPath));
-  const followUpIdx = tasksCleaned.search(/^## Workflow follow-up\b/m);
-  const trackedTasksText = followUpIdx >= 0 ? tasksCleaned.slice(0, followUpIdx) : tasksCleaned;
-  const followUpText = followUpIdx >= 0 ? tasksCleaned.slice(followUpIdx) : '';
-
+  const tasksRaw = read(tasksPath);
+  const tasksSections = extractH2Sections(tasksRaw, false);
+  const followUpSection = tasksSections.get('Workflow follow-up') ?? '';
   check(
-    !/^- \[[xX]\] /m.test(followUpText),
+    !/^- \[[xX]\] /m.test(followUpSection),
     `${tasksPath}: "## Workflow follow-up" 不得包含已勾选的 tracked checkbox`,
   );
 
+  const tasksCleaned = stripCommentsAndFences(tasksRaw);
+  const followUpIdx = tasksCleaned.search(/^## Workflow follow-up\b/m);
+  const trackedTasksText = followUpIdx >= 0 ? tasksCleaned.slice(0, followUpIdx) : tasksCleaned;
+
   const checkboxes = [...trackedTasksText.matchAll(/^- \[[ xX]\] (.+)$/gm)].map(m => m[1].trim());
-  const checkedCount = [...trackedTasksText.matchAll(/^- \[[xX]\] (.+)$/gm)].length;
   check(checkboxes.length > 0, `${tasksPath}: 至少包含一个真实任务 checkbox`);
 
   const wpReferencedCount = new Map(wpIds.map(id => [id, 0]));
@@ -491,7 +874,7 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
     check(count > 0, `${planPath} <-> ${tasksPath}: 工作包 ${wpId} 未被任何真实任务 checkbox 引用`);
   }
 
-  // 3. Validate tests.md & delta Requirement/Scenario coverage
+  // 3. Validate tests.md & 100% delta Requirement/Scenario (or Success Criteria) coverage
   const testsPath = `${changeDir}/tests.md`;
   const testsRaw = read(testsPath);
   const parsedCases = parseCases(testsRaw, testsPath, check);
@@ -499,7 +882,33 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
   const caseIdSet = new Set(parsedCases.map(item => item.id));
   stats.activeChangeCases += parsedCases.length;
 
-  if (!skipSpecs) {
+  const tables = parseMarkdownTables(stripCommentsAndFences(testsRaw));
+  if (skipSpecs) {
+    let scMappedRows = 0;
+    for (const table of tables) {
+      if (table.length < 3 || !isSeparatorRow(table[1])) continue;
+      for (const row of table.slice(2)) {
+        if (
+          row.length === 4 &&
+          row[0].replace(/^`|`$/g, '').trim() === 'proposal.md' &&
+          row[1].trim() === 'Success Criteria'
+        ) {
+          const scTarget = row[2].trim();
+          const ids = [...row[3].matchAll(CASE_ID_TOKEN_RE)].map(m => m[0]);
+          check(Boolean(scTarget), `${testsPath}: Success Criteria 关联行缺少判据标识`);
+          check(ids.length > 0, `${testsPath}: Success Criteria "${scTarget}" 关联行缺少用例 ID`);
+          for (const id of ids) {
+            check(caseIdSet.has(id), `${testsPath}: Success Criteria 关联引用了不存在的用例 ID "${id}"`);
+          }
+          if (scTarget && ids.length > 0) scMappedRows += 1;
+        }
+      }
+    }
+    check(
+      scMappedRows > 0,
+      `${testsPath}: skip_specs: true 变更必须包含四列映射行 "| proposal.md | Success Criteria | SCn | 用例 ID |"，以关联成功判据`,
+    );
+  } else {
     const longTermCache = new Map();
     const getLongTermSpec = specRel => {
       if (!longTermCache.has(specRel)) {
@@ -516,7 +925,6 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
     };
 
     const coveredDelta = new Set();
-    const tables = parseMarkdownTables(stripCommentsAndFences(testsRaw));
     for (const table of tables) {
       if (table.length < 3 || !isSeparatorRow(table[1])) continue;
       for (const row of table.slice(2)) {
@@ -590,18 +998,56 @@ function validateChange(changeName, requireImplementationArtifacts, forceStrictC
       }
     }
 
-    const enforceCoverageAsError =
-      requireImplementationArtifacts || forceStrictCoverage || checkedCount > 0;
     for (const key of allDeltaScenarios) {
       if (!coveredDelta.has(key)) {
-        const msg = `${testsPath}: 增量规格场景缺少验收用例映射 -> ${key.replaceAll('\0', ' / ')}`;
-        if (enforceCoverageAsError) {
-          check(false, msg);
-        } else {
-          warn(`${msg}（当前 tasks 进度 0/${checkboxes.length}，进入编码前门禁 --change ${changeName} 前必须补齐）`);
-        }
+        check(
+          false,
+          `${testsPath}: 增量规格场景缺少验收用例映射 -> ${key.replaceAll('\0', ' / ')}`,
+        );
       }
     }
+  }
+}
+
+function validateArchivedChanges(check, stats) {
+  const archiveRoot = 'openspec/changes/archive';
+  if (!exists(archiveRoot)) return;
+
+  const entries = fs
+    .readdirSync(abs(archiveRoot), {withFileTypes: true})
+    .sort((a, b) => a.name.localeCompare(b.name));
+  for (const entry of entries) {
+    const archiveDir = `${archiveRoot}/${entry.name}`;
+    check(entry.isDirectory(), `${archiveDir}: archive/ 下只允许归档变更目录`);
+    if (!entry.isDirectory()) continue;
+
+    check(
+      ARCHIVE_DIR_NAME_RE.test(entry.name),
+      `${archiveDir}: 归档目录名必须满足 YYYY-MM-DD-<change-name> 格式`,
+    );
+
+    const {schema} = parseChangeMeta(archiveDir, check);
+    check(
+      schema === 'spec-driven',
+      `${archiveDir}/.openspec.yaml: 严禁归档 schema: spec-only 远期规划变更（已归档变更必须为 schema: spec-driven）`,
+    );
+
+    for (const requiredFile of ['proposal.md', 'design.md', 'tests.md', 'plan.md', 'tasks.md']) {
+      check(
+        exists(`${archiveDir}/${requiredFile}`),
+        `${archiveDir}: 已归档变更缺少核心产物 ${requiredFile}`,
+      );
+    }
+
+    const tasksPath = `${archiveDir}/tasks.md`;
+    if (exists(tasksPath)) {
+      const cleanedTasks = stripCommentsAndFences(read(tasksPath));
+      check(
+        !/^- \[ \] /m.test(cleanedTasks),
+        `${tasksPath}: 已归档变更不得保留未勾选的 "- [ ]" 任务`,
+      );
+    }
+    stats.archivedChanges += 1;
   }
 }
 
@@ -622,18 +1068,24 @@ function parseSourceDefinitionPaths(suiteText) {
 function validateDurableSuites(check, stats) {
   const suitesDir = 'testing/suites';
   const specsDir = 'openspec/specs';
+  const durableSpecs = new Map();
 
   if (exists(specsDir)) {
-    const specCapabilities = fs
-      .readdirSync(abs(specsDir), {withFileTypes: true})
-      .filter(d => d.isDirectory())
-      .map(d => d.name)
-      .sort();
-    for (const capability of specCapabilities) {
+    const specEntries = fs.readdirSync(abs(specsDir), {withFileTypes: true});
+    for (const entry of specEntries) {
+      check(entry.isDirectory(), `${specsDir}/${entry.name}: openspec/specs/ 下只允许单层能力目录`);
+      if (!entry.isDirectory()) continue;
+      const capability = entry.name;
+      check(
+        CAPABILITY_NAME_RE.test(capability),
+        `${specsDir}/${capability}: 长期能力目录名必须为扁平单层 kebab-case`,
+      );
       const specPath = `${specsDir}/${capability}/spec.md`;
       const suitePath = `${suitesDir}/${capability}/tests.md`;
+      check(exists(specPath), `长期能力目录缺少规格文件: ${specPath}`);
       if (exists(specPath)) {
-        parseSpecScenarios(read(specPath), specPath, check, false);
+        validateMarkdownRelativeLinks(specPath, check);
+        durableSpecs.set(capability, parseSpecScenarios(read(specPath), specPath, check, false));
         check(
           exists(suitePath),
           `长期规格 ${specPath} 缺少对应的长期验收套件 ${suitePath}`,
@@ -646,20 +1098,30 @@ function validateDurableSuites(check, stats) {
 
   const archiveSourceCache = new Map();
   const globalCaseOwner = new Map();
+  const suiteTexts = new Map();
   const capabilityDirs = fs
     .readdirSync(abs(suitesDir), {withFileTypes: true})
-    .filter(d => d.isDirectory() && d.name !== 'traceability')
+    .filter(d => d.isDirectory())
     .map(d => d.name)
     .sort();
 
+  // Pass 1: Validate suite files, archive Source definitions, and collect global stable Case IDs.
   for (const capability of capabilityDirs) {
+    check(
+      CAPABILITY_NAME_RE.test(capability),
+      `${suitesDir}/${capability}: 长期套件目录名必须为扁平单层 kebab-case`,
+    );
     const suitePath = `${suitesDir}/${capability}/tests.md`;
     const specPath = `openspec/specs/${capability}/spec.md`;
     check(exists(suitePath), `长期套件缺少文件: ${suitePath}`);
     check(exists(specPath), `长期套件对应规格不存在: ${specPath}`);
     if (!exists(suitePath)) continue;
 
+    validateLivingDocumentMarkdown(suitePath, check);
+    validateMarkdownRelativeLinks(suitePath, check);
+
     const suiteText = read(suitePath);
+    suiteTexts.set(capability, suiteText);
     check(suiteText.includes(specPath), `${suitePath}: 缺少长期规格引用 "${specPath}"`);
 
     const suiteCases = parseCases(suiteText, suitePath, check);
@@ -671,12 +1133,13 @@ function validateDurableSuites(check, stats) {
       const prev = globalCaseOwner.get(item.id);
       check(
         !prev,
-        `长期套件用例 ID "${item.id}" 同时在 ${prev} 与 ${capability} 中重复定义正文（跨能力共用用例应在单一主能力套件定义正文，其他套件按 ID 引用）`,
+        `长期套件用例 ID "${item.id}" 同时在 ${prev} 与 ${capability} 中重复定义正文（跨能力共用用例应在单一主能力套件定义正文，其他套件仅在 ## 需求关联 表按 ID 引用）`,
       );
       globalCaseOwner.set(item.id, capability);
     }
 
     const declaredStable = suiteText.match(/^- Stable IDs:\s*(.+)$/m);
+    check(Boolean(declaredStable), `${suitePath}: 缺少 "- Stable IDs:" 稳定用例编号声明行`);
     if (declaredStable) {
       const declaredIds = [...declaredStable[1].matchAll(CASE_ID_TOKEN_RE)].map(m => m[0]);
       const actualIds = suiteCases.map(item => item.id);
@@ -707,7 +1170,6 @@ function validateDurableSuites(check, stats) {
         }
       }
 
-      const usedSources = new Set();
       for (const item of suiteCases) {
         const resolved = mergedArchiveCases.get(item.id);
         check(
@@ -715,7 +1177,6 @@ function validateDurableSuites(check, stats) {
           `${suitePath} ${item.id}: 未在声明的 Source definitions (${srcPaths.join('、')}) 中找到`,
         );
         if (resolved) {
-          usedSources.add(resolved.srcPath);
           for (const key of ['title', ...CASE_FIELDS]) {
             check(
               resolved.item[key] === item[key],
@@ -726,7 +1187,98 @@ function validateDurableSuites(check, stats) {
       }
       for (const srcPath of perSourceIds.keys()) {
         const hasAny = suiteCases.some(c => perSourceIds.get(srcPath)?.has(c.id));
-        check(hasAny, `${suitePath}: 声明的 Source definitions "${srcPath}" 未向本套件提供任何用例`);
+        check(
+          hasAny,
+          `${suitePath}: 声明的 Source definitions "${srcPath}" 未向本套件提供任何本地 ### <ID> 用例正文（若仅在 ## 需求关联 跨套件按 ID 引用其他主套件用例，请勿追加 Source definitions）`,
+        );
+      }
+    }
+  }
+
+  // Pass 2: Validate 4-column "## 需求关联" table in every durable suite against openspec/specs/<capability>/spec.md (100% scenario coverage).
+  const globalCaseIdSet = new Set(globalCaseOwner.keys());
+  for (const capability of capabilityDirs) {
+    const suiteText = suiteTexts.get(capability);
+    const parsedSpec = durableSpecs.get(capability);
+    if (!suiteText || !parsedSpec) continue;
+
+    const suitePath = `${suitesDir}/${capability}/tests.md`;
+    const expectedSpecPath = `openspec/specs/${capability}/spec.md`;
+    stats.durableTotalScenarios += parsedSpec.scenarioSet.size;
+
+    const traceSection = extractH2Sections(suiteText).get('需求关联');
+    check(
+      Boolean(traceSection),
+      `${suitePath}: 缺少 "## 需求关联" 章节（须包含四列映射表覆盖 ${expectedSpecPath} 的全部 Requirement 与 Scenario）`,
+    );
+    if (!traceSection) continue;
+
+    const coveredDurable = new Set();
+    const tables = parseMarkdownTables(traceSection);
+    const mappingTables = tables.filter(t => t.length >= 3 && t[0].length === 4 && isSeparatorRow(t[1]));
+    check(
+      mappingTables.length > 0,
+      `${suitePath}: "## 需求关联" 必须包含四列 Markdown 映射表（| 长期规格路径 | Requirement | Scenario | 用例 |）`,
+    );
+
+    for (const table of mappingTables) {
+      for (const row of table.slice(2)) {
+        check(row.length === 4, `${suitePath}: "## 需求关联" 行列数不为 4 (${row[0] ?? ''})`);
+        if (row.length !== 4) continue;
+
+        const specRef = row[0].replace(/^`|`$/g, '').trim();
+        const reqName = row[1].trim();
+        const rawScenario = row[2].trim();
+        const rawCaseCell = row[3].trim();
+
+        check(
+          specRef === expectedSpecPath,
+          `${suitePath}: "## 需求关联" 第一列必须指向本能力长期规格 "${expectedSpecPath}"（当前为 "${specRef}"）`,
+        );
+
+        const ids = [...rawCaseCell.matchAll(CASE_ID_TOKEN_RE)].map(m => m[0]);
+        check(
+          ids.length > 0,
+          `${suitePath}: "## 需求关联" 行缺少稳定用例 ID (${reqName} / ${rawScenario})`,
+        );
+        for (const id of ids) {
+          check(
+            globalCaseIdSet.has(id),
+            `${suitePath}: "## 需求关联" 引用了长期套件中不存在的用例 ID "${id}"`,
+          );
+        }
+
+        const scenSet = parsedSpec.byRequirement.get(reqName);
+        check(
+          Boolean(scenSet),
+          `${suitePath}: "${expectedSpecPath}" 中不存在 Requirement "${reqName}"`,
+        );
+        if (!scenSet) continue;
+
+        const resolvedScenarios =
+          !scenSet.has(rawScenario) && rawScenario.includes('、')
+            ? rawScenario.split('、').map(s => s.trim()).filter(Boolean)
+            : [rawScenario];
+
+        for (const scName of resolvedScenarios) {
+          check(
+            scenSet.has(scName),
+            `${suitePath}: "${expectedSpecPath}" Requirement "${reqName}" 中不存在 Scenario "${scName}"`,
+          );
+          if (specRef === expectedSpecPath && scenSet.has(scName) && ids.length > 0) {
+            coveredDurable.add(`${expectedSpecPath}\0${reqName}\0${scName}`);
+          }
+        }
+      }
+    }
+
+    stats.durableCoveredScenarios += coveredDurable.size;
+    for (const key of parsedSpec.scenarioSet) {
+      if (!coveredDurable.has(key)) {
+        check(
+          false,
+          `${suitePath}: 长期规格场景缺少验收用例映射 -> ${key.replaceAll('\0', ' / ')}`,
+        );
       }
     }
   }
@@ -746,31 +1298,34 @@ function main() {
     console.log(
       [
         'Usage:',
-        '  node testing/suites/verify-suite.mjs                             # 校验全部活动变更与长期套件',
-        '  node testing/suites/verify-suite.mjs --change <name>             # 按实施门禁校验指定活动变更（要求 tests/plan/tasks 齐全且 100% 场景映射）',
+        '  node testing/suites/verify-suite.mjs                             # 校验全部活动变更、已归档变更与长期套件 100% 覆盖',
+        '  node testing/suites/verify-suite.mjs --change <name>             # 按 spec-driven 实施门禁校验指定活动变更',
         '  node testing/suites/verify-suite.mjs --change <name> --spec-only # 仅按需求/设计阶段校验指定变更',
-        '  node testing/suites/verify-suite.mjs --strict-coverage           # 全仓模式下对 0 进度草稿变更也强制 100% 场景映射报错',
       ].join('\n'),
     );
     return;
   }
 
   const errors = [];
-  const warnings = [];
   const check = (valid, message) => {
     if (!valid) errors.push(message);
   };
-  const warn = message => warnings.push(message);
   const stats = {
     specOnlyChanges: 0,
     implChanges: 0,
+    archivedChanges: 0,
     activeChangeCases: 0,
     durableSuites: 0,
     durableCases: 0,
+    durableCoveredScenarios: 0,
+    durableTotalScenarios: 0,
   };
 
+  validateOpenSpecConfig(check);
+
   if (options.change) {
-    validateChange(options.change, !options.specOnly, options.strictCoverage, check, warn, stats);
+    const explicitMode = options.specOnly ? 'spec-only' : 'impl';
+    validateChange(options.change, explicitMode, check, stats);
   } else {
     const changesRoot = 'openspec/changes';
     if (exists(changesRoot)) {
@@ -780,14 +1335,11 @@ function main() {
         .map(d => d.name)
         .sort();
       for (const name of changeDirs) {
-        validateChange(name, false, options.strictCoverage, check, warn, stats);
+        validateChange(name, 'auto', check, stats);
       }
     }
+    validateArchivedChanges(check, stats);
     validateDurableSuites(check, stats);
-  }
-
-  if (warnings.length > 0) {
-    console.warn(warnings.map(w => `WARN: ${w}`).join('\n'));
   }
 
   if (errors.length > 0) {
@@ -803,7 +1355,7 @@ function main() {
     );
   } else {
     console.log(
-      `Spec & suite structural check passed: ${stats.implChanges} in-progress change(s) (${stats.activeChangeCases} cases), ${stats.specOnlyChanges} spec-only change(s), ${stats.durableSuites} durable suite(s) (${stats.durableCases} cases).`,
+      `Spec & suite structural check passed: ${stats.implChanges} spec-driven change(s) (${stats.activeChangeCases} cases), ${stats.specOnlyChanges} spec-only change(s), ${stats.archivedChanges} archived change(s), ${stats.durableSuites} durable suite(s) (${stats.durableCases} cases, ${stats.durableCoveredScenarios}/${stats.durableTotalScenarios} scenarios mapped).`,
     );
   }
 }

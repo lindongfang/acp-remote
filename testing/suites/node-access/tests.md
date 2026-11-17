@@ -5,9 +5,24 @@
 - Long-term specification: openspec/specs/node-access/spec.md
 - Stable IDs: NA-001、NA-002、NA-009、NA-011、NA-012、NA-013、NA-014、NA-015、NA-016、NA-017、NA-032
 
-共用执行条件与当前变更用例保持一致，运行结果另存 testing/runs。裸 specs 路径在本长期套件中指 openspec/specs。旧 NA-033 安全汇总合并至 NA-002/012/014；旧 NA-034 对应当前 NA-033，仅由用户确认可理解性。
+共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/establish-node-access/`。裸 specs 路径在本长期套件中指 openspec/specs。旧 NA-033 安全汇总合并至 NA-002/012/014；旧 NA-034 对应当前 NA-033，仅由用户确认可理解性。
 
 归档后执行 NA-001 时，将原活动变更验证命令替换为分别执行 `npx.cmd openspec validate --specs --strict` 和 `npx.cmd openspec validate --archived --strict`；以下归档时用例定义文字保留，其余步骤和预期不变。
+
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/node-access/spec.md | 完整节点独立启动 | 正常启动 | NA-001、NA-011、NA-032 |
+| openspec/specs/node-access/spec.md | 完整节点独立启动 | 初始化失败 | NA-011 |
+| openspec/specs/node-access/spec.md | 网络可达不授予管理权限 | 其他系统用户调用本机控制入口 | NA-012 |
+| openspec/specs/node-access/spec.md | 网络可达不授予管理权限 | 从可信网络发起未认证请求 | NA-013 |
+| openspec/specs/node-access/spec.md | 网络可达不授予管理权限 | 已认证客户端管理节点 | NA-013 |
+| openspec/specs/node-access/spec.md | 接入失败不泄漏敏感信息 | 认证失败 | NA-002、NA-014 |
+| openspec/specs/node-access/spec.md | 节点关闭具有资源所有权 | 正常关闭 | NA-015 |
+| openspec/specs/node-access/spec.md | 节点关闭具有资源所有权 | 关闭超时或失败 | NA-016 |
+| openspec/specs/node-access/spec.md | 重启保持可信状态 | 正常重启 | NA-017 |
+| openspec/specs/node-access/spec.md | 重启保持可信状态 | 身份资料损坏 | NA-009、NA-017 |
 
 ## Cases
 

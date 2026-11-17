@@ -7,6 +7,29 @@
 
 共用执行条件与当前变更用例保持一致，运行结果另存 testing/runs。裸 specs 路径在本长期套件中指 openspec/specs。旧 NA-033 安全汇总合并至 NA-002/012/014；旧 NA-034 对应当前 NA-033，仅由用户确认可理解性。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/client-trust/spec.md | 本机命令启动 Web 配对 | Web 输入配对码 | NA-018 |
+| openspec/specs/client-trust/spec.md | 本机确认后才建立信任 | 本机批准 | NA-019、NA-033 |
+| openspec/specs/client-trust/spec.md | 本机确认后才建立信任 | 本机拒绝或取消 | NA-020、NA-033 |
+| openspec/specs/client-trust/spec.md | 配对限时且不可转授 | 多个 Web 客户端并发认领 | NA-021 |
+| openspec/specs/client-trust/spec.md | 配对限时且不可转授 | 重放失效配对 | NA-005、NA-022 |
+| openspec/specs/client-trust/spec.md | 配对限时且不可转授 | 配对码猜测 | NA-006、NA-023 |
+| openspec/specs/client-trust/spec.md | 配对过程核实目标节点 | 节点身份被替换 | NA-024 |
+| openspec/specs/client-trust/spec.md | 身份必须经过验证 | 冒用已知客户端标识 | NA-003、NA-004、NA-025 |
+| openspec/specs/client-trust/spec.md | 身份必须经过验证 | 验证有效身份 | NA-025 |
+| openspec/specs/client-trust/spec.md | 信任建立必须可靠保存 | 保存成功 | NA-026、NA-031 |
+| openspec/specs/client-trust/spec.md | 信任建立必须可靠保存 | 保存失败 | NA-007、NA-026、NA-031 |
+| openspec/specs/client-trust/spec.md | 可信客户端可查看和撤销信任 | 撤销其他客户端 | NA-027 |
+| openspec/specs/client-trust/spec.md | 可信客户端可查看和撤销信任 | 撤销保存失败 | NA-027 |
+| openspec/specs/client-trust/spec.md | 可信客户端可查看和撤销信任 | 重复撤销 | NA-027 |
+| openspec/specs/client-trust/spec.md | 撤销覆盖已有连接 | 长连接被撤销 | NA-028 |
+| openspec/specs/client-trust/spec.md | 撤销覆盖已有连接 | 撤销与操作并发 | NA-008、NA-028 |
+| openspec/specs/client-trust/spec.md | 信任不代替运行时审批 | 后续模块请求权限 | NA-010、NA-030 |
+| openspec/specs/client-trust/spec.md | 认证材料不得作为管理数据返回 | 查询客户端列表 | NA-029 |
+
 ## Cases
 
 ### NA-003 严格编码与签名互操作

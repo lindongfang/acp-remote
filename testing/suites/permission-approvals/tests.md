@@ -7,6 +7,28 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/permission-approvals/spec.md | 保留审批语义 | 不支持的请求 | CL-013、CL-034 |
+| openspec/specs/permission-approvals/spec.md | 保留审批语义 | 伪造选项或真实来源失效 | CL-013 |
+| openspec/specs/permission-approvals/spec.md | 审批事实独立于聊天缓存 | 展示缓存失败时已有审批 | CL-025、CL-047、CL-106 |
+| openspec/specs/permission-approvals/spec.md | 唯一裁决与交付分离 | 两客户端同时审批 | CL-014 |
+| openspec/specs/permission-approvals/spec.md | 唯一裁决与交付分离 | 决定交付失败 | CL-015 |
+| openspec/specs/permission-approvals/spec.md | 决定持久化失败不授予权限 | 批准保存失败或提交未知 | CL-078、CL-093 |
+| openspec/specs/permission-approvals/spec.md | 决定持久化失败不授予权限 | 已有允许决定随后协议要求取消 | CL-078、CL-093 |
+| openspec/specs/permission-approvals/spec.md | 决定持久化失败不授予权限 | 已发决定但交付记录失败 | CL-078 |
+| openspec/specs/permission-approvals/spec.md | 审批关联真实原生操作上下文 | 加载审批无输入执行 | CL-065、CL-085 |
+| openspec/specs/permission-approvals/spec.md | 审批关联真实原生操作上下文 | 上下文失效后交付 | CL-068、CL-093 |
+| openspec/specs/permission-approvals/spec.md | 审批关联真实原生操作上下文 | 无法证明审批归属 | CL-068 |
+| openspec/specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 恢复后批准旧请求 | CL-016 |
+| openspec/specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 前台结束后后台请求审批 | CL-067、CL-085 |
+| openspec/specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 前台结束时后台审批仍待处理 | CL-067 |
+| openspec/specs/permission-approvals/spec.md | 请求有效性受原执行约束 | 协议不区分请求的前后台归属 | CL-065、CL-067、CL-068 |
+| openspec/specs/permission-approvals/spec.md | 受理决定由节点接管 | 审批者撤销后交付 | CL-093 |
+| openspec/specs/permission-approvals/spec.md | 受理决定由节点接管 | 节点接管后原请求失效 | CL-093 |
+
 ## Cases
 ### CL-013 不支持的请求
 

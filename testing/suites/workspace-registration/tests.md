@@ -7,6 +7,13 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/workspace-registration/spec.md | 目录登记与解析 | 目录失效 | CL-028 |
+| openspec/specs/workspace-registration/spec.md | 目录共享不建立目录锁 | 两个会话共享目录 | CL-029 |
+
 ## Cases
 ### CL-028 目录失效
 

@@ -7,6 +7,29 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/management-input-upload/spec.md | 上传服务原子可用 | 服务无法完整发布 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 上传服务原子可用 | 仅控制面启动 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 连接持有唯一上传所有权 | 两条连接不能共享 uploadId | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 连接持有唯一上传所有权 | 上传途中连接结束 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 四条上传命令使用稳定 JSON | 命令字段、标识与结果 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 四条上传命令使用稳定 JSON | 阶段、释放与字段拒绝 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 四条上传命令使用稳定 JSON | 查询反映真实准备阶段 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 四条上传命令使用稳定 JSON | 释放与重复释放 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 文本错误映射稳定 | 上传文本错误码 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 文本错误映射稳定 | 正文解析失败 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | ACPI 数据帧与 ACK 使用唯一出站顺序 | Data 头、偏移与 ACK | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | ACPI 数据帧与 ACK 使用唯一出站顺序 | 成功接收及最后块重试 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | ACPI 数据帧与 ACK 使用唯一出站顺序 | ACK 与随后文本结果排队 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 二进制错误和关闭优先级明确 | Binary 分类、错误与关闭码 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 二进制错误和关闭优先级明确 | 停止先于待处理坏帧 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 二进制错误和关闭优先级明确 | 上传错误时节点仍运行 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 撤销先阻断出站再完成生命周期封存 | ACK 发送前撤销先提交 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+| openspec/specs/management-input-upload/spec.md | 异步命令取消不产生无主任务 | finish 已交接但响应观察取消 | ACPI-R01、ACPI-R02、ACPI-R03、ACPI-R04、ACPI-R05、ACPI-R06、ACPI-R07、ACPI-R08、ACPI-R09、ACPI-R10 |
+
 ## Cases
 ### ACPI-R01 服务安装、四命令和真实 ACK
 

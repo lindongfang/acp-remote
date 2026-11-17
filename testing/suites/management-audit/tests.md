@@ -7,6 +7,18 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/management-audit/spec.md | 管理动作可追溯 | 释放失败审计 | CL-008 |
+| openspec/specs/management-audit/spec.md | 必要管理状态与附加审计分开 | 审计容量不足 | CL-094 |
+| openspec/specs/management-audit/spec.md | 必要管理状态与附加审计分开 | 安全控制后补记事实 | CL-084 |
+| openspec/specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 审计已可清理但去重事实仍受保护 | CL-080、CL-083 |
+| openspec/specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 保留期内达到容量上限 | CL-083、CL-094 |
+| openspec/specs/management-audit/spec.md | 审计保留与去重清理分别管理 | 默认保留期边界 | CL-083 |
+| openspec/specs/management-audit/spec.md | 审计不泄漏敏感内容 | 已撤销客户端访问 | CL-009、CL-031 |
+
 ## Cases
 ### CL-008 释放失败审计
 

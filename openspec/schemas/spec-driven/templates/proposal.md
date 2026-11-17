@@ -6,7 +6,7 @@
 
 ## Success Criteria
 
-<!-- 原样保留用户原始要求、硬约束、非目标与本变更可验证的成功判据；后续产物与归档均对照本节核验。 -->
+<!-- 原样保留用户原始要求、硬约束、非目标与本变更可验证的成功判据（建议使用 SC1、SC2 稳定编号）；后续产物与归档均对照本节核验。 -->
 
 ## What Changes
 
@@ -15,12 +15,12 @@
 ## Capabilities
 
 ### New Capabilities
-<!-- 引入的新长期能力（使用 kebab-case，如 user-auth），每项对应创建 specs/<capability-path>/spec.md。无新增写“无”。 -->
-- `<capability-path>`: <能力覆盖的行为边界简述>
+<!-- 引入的新长期能力（扁平单层 kebab-case，如 user-auth，不使用嵌套子目录），每项对应创建 specs/<capability>/spec.md。无新增写“无”。 -->
+- `<capability>`: <能力覆盖的行为边界简述>
 
 ### Modified Capabilities
-<!-- 规范级行为发生变化的既有能力（使用 openspec/specs/ 下精确路径），每项对应创建增量 specs/<existing-capability-path>/spec.md。无修改写“无”。纯重构/工具/文档变更若无任何能力增改，在 .openspec.yaml 设置 skip_specs: true。 -->
-- `<existing-capability-path>`: <修改的需求范围简述>
+<!-- 规范级行为发生变化的既有能力（使用 openspec/specs/ 下精确单层目录名），每项对应创建增量 specs/<existing-capability>/spec.md。无修改写“无”。纯重构/工具/文档变更若无任何能力增改，在 .openspec.yaml 设置 skip_specs: true。 -->
+- `<existing-capability>`: <修改的需求范围简述>
 
 ## Impact
 

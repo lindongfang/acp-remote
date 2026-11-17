@@ -54,7 +54,7 @@ Q-002补充确认：用户要求删除累计4096上限；失败后原队列挂�
 
 Q-003补充确认：用户要求尽可能直接复用ACP标准能力，Harness不支持直接报错，不增加平台能力准入或兼容兜底；新管理审计默认策略与工具原位更新分别由management-audit、structured-history维护，取代旧90天与含混的位置更新解释。
 
-本轮确认来源为 [proposal 的 Q-001 原始要求](../../proposal.md#success-criteria)。协议对照入口为 [v1输入轮次](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[v2输入生命周期](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle)、[v2审批](https://agentclientprotocol.com/protocol/v2/tool-calls#requesting-permission)及[v2恢复](https://agentclientprotocol.com/protocol/v2/session-setup)。版本草案及实际实现须固定证据，不能将本清单当作真实兼容性报告。
+本轮确认来源为 [归档提案的 Q-001 原始要求](../../changes/archive/2026-11-16-deliver-codex-session-loop/proposal.md#success-criteria)。协议对照入口为 [v1输入轮次](https://agentclientprotocol.com/protocol/v1/prompt-turn)、[v2输入生命周期](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle)、[v2审批](https://agentclientprotocol.com/protocol/v2/tool-calls#requesting-permission)及[v2恢复](https://agentclientprotocol.com/protocol/v2/session-setup)。版本草案及实际实现须固定证据，不能将本清单当作真实兼容性报告。
 
 | 规则族 | 当前处置与必要性 | 唯一行为来源 | 必需核验 |
 | --- | --- | --- | --- |

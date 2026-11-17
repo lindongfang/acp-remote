@@ -1,6 +1,6 @@
 # Tests
 
-<!-- 仅在变更进入实施准备时由独立 tester 创建，经 npm run check:spec 校验后交 reviewer 编码前合审。
+<!-- 仅在 schema: spec-driven 变更进入实施准备时由独立 tester 创建，经 node testing/suites/verify-suite.mjs --change <name> 与 npm run check:spec 校验通过后交 reviewer 编码前合审。
 只写可重复执行的用例定义；运行日志另存本地被忽略的 testing/runs/<change>/，精简摘要回填 plan.md。
 保留稳定编号和标题，每例正文只必填“用例级别、操作步骤、预期结果”三项。
 LX 仅用于 Harness 无法通过工具验证、必须人工判断的场景；缺环境/凭据/入口记 not-run，不自动转 LX。
@@ -12,12 +12,12 @@ LX 仅用于 Harness 无法通过工具验证、必须人工判断的场景；�
 
 ## 需求关联
 
-<!-- 逐行覆盖本变更 specs/<capability>/spec.md 中全部 ADDED / MODIFIED 的 Requirement 与 Scenario（多场景可用顿号“、”分隔）。
-跨能力长期回归另表使用 openspec/specs/<capability>/spec.md；skip_specs: true 的变更省略本表并对照 proposal.md 的 Success Criteria。 -->
+<!-- 逐行 100% 覆盖本变更 specs/<capability>/spec.md 中全部 ADDED / MODIFIED 的 Requirement 与 Scenario（多场景可用顿号“、”分隔）。
+跨能力长期回归另表使用 openspec/specs/<capability>/spec.md；skip_specs: true 的变更改为：| proposal.md | Success Criteria | SC1 | CAP-001 |。 -->
 
 | 当前增量路径 | Requirement | Scenario | 用例 |
 | --- | --- | --- | --- |
-| specs/<capability-path>/spec.md | <Requirement 名称> | <Scenario 名称> | CAP-001 |
+| specs/<capability>/spec.md | <Requirement 名称> | <Scenario 名称> | CAP-001 |
 
 ## Cases
 

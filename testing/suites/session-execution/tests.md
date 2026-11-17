@@ -7,6 +7,43 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 断线后重复提交 | CL-017、CL-104 |
+| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 请求身份冲突 | CL-018、CL-088 |
+| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 已清理身份再次提交 | CL-080、CL-104 |
+| openspec/specs/session-execution/spec.md | 受理授权由节点接管 | 提交者断线或被撤销 | CL-092 |
+| openspec/specs/session-execution/spec.md | 每会话共享三个待发送输入 | 最后一个队列名额并发提交 | CL-087、CL-113 |
+| openspec/specs/session-execution/spec.md | 每会话共享三个待发送输入 | 原生前台忙碌仍可排队 | CL-066、CL-087 |
+| openspec/specs/session-execution/spec.md | 多客户端共享查看和操作 | B 操作 A 的输入 | CL-088 |
+| openspec/specs/session-execution/spec.md | 队列无期限且不跨节点重启保存 | 长时间等待 | CL-079、CL-097 |
+| openspec/specs/session-execution/spec.md | 队列无期限且不跨节点重启保存 | 节点重启 | CL-098 |
+| openspec/specs/session-execution/spec.md | 排队输入可编辑 | 编辑与发送交错 | CL-088、CL-099 |
+| openspec/specs/session-execution/spec.md | 队列取消与发送串行 | 取消先于发送 | CL-099 |
+| openspec/specs/session-execution/spec.md | 队列取消与发送串行 | 发送后取消 | CL-099 |
+| openspec/specs/session-execution/spec.md | 同会话前台执行互斥 | 成功后顺序派发 | CL-019、CL-089、CL-110、CL-113 |
+| openspec/specs/session-execution/spec.md | 原生工作活动独立于平台输入记录 | Agent 自行开始前台工作 | CL-066、CL-086 |
+| openspec/specs/session-execution/spec.md | 中断与立即发送 | 优先发送队列项 | CL-090 |
+| openspec/specs/session-execution/spec.md | 中断与立即发送 | 满队列立即发送新草稿 | CL-090、CL-113 |
+| openspec/specs/session-execution/spec.md | 执行失败暂停队列 | 失败后等待用户 | CL-091、CL-110、CL-115 |
+| openspec/specs/session-execution/spec.md | 执行失败暂停队列 | 失败后新输入插队 | CL-110、CL-111、CL-113、CL-114 |
+| openspec/specs/session-execution/spec.md | 执行失败暂停队列 | 显式继续后旧项重新排队 | CL-112、CL-114、CL-115 |
+| openspec/specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 达到上限或拒绝后等待继续 | CL-117、CL-119、CL-120、CL-121、CL-123 |
+| openspec/specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 普通取消保留停止原因 | CL-118、CL-119、CL-120、CL-121、CL-123 |
+| openspec/specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 立即发送的中断按已选项继续 | CL-122、CL-123 |
+| openspec/specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 已选立即发送项失效时无回退 | CL-122、CL-123 |
+| openspec/specs/session-execution/spec.md | 非成功结束保留原因并暂停队列 | 已选立即发送项结束不自动恢复余项 | CL-122、CL-123 |
+| openspec/specs/session-execution/spec.md | 取消与异常结果 | 派发后异常退出 | CL-021、CL-046 |
+| openspec/specs/session-execution/spec.md | 插入确认与前台终态分别关联 | 终态早到且交错自发工作 | CL-073、CL-100 |
+| openspec/specs/session-execution/spec.md | 空闲取消与活动前台取消分开 | 取消与自然完成交错 | CL-072、CL-074 |
+| openspec/specs/session-execution/spec.md | 管理存储故障时限制危险派发并保持安全控制 | 附加审计失败 | CL-075、CL-094 |
+| openspec/specs/session-execution/spec.md | 异常后重新准入 | 断线后旧执行仍可能运行 | CL-043、CL-045、CL-046 |
+| openspec/specs/session-execution/spec.md | 节点时间与控制并发 | 校时及等待审批期间接收控制 | CL-096、CL-101 |
+| openspec/specs/session-execution/spec.md | 命令记录不成为聊天历史 | 查询排队与执行结果 | CL-062、CL-095、CL-098 |
+| openspec/specs/session-execution/spec.md | Windows 与 Web 操作闭环 | 一轮完成 | CL-022、CL-030、CL-105 |
+
 ## Cases
 ### CL-001 真实构建及类型检查
 

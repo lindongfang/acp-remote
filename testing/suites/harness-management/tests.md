@@ -7,6 +7,43 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/harness-management/spec.md | 历史能力不作为统一接入门槛 | 对端只有无重放恢复 | CL-047、CL-106 |
+| openspec/specs/harness-management/spec.md | 历史能力不作为统一接入门槛 | 标准重放无需厂商适配 | CL-048、CL-054 |
+| openspec/specs/harness-management/spec.md | 历史能力不作为统一接入门槛 | 重连后失去重放能力 | CL-053 |
+| openspec/specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 不同厂商使用相同标准能力 | CL-032、CL-048 |
+| openspec/specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 两个版本分别接入 | CL-033、CL-034、CL-041 |
+| openspec/specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 无共同可用版本 | CL-035 |
+| openspec/specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 按规范协商回退 | CL-036、CL-058 |
+| openspec/specs/harness-management/spec.md | 按协议版本与协商能力兼容 | 版本规范尚未核实 | CL-037 |
+| openspec/specs/harness-management/spec.md | 优先最高共同可用协议 | 双方支持高低多个版本 | CL-058、CL-060 |
+| openspec/specs/harness-management/spec.md | 优先最高共同可用协议 | 高版无共同支持时协商低版 | CL-058 |
+| openspec/specs/harness-management/spec.md | 优先最高共同可用协议 | 对端合法选择低版但未解释原因 | CL-058 |
+| openspec/specs/harness-management/spec.md | 优先最高共同可用协议 | 重连重新优先高版 | CL-059、CL-060 |
+| openspec/specs/harness-management/spec.md | 优先最高共同可用协议 | 高版业务失败不降版重试 | CL-059 |
+| openspec/specs/harness-management/spec.md | 优先最高共同可用协议 | 更高版本尚未实现 | CL-058 |
+| openspec/specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 同一 Harness 协商不同版本 | CL-033、CL-059 |
+| openspec/specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 重连后的版本改变 | CL-016、CL-059 |
+| openspec/specs/harness-management/spec.md | 运行时按连接绑定协议版本与能力 | 协商后收到不符版本消息 | CL-033、CL-036 |
+| openspec/specs/harness-management/spec.md | 调研证据不成为版本绑定表 | 未在原报告出现的程序版本 | CL-038、CL-048 |
+| openspec/specs/harness-management/spec.md | 不支持的标准操作直接报错 | 接入缺少必需能力 | CL-040 |
+| openspec/specs/harness-management/spec.md | 升级复验与适配分离 | 标准兼容升级 | CL-038 |
+| openspec/specs/harness-management/spec.md | 升级复验与适配分离 | 升级造成不兼容 | CL-039 |
+| openspec/specs/harness-management/spec.md | 登记可追溯的 Harness | 能力未证实 | CL-005 |
+| openspec/specs/harness-management/spec.md | 能力准入与证据状态分开 | 新程序版本无历史报告 | CL-005、CL-048、CL-058 |
+| openspec/specs/harness-management/spec.md | 能力准入与证据状态分开 | 声明了未实现能力 | CL-005、CL-048 |
+| openspec/specs/harness-management/spec.md | 能力准入与证据状态分开 | Harness 不支持标准能力 | CL-005、CL-040、CL-048 |
+| openspec/specs/harness-management/spec.md | 能力准入与证据状态分开 | 实际行为与声明不符 | CL-039 |
+| openspec/specs/harness-management/spec.md | 能力准入与证据状态分开 | 禁止有副作用的自动探测 | CL-048 |
+| openspec/specs/harness-management/spec.md | 历史与激活能力独立验证 | 只有恢复能力 | CL-047、CL-106 |
+| openspec/specs/harness-management/spec.md | 会话工作观测与回收能力分别呈现 | 接入可交互但不能自动回收 | CL-069 |
+| openspec/specs/harness-management/spec.md | 默认继承节点环境 | 默认继承并显式覆盖 | CL-055、CL-057 |
+| openspec/specs/harness-management/spec.md | 实例由节点拥有 | 页面断开 | CL-006 |
+| openspec/specs/harness-management/spec.md | 实例由节点拥有 | 共享实例释放 | CL-007 |
+
 ## Cases
 ### CL-005 能力未证实
 

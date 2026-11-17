@@ -4,6 +4,7 @@
 
 接入范围聚焦为 Codex（通用闭环首验已归档）与 Pi（独立接入规划已建立，尚未实施或真实验收）；DeepSeek Harness、ZCode 以及 OMP（Oh My Pi）均暂不适配，对应变更已移除。
 
+`deliver-session-capacity` 的已批准第一阶段已实现全入口默认50名额、原所有者复用、未知主树拒绝、显式释放必要协调和Web容量事实；当前实际验收与最终工程状态以其 [执行计划](../openspec/changes/deliver-session-capacity/plan.md) 为准。自动回收、完整活动及安全关闭窗口证明、父子共享名额正向及真实长时间验收继续未完成。下方完整能力目标不表示这些分支已经交付。
 
 ## 已交付与当前规划
 
@@ -16,7 +17,7 @@
 | Change | 能力路径 | 核心职责 | 集成依据 |
 |---|---|---|---|
 | [deliver-codex-session-loop（已归档）](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/proposal.md) | harness-management、workspace-registration、session-execution、permission-approvals、structured-history、native-session-recovery、management-audit、acp-platform-constraints | 共享队列、额外限制核对、执行、严格审批及基础原生发现/读取；内容缓存与管理事务边界 | 已归档节点接入 |
-| [deliver-session-capacity（施工中）](../openspec/changes/deliver-session-capacity/proposal.md) | session-resource-policy | 50 主会话名额、30 分钟无活动回收请求、已知活动保护与管理账本协调 | 通用资源所有权和活动判断端口 |
+| [deliver-session-capacity（施工中）](../openspec/changes/deliver-session-capacity/proposal.md) | session-resource-policy、harness-management | 50 主会话名额、30 分钟无活动回收请求、已知活动保护与管理账本协调 | 通用资源所有权和活动判断端口 |
 | [integrate-pi-harness（待排期）](../openspec/changes/integrate-pi-harness/proposal.md) | pi-harness-compatibility | Pi（不绑定本机版本）与候选外部 ACP 服务端的配置及独立兼容性实证 | 通用闭环实际合同 |
 | [deliver-history-navigation（待排期）](../openspec/changes/deliver-history-navigation/proposal.md) | history-navigation | 在标准重放视图上按轮次分页及衔接实时内容，支持缓存外重新定位 | 通用重放及可证明轮次 |
 | [deliver-agent-session-tree（待排期）](../openspec/changes/deliver-agent-session-tree/proposal.md) | agent-session-tree | 读取原生身份、父子关系与子历史，在父步骤内展开并正序分页 | 历史导航及主树容量规则 |

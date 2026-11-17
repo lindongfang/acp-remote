@@ -7,6 +7,35 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/structured-history/spec.md | 原生会话与历史为权威 | 清除缓存后查看 | CL-027、CL-062 |
+| openspec/specs/structured-history/spec.md | 原生会话与历史为权威 | 原生历史压缩或删除 | CL-062 |
+| openspec/specs/structured-history/spec.md | 基础原生会话发现与读取 | 外部新建会话 | CL-061、CL-085 |
+| openspec/specs/structured-history/spec.md | 基础原生会话发现与读取 | 无会话列表能力 | CL-061 |
+| openspec/specs/structured-history/spec.md | 外部更新与重新校验 | 切回平台查看 | CL-063、CL-085 |
+| openspec/specs/structured-history/spec.md | 外部更新与重新校验 | 原生读取失败 | CL-063 |
+| openspec/specs/structured-history/spec.md | 结构身份与来源顺序 | 工具晚完成 | CL-023 |
+| openspec/specs/structured-history/spec.md | 结构身份与来源顺序 | 同一工具多次更新 | CL-023 |
+| openspec/specs/structured-history/spec.md | 结构身份与来源顺序 | 未知结构载荷 | CL-024、CL-034 |
+| openspec/specs/structured-history/spec.md | 结构身份与来源顺序 | 来源无法关联 | CL-012、CL-051 |
+| openspec/specs/structured-history/spec.md | 实时缓存不承担保存 | 首开无后续输出 | CL-042 |
+| openspec/specs/structured-history/spec.md | 实时缓存不承担保存 | 慢客户端与展示故障 | CL-026、CL-095 |
+| openspec/specs/structured-history/spec.md | 通用标准重放与可丢弃视图 | 只有标准全量重放 | CL-049、CL-054 |
+| openspec/specs/structured-history/spec.md | 通用标准重放与可丢弃视图 | 无重放能力仍可接入 | CL-047、CL-106 |
+| openspec/specs/structured-history/spec.md | 重放代际与完成事实 | 重放中断或实际读取失败 | CL-050、CL-101 |
+| openspec/specs/structured-history/spec.md | 重放代际与完成事实 | 重放缺少跨加载稳定标识 | CL-051 |
+| openspec/specs/structured-history/spec.md | 当前连接视图由节点共享管理 | 浏览器刷新或手机接入 | CL-064 |
+| openspec/specs/structured-history/spec.md | 当前连接视图由节点共享管理 | 正常回收后重新查看 | CL-064、CL-106 |
+| openspec/specs/structured-history/spec.md | 当前连接视图由节点共享管理 | 读取撤销 | CL-009、CL-064 |
+| openspec/specs/structured-history/spec.md | 原生内容不获得管理页面执行权限 | 实时及重放包含主动内容 | CL-070 |
+| openspec/specs/structured-history/spec.md | 原生内容不获得管理页面执行权限 | 审批描述包含误导字符 | CL-070 |
+| openspec/specs/structured-history/spec.md | 资源引用访问独立校验 | 外链媒体指向本机或私网 | CL-071 |
+| openspec/specs/structured-history/spec.md | 资源引用访问独立校验 | 附件路径越界或含主动内容 | CL-071 |
+| openspec/specs/structured-history/spec.md | 资源引用访问独立校验 | 显示链接与实际目标不同 | CL-071 |
+
 ## Cases
 ### CL-012 恢复重放旧消息
 

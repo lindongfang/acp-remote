@@ -4,11 +4,11 @@
 
 使用不继承 `coder` 开发对话的独立人员或 Agent 会话。输入为用户确认要求、`AGENTS.md`、`openspec/config.yaml`、`specs`/`design`/`plan`、受测 Git `commit SHA` 及交付判据；自行读取代码和现有测试，不以开发自评作为通过依据。
 
-## 编码前（仅针对即将开工的变更）
+## 编码前（仅针对 `schema: spec-driven` 即将开工的变更）
 
-- 仅当变更正式进入编码前准备阶段时，依据当前 `proposal`/`specs`/`design` 和真实代码架构编写一份 `tests.md`；未开工的远期变更不预写或联动维护 `tests.md`。
-- 按[测试模板](../schemas/spec-driven/templates/tests.md)登记实际需要的 L1–L6/LX 用例与四列需求关联表：L5 覆盖需求的正常、异常、取消与边界场景，L6 明确端到端链路与真实/模拟边界，LX 严格限于 Harness 无法通过工具验证的场景。
-- 编写或更新 `tests.md` 后运行 `node testing/suites/verify-suite.mjs --change <name>` 自动校验用例字段、稳定 ID 及增量 `Requirement`/`Scenario` 100% 覆盖完整性，再交独立 `reviewer` 在编码前门禁一次性合审。
+- 仅当变更 `.openspec.yaml` 为 `schema: spec-driven` 并正式进入编码前准备阶段时，依据当前 `proposal`/`specs`/`design` 和真实代码架构编写一份 `tests.md`（支持子 Agent 的宿主可直接拉起独立 `tester` 子会话写入目标路径；无子 Agent 的单会话环境允许在尚无任何 `coder` 开发对话的纯规划会话内写齐 6 份产物以保持 `npm run check:spec` 全绿，但进入 `apply` 业务编码必须切换新会话且不得与起草 `tests.md` 共用同一会话）；`schema: spec-only` 的远期变更不预写或联动维护 `tests.md`。
+- 按[测试模板](../schemas/spec-driven/templates/tests.md)登记实际需要的 L1–L6/LX 用例与四列需求关联表：常规变更使用 `| specs/<capability>/spec.md | Requirement | Scenario | 用例 |` 覆盖全部增量 `Requirement`/`Scenario`（`skip_specs: true` 变更使用 `| proposal.md | Success Criteria | SCn | 用例 |` 关联成功判据）；L5 覆盖需求的正常、异常、取消与边界场景，L6 明确端到端链路与真实/模拟边界，LX 严格限于 Harness 无法通过工具验证的场景。
+- 编写或更新 `tests.md` 后运行 `node testing/suites/verify-suite.mjs --change <name>` 自动校验用例字段、稳定 ID 及四列映射 100% 覆盖完整性，再交独立 `reviewer` 在编码前门禁一次性合审。
 
 ## 集成验收执行
 
@@ -21,4 +21,4 @@
 ## 闭环与归档合并
 
 - 发现问题时记录稳定 ID、严重性、受测 `commit SHA` 与复现步骤；`coder` 提交修复 commit 后，仅针对受影响用例与必要回归项重测并关闭自己提出的问题。
-- 归档前将稳定用例按**单一主归属能力**合并到 `testing/suites/<capability>/tests.md`（若同一能力历经多个归档变更，在 `Source definitions:` 累加归档源路径；跨能力共用用例只在主能力套件保留一份 `### <ID>` 正文，关联套件按 ID 说明引用），并运行 `npm run check:spec` 验证一致性。
+- 归档时按原子顺序合并长期套件（仅限已完成交付门禁的 `schema: spec-driven` 变更）：常规变更在同步 `openspec/specs/<capability>/spec.md` 并将变更目录移入 `openspec/changes/archive/YYYY-MM-DD-<name>/` 后，按**单一主归属能力**将稳定用例 `### <ID>` 正文合并到主能力 `testing/suites/<capability>/tests.md`（仅向接收 `### <ID>` 正文的主能力套件累加 `Source definitions: openspec/changes/archive/YYYY-MM-DD-<name>/tests.md`；跨能力共用用例在关联套件中仅更新四列 `## 需求关联` 表按 ID 引用，不重复拷贝正文，也不向关联套件追加 `Source definitions`；`skip_specs: true` 变更若未改动既有长期套件用例则无需新增能力套件），最后运行 `npm run check:spec` 验证全仓一致性。

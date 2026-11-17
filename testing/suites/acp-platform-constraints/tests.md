@@ -7,6 +7,17 @@
 
 共用执行条件与归档源用例保持一致，运行结果另存 `testing/runs/deliver-codex-session-loop/`。裸 `specs` 路径在本长期套件中指 `openspec/specs`。
 
+## 需求关联
+
+| 长期规格路径 | Requirement | Scenario | 用例 |
+| --- | --- | --- | --- |
+| openspec/specs/acp-platform-constraints/spec.md | 额外限制有明确归属与依据 | 新增或保留限制 | CL-103 |
+| openspec/specs/acp-platform-constraints/spec.md | 不以历史能力统一封锁其他能力 | 无重放但能执行 | CL-047、CL-106 |
+| openspec/specs/acp-platform-constraints/spec.md | 长连接不设累计请求次数上限 | 长连接超过原累计阈值 | CL-108、CL-109、CL-116 |
+| openspec/specs/acp-platform-constraints/spec.md | 不新增输入正文和输出缓存容量上限 | 超过旧平台正文或视图预算 | CL-026、CL-049、CL-095 |
+| openspec/specs/acp-platform-constraints/spec.md | 核对节点接管与协议真实性边界 | 原提交者撤销与协议结果未知 | CL-092、CL-093、CL-100、CL-104 |
+| openspec/specs/acp-platform-constraints/spec.md | 兼容性核对覆盖组合时序与证据 | 新旧规则冲突检查 | CL-103、CL-107、CL-108、CL-116 |
+
 ## Cases
 ### CL-002 静态合同和供应链检查
 
