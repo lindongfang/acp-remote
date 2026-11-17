@@ -1,74 +1,60 @@
 schema: spec-driven
 context: |
   # Project Profile
-  本分支正在按 docs/HARNESS_CONTROL_PLANE_REDESIGN.md 完全重建，不兼容旧系统。
-  旧产品实现、协议合同、数据库迁移、产品规格、ADR、历史变更及验收资料已清退。
-  Windows Rust节点、CLI、SQLite身份与同源Web配对/管理已由establish-node-access交付并归档；当前状态和命令以README及实际工程配置为准。
-  Q-001（2026-10-31）最新用户确认：无标准历史重放也可接入，当前连接模式明显提示历史不完整及缓存丢失无法补回，其他能力独立判断；不做厂商私有读取器。节点按会话共享三个待发送输入，支持编辑/取消/优先发送；Q-002失败挂起旧项，新输入优先，旧项点击继续后恢复；受理时验权后节点接管，派发不重验原actor。队列无期限、仅内存、不跨节点重启保存也不专门提示丢失；正文/输出缓存不设平台容量上限。节点登记身份和状态去重，取消额外每动作签名、统一输入期限、回退水位；以节点时间为准。批准先严格保存后节点交付，真实请求仍有效才交付，附加审计失败告警可继续。Q-002另外删除连接累计4096个请求ID寿命阈值；行为权威为当前八份specs及额外限制核对规格，取代旧RP/R2冲突取舍。
-  DC-001确认：实际重放可刷新无活动计时但不形成任务保护；默认继承节点环境、允许显式覆盖；会话以显式接入来源+原生ID识别，不自动证明不同来源的物理存储等价，不新增厂商探测或环境白名单/指纹准入。详细行为见当前规格。
-  PV-001确认：新连接优先平台已实现并验证的最高ACP版本，按规范协商最高共同可用版及其实际能力，不按旧报告长期固定低版；仅规范允许且高版无共同支持时协商回退，业务失败不自动降版重发。实际选择与原因证据分别呈现，不宣称未知未来版支持。
-  2026-10-31用户要求在已有部分实现上基于新spec增量实施；部分实现见a8ff27f4，集中规格修订见2a6b2786。当前implementation-contract、tests/plan/tasks须按阶段独立检视，旧session-contract及readiness不授权新方案接线。不自动清库或删除原生数据。
-  .agents/ 是已有技能资源，不属于旧产品实现，未经任务授权不得修改。
-  旧实现基线为 Git 提交 5777067e2ed17503cd8aa3f042015ba11a9cb152，只按需提取，不沿用旧架构。
+  本分支按 docs/HARNESS_CONTROL_PLANE_REDESIGN.md 构建，不兼容旧系统。
+  Windows Rust 节点、CLI、SQLite 身份与同源 Web 配对/管理已由 establish-node-access 交付归档；通用会话闭环、共享队列、严格审批与 ACP 重放/当前连接视图已由 deliver-codex-session-loop 交付归档。
+  当前产品规则以 openspec/specs/ 各长期规格与活动变更的增量规格为唯一权威；工程状态与运行命令以 README.md 和 package.json 为准。
+  .agents/ 是已有技能资源，未经任务授权不得修改。
 
   # Sources and Commands
-  已确认产品目标：docs/HARNESS_CONTROL_PLANE_REDESIGN.md；执行约束：AGENTS.md。
-  npm ci安装根开发工具，Web依赖按README单独安装；现有npm run check与npm run build:rust入口以package.json为准，不将工具安装或上游检查视为会话产品验收。
-  引入产品实现时同步增加真实构建、测试及合同校验，Rust 工具链只读 rust-toolchain.toml。
-  提交信息词表以 commitlint.config.mjs 为准，默认主分支 main，不直接向 main 推送。
-  新术语首次需要时创建 openspec/GLOSSARY.md；新规格、ADR 和测试目录按新方案建立。
-  下方流程规则和模板约束后续产品变更，不将已移除的旧产品规范、测试或证据作为执行前提。
-  已归档节点接入证据仅在固定版本与范围内复用；新会话实现、协议合同、安全及真实Harness验收仍须按当前change独立验证。
+  产品总体目标：docs/HARNESS_CONTROL_PLANE_REDESIGN.md；能力归属与依赖：docs/REBUILD_CAPABILITY_MAP.md；执行与安全硬约束：AGENTS.md、docs/code-standards.md。
+  开发检查入口：根目录 npm ci，Web 目录 npm ci --prefix clients/web；文档与结构校验使用 npm run check:spec（单变更实施门禁使用 node testing/suites/verify-suite.mjs --change <name>），完整工程检查使用 npm run check 与 npm run build:rust，Rust 工具链只读 rust-toolchain.toml。
+  提交信息词表以 commitlint.config.mjs 为准，默认主分支 main（PR squash 合并，不直推 main）。
+  新术语首次需要时维护 openspec/GLOSSARY.md。已归档证据仅在同版本同范围内复用；新变更的协议、安全与真实 Harness 闭环按当前变更独立验证。
 
 # Artifact 规则：追加到对应 artifact 的 instructions 上，不改模板正文。
 rules:
   proposal:
-    - 必须在 `## Success Criteria` 节保留用户原始要求、硬约束、非目标与成功判据；后续 artifacts 与最终归档都要能对照它们。
+    - 必须在 `## Success Criteria` 节保留用户原始要求、硬约束、非目标与成功判据；后续 artifacts 与最终归档都要对照本节。
     - Capabilities 列的每个能力路径必须与 specs 阶段实际创建的文件路径一致。
-    - 增加 `## Exploration` 节，记录各轮用户确认依据、所有决策分支状态与理由、术语表维护或无变化复核、按需ADR；不可把建议和沉默写成确认，阻断未知必须在编码前解决。
+    - 增加 `## Exploration` 节，记录用户确认依据、决策分支状态与理由、术语表维护与按需 ADR；不可把建议和沉默写成确认，阻断未知必须在编码前解决。
+    - 文档采用原地收敛维护（Living Document）：需求或决策更新时直接修改对应章节正文，不往文档顶部堆叠历史修订横幅或过程流水账；演进历史由 Git 提交记录承载。
   specs:
     - 规范正文使用简体中文，但 SHALL/MUST 等英文规范关键词必须保留，并在其两侧留空格。
     - 每个 `### Requirement:` 至少有一个 `#### Scenario:`，场景标题恰好四个井号。
     - 规范只写可观察行为，不写内部类名、函数名、库选型或逐步实现细节。
   design:
-    - design.md 是必产 artifact，不得因变更规模省略。
+    - design.md 是必产 artifact，按变更复杂度调整篇幅，不得省略。
     - 涉及部署、数据迁移或回滚时必须写 `## Migration Plan`；Open Questions 只记录可安全延后的未知项。
+    - 原地维护当前有效设计，删除已被取代的旧方案段落，不堆叠过程补丁说明。
   plan:
-    - 每次主动评估并行，能拆则在隔离工作区并行；串行部分说明依赖、冲突或工具限制，不绑定宿主/模型。角色职责引用 role 文件。
-    - 工作包写范围不得重叠；确实重叠的必须在本文件的 Merge Order 里串行并声明后合入者需重跑的检查。plan必备节、工作包表与Main E2E一致性当前由reviewer人工核对；重新实现专项脚本后才可声明机器校验。
-    - Main E2E只放一个yaml配置块，拒绝重复键、别名和错误类型。not-applicable的reason/basis必须为非空字符串，alternative_checks必须为非空字符串列表；required时这三字段须省略、null或对应类型的空值。
-    - Project Verify 引用 tests.md 用例ID，安排执行者、环境、位置及证据；最后验证覆盖待提交集成结果，不复制用例。写清固定版本、报告范围与归档路径复核。
-    - 必须记录独立方案/用例检视和交付检视；tester/reviewer无coder对话继承，输入足够且独立。问题ID、修复、重测/复查及结论可追溯，自查不能代签。
+    - 仅在变更获准进入实施准备时生成 `plan.md`；尚未开工的远期变更只保留 `proposal.md`、`specs/` 与 `design.md`，不预生成施工排期文件，也不参与跨变更联动重审。
+    - 评估并行与写范围隔离：可并行的工作包使用独立工作区；存在写范围重叠的必须在 Merge Order 串行合入并声明集成重验项。角色职责引用 openspec/role/。
+    - 结构完整性由 `node testing/suites/verify-suite.mjs --change <name>` 机器校验：必备章节非空、7 列 Work Packages 表、唯一 Main E2E YAML 块及 WP↔tasks 双向词元绑定。
+    - 收敛为两道独立门禁：① 编码前门禁（`verify-suite.mjs --change <name>` 通过后，独立 reviewer 一次性合审方案与用例）；② 集成交付门禁（全部工作包及需入库的验收测试代码提交为单一本地分支 Git commit SHA 后，由独立 tester 与 reviewer 并行验收/检视）。中间子包实现与局部缺陷修复由主执行者/coder 闭环，不逐补丁拉起独立角色微审。
+    - 原地维护当前有效计划与最终 `Verification Results` 摘要，不将日常微测日志堆入 `plan.md` 正文。
   tests:
-    - LX仅用于Harness无法验证、必须由人实际操作或判断的场景，须在操作步骤中说明无法验证的具体原因及需人工介入的最小范围，不新增固定字段。Harness可通过代码、命令、协议探针、浏览器或其他工具验证的内容按L1–L6执行；已有同版本、同范围且环境符合要求的有效证据可复用，不要求用户重复手动验收。缺工具、环境、权限或尚未实现测试入口应记为受阻/未执行，不自动转为LX；不能假设Harness已执行或以模型推断代替执行证据。混合场景只将无法验证的部分划入LX；无此类场景时不生成LX用例。独立安全检视不因需要独立角色就自动要求用户执行。
-    - 独立tester按模板生成一份tests.md，保留稳定用例ID和标题，每例正文只必填用例级别、操作步骤、预期结果；只列实际需要的级别，不强制逐级适用性表。需求关联和共用执行信息按组说明，前提、环境、工具、真实/模拟边界和清理等仅在影响执行或判断时补充，不重复填写固定字段。活动变更的裸 `specs/<capability>/spec.md` 只指本次增量，显式 `openspec/specs/<capability>/spec.md` 只指长期规范；长期suite的裸路径指长期规范，禁止跨目录补位。当前无专项结构校验脚本，文件存在性、Requirement/Scenario名称及正常、异常、取消和边界覆盖均由reviewer逐项核对，不得声称文件存在即已覆盖场景。skip_specs变更引用proposal.md的 `## Success Criteria` 条目。
-    - L1/L2引用现有检查入口；验收场景由tester维护，coder可补开发单元测试不擅改预期；用例由reviewer在编码前检视。结果独立保存，不写进用例定义。用户确认用例仅需用户回答通过/不通过，由Agent记录用例ID、受测版本和用户原始结论，不要求用户填写技术报告或证据；未回复记待确认，不得代签，必需用例待确认不能视为验收通过。
+    - 仅在变更进入编码前准备阶段时，由独立 tester（不继承 coder 对话）基于当前最新 `proposal/specs/design` 和真实代码树生成一份 `tests.md`。
+    - 保留稳定用例 ID 和标题，每例正文只必填用例级别、操作步骤、预期结果；通过四列映射表声明增量 `specs/<capability>/spec.md` 的 `Requirement`/`Scenario` 覆盖，先跑通 `node testing/suites/verify-suite.mjs --change <name>` 再交 reviewer 编码前语义合审。
+    - LX 仅用于 Harness 无法通过代码、命令、协议探针或浏览器验证、必须由人工判断的场景，并在步骤中写明原因及最小人工范围；无此类场景不生成 LX。缺环境、凭据或入口记受阻/未执行（not-run），不自动转 LX，也不以模型推断冒充执行证据。
+    - LX 仅需用户回答通过/不通过，由 Agent 记录用例 ID、受测 commit SHA 和用户原始结论；未回复记待确认，不得代签。结果与原始日志存本地被忽略的 `testing/runs/`，不写进用例定义，仅将精简结果摘要写入 `plan.md`。
   tasks:
-    - 每个 `- [ ] X.Y` 必须在同一行内写明完成判据（测试、命令、可观察行为或交付物）。
-    - 每个任务组必须自带它该有的测试与文档，不得把所有测试和文档堆到最后一组。
-    - plan.md每个工作包至少被一个真实checkbox任务的正文引用；按完整ID匹配，WP1不能由WP10或WP1-extra满足。注释、代码围栏、标题和普通段落不计关联；每个真实任务至少引用一个声明工作包，且不得出现plan未覆盖的新工作。tasks不要放checkbox示例，引擎进度计数仍按其原规则，不用项目关联检查代替引擎进度。
-    - coder单元测试随实现交付；独立tester测试实现和验收、reviewer检视各有任务与证据。先通过方案/用例检视才编码，失败和未验证不得勾完成。归档及归档后检查留在非tracked的Workflow follow-up，避免归档前置循环。
+    - 仅在变更进入编码前准备阶段时生成 `tasks.md`。每个 `- [ ] X.Y` 必须在同一行写明完成判据（测试、命令、可观察行为或交付物），并按完整词元引用至少一个 `plan.md` 工作包 ID（如 `WP1`）；`plan.md` 每个工作包至少被一个真实 checkbox 引用，由 `verify-suite.mjs` 自动核验。
+    - 每个任务组自带对应的单元测试与实现文档，不把测试和文档全部堆到最后一组。不要在正文放示例 checkbox。
+    - 编码前门禁通过后方可实施业务代码；只有完成判据具备真实证据时才勾 `- [x]`。归档及归档后复核放在非 tracked 的 `## Workflow follow-up` 节。
 
 # 操作层指引：apply / archive 时作为 operationGuidance 下发（不写进任何 artifact 文件）。
 operations:
   apply:
     guidance:
-      - 开工前读取三角色职责、proposal Exploration、tests和plan，补齐全部schema前置并运行项目实际提供的适用检查；独立reviewer确认方案/用例通过，无写范围静默重叠，Verify可执行；tester/reviewer独立上下文，不可用则记录未完成。规划阶段允许缺下游产物不构成开工豁免。
-      - 主动安排可并行包，明确基线、写范围、环境和隔离工作区，串行原因写入plan，不允许并行写同一工作区；交接用户要求与文件依据，不继承开发对话。
-      - 可交付实际 diff、patch 或提交及可读报告；patch 合入先 git apply --check 再 git apply，提交合入核对范围与依赖。
-      - 交付记录实际验证命令、结果、未执行检查和已知限制；确认产物交付完整后才清理本次拥有的临时工作区。
-      - 并行 Rust 构建分别设置 CARGO_TARGET_DIR，避免争用。
-      - 提交前检查实际差异、暂存范围和 git diff --check，不混入临时文件、生成目录或用户无关修改。
-      - 直接实现无需绕行 patch；最终检查覆盖实际集成结果，不要求额外宿主、模型或私有会话地址。
-      - 提交信息按 commitlint.config.mjs 校验，避免工具隐式改写索引或扩展提交范围。
-      - 独立验收/检视和修复闭环后，先同步specs及长期能力用例，再归档并复核移动差异，之后走分支推送/PR/必需检查/squash合并，不直推main；PR阶段改代码需重新判断证据有效性。
-      - 检查在具备依赖的工作区运行；最终执行项目实际提供的完整验证入口，前端有独立检查入口时还需执行该工程的真实检查；当前没有产品实现时，不虚设成功检查。
-      - 固定同一提交或文件摘要后tester正式验收与reviewer交付检视可并行；同版本同范围CI证据可复用，角色记录逐例结果与问题ID，自查不能代替独立结论。
-      - 修复可沿用原coder/tester/reviewer各自上下文，但需新版本重测复查；阻断问题由独立提出者复核关闭，必需失败/未执行不交付，不把证据不足写成通过。
-      - 修改和合入前核对用户未提交改动，不覆盖或隐式纳入无关工作。
-      - 只有 tracked task 且其完成判据有可读证据时才勾 `- [x]`；失败或受阻保持待办并说明。
+      - 开工前确认 `node testing/suites/verify-suite.mjs --change <name>` 与 `npm run check:spec` 通过，且已完成编码前门禁（独立 reviewer 一次性确认方案与用例无阻断）；对尚未开工的其他远期变更保持需求态冻结，不做跨变更施工文件陪跑更新。
+      - 子包开发与局部修复阶段使用定向检查（如 `cargo test <filter>`、前端单测）快速迭代；共享只读编译缓存或避免无写冲突时的全量目录复制，并行写 Rust 时再隔离 `CARGO_TARGET_DIR`。
+      - Red Check 聚焦于产品缺陷修复与核心安全/协议/状态机不变量，免除测试运行器、夹具脚手架和纯文档结构的人工退化留证。
+      - 用本地工作分支 Git commit SHA（`git rev-parse HEAD` 且受跟踪文件工作区干净）作为正式交接与审查的唯一版本快照，废除未提交工作区的百文件手工 SHA-256 清单、源码副本归档及由此衍生的 Gitleaks 尾扫循环。若 `tester` 需补充入库的自动化验收代码，在锁定集成 commit SHA 前先提交入分支。
+      - 全部工作包集成并跑通项目完整检查入口（`npm run check`、`npm run build:rust`）后，针对同一集成 commit SHA 并行发起一次独立 tester 正式验收与独立 reviewer 交付检视；tester/reviewer 不继承 coder 开发对话。
+      - 独立门禁发现的阻断问题按稳定 ID 修复并提交新 commit，仅对受影响范围与回归项做增量重测/复查并由原提出者关闭；未执行或受阻项如实记 `not-run`，不把证据不足写成通过。门禁通过后仅回填 `plan.md` 结果摘要、勾选 `tasks.md` 及执行同步归档的纯文档提交（`git diff <tested-sha>..HEAD` 无任何产品/测试代码与构建配置改动），直接继承原受测 commit 结论，无需二次复审。
+      - 修改和提交前核对 `git status` 与 `git diff --check`，保护用户无关修改，不混入临时文件或 `testing/runs/` 本地运行产物。
   archive:
     guidance:
-      - 归档前确认全部tracked任务有证据、独立测试和检视通过、阻断问题闭环，specs已同步到openspec/specs，长期用例按能力合并到testing/suites且保留稳定ID，项目实际适用检查全部通过；没有产品实现或检查入口时明确说明，不将未执行视为通过。
-      - 归档只移动变更目录并合并增量规范，不得顺手改写被归档文件的历史内容。
-      - 归档在PR前完成；移动后复核文件摘要与路径、运行受影响检查，最终证据覆盖实际集成结果。后续修正使用新变更/新记录，不悄改历史验收结论。
+      - 归档前确认 tracked 任务完成、集成交付门禁通过、阻断问题闭环，增量 specs 已同步到 `openspec/specs/`，稳定用例已按单一主归属能力合并到 `testing/suites/<capability>/tests.md`（多变更修改同一能力时在 `Source definitions:` 追加归档来源路径，跨能力共用用例在主套件定义、他处仅按 ID 引用），并通过 `npm run check:spec` 与适用工程检查。
+      - 归档在 PR 前完成（本地工作分支提交，最终经 PR squash 合并至 main），只移动变更目录并合并规范与长期套件；纯归档/结果回填提交在零代码改动前提下直接沿用受测集成 commit SHA 的验收与检视结论。

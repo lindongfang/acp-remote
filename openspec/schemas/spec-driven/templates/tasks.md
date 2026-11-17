@@ -1,11 +1,17 @@
 # Tasks
 
-## 1. <!-- Task Group Name -->
+<!-- 仅在变更进入实施准备时生成。每条真实 checkbox 必须按完整词元引用至少一个 plan.md 工作包 ID（如 WP1），
+并在同一行写明完成判据（测试、命令、可观察行为或交付物）；每个任务组自带对应单测与实现文档。 -->
 
-- [ ] 1.1 <!-- Task description -->
-- [ ] 1.2 <!-- Task description -->
+## 1. <!-- 任务组名称 -->
 
-## 2. <!-- Task Group Name -->
+- [ ] 1.1 WP1 <!-- 任务描述；完成判据：对应单测/检查命令与可观察结果 -->
+- [ ] 1.2 WP1 <!-- 任务描述；完成判据：对应单测/检查命令与实现文档同步 -->
 
-- [ ] 2.1 <!-- Task description -->
-- [ ] 2.2 <!-- Task description -->
+## 2. <!-- 集成验收与交付检视 -->
+
+- [ ] 2.1 WP2 <!-- 固定本地分支集成 commit SHA，完成独立 tester 验收与独立 reviewer 交付检视；完成判据：必需用例通过、阻断问题闭环且摘要写入 plan.md -->
+
+## Workflow follow-up
+
+- 归档前同步增量规范至 `openspec/specs/`、按主归属能力合并稳定用例至 `testing/suites/`，运行 `npm run check:spec` 校验通过后执行归档（本节保持普通列表，不使用 checkbox）。

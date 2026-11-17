@@ -18,4 +18,5 @@ dist/
 /.omp/
 .worktrees/
 .target-wt/
+/testing/runs/
 /openspec/testing/runs/

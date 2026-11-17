@@ -12,6 +12,7 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 `deliver-codex-session-loop` 已于 2026-11-16 归档，实际验证范围以[归档计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md)为准；归档本身不代表任意 Harness 已验收。Pi 接入规划与范围调整见[能力地图](docs/REBUILD_CAPABILITY_MAP.md)。
 
+
 ### 归档前阶段记录
 
 以下保留原阶段进展，不作为当前完整交付结论。当时 `deliver-codex-session-loop` 在已有部分实现上按新规格增量调整，完整 Harness/Web 会话闭环尚未交付。原生活动模型、既有管理迁移及公共ACP发现/重放已分别验证；最新请求和队列服务进展见下文。旧会话动作签名、期限/回退水位及有界视图保留在历史实现中，相关新通路仍在替换。旧聊天存储和强刷审批接口只在测试构建中保留，旧数据库内容原样保留，不自动清库。普通启动已装配审批与原生会话服务；认证入口的会话动作、Web页面接线及完整验收仍待完成。[旧会话存储合同](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/session-contract.md)停用；当前行为与阶段依据见[实施合同](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/implementation-contract.md)及[执行计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md)，历史报告仅在原范围有效。
@@ -46,7 +47,7 @@ npm ci --prefix clients/web
 npm run check
 ```
 
-也可以分别执行 `npm run check:rust`、`npm run check:web`、`npm run build:rust` 和 `npm run build:web`。固定 JWS 向量和 WebCrypto 互操作可在真实 Chromium 中复核：
+也可以分别执行 `npm run check:spec`（OpenSpec 严格规范与计划/任务/用例结构校验）、`npm run check:rust`、`npm run check:web`、`npm run build:rust` 和 `npm run build:web`。固定 JWS 向量和 WebCrypto 互操作可在真实 Chromium 中复核：
 
 ```sh
 npm --prefix clients/web run dev -- --host 127.0.0.1 --port 4173 --strictPort
@@ -103,6 +104,7 @@ tls_key = "D:/ACPRemote/tls/localhost.key"
 | [openspec/role/](openspec/role/) | 开发、测试与审查职责 |
 | [.agents/](.agents/) | 技能与工具资源 |
 | [.github/](.github/) | 持续集成与协作配置 |
+| [testing/suites/](testing/suites/) | 长期验收用例与结构校验脚本 |
 
 ## 贡献与检查
 

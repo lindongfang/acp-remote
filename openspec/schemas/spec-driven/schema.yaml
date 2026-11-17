@@ -1,6 +1,6 @@
 name: spec-driven
 version: 1
-description: ACP Remote workflow - proposal → specs/design → tests → plan → tasks
+description: ACP Remote workflow - proposal → specs/design → (when ready to implement) tests → plan → tasks
 artifacts:
   - id: proposal
     generates: proposal.md
@@ -48,10 +48,10 @@ artifacts:
       behavior, so if behavior does not change, no spec should change either.
       Do not invent a requirement just to satisfy validation.
 
-      Keep it concise (1-2 pages). Focus on the "why" not the "how" -
-      implementation details belong in design.md.
-
-      This is the foundation - specs, design, and tasks all build on this.
+      Maintain `proposal.md` in place as a clean living document: update sections
+      directly when decisions evolve instead of stacking historical revision banners
+      at the top of the file. Keep it concise (1-2 pages). Focus on the "why" not
+      the "how" - implementation details belong in design.md.
     requires: []
 
   - id: specs
@@ -139,30 +139,6 @@ artifacts:
       Common pitfall: Using MODIFIED with partial content loses detail at archive time.
       If adding new concerns without changing existing behavior, use ADDED instead.
 
-      Example (a new capability, so its first section is `## Purpose`):
-      ```
-      # Spec Delta
-
-      ## Purpose
-
-      Lets users take their data out of the product in a portable format.
-
-      ## ADDED Requirements
-
-      ### Requirement: User can export data
-      The system SHALL allow users to export their data in CSV format.
-
-      #### Scenario: Successful export
-      - **WHEN** user clicks "Export" button
-      - **THEN** system downloads a CSV file with all user data
-
-      ## REMOVED Requirements
-
-      ### Requirement: Legacy export
-      **Reason**: Replaced by new export system
-      **Migration**: Use new export endpoint at /api/v2/export
-      ```
-
       Specs should be testable - each scenario is a potential test case.
     requires:
       - proposal
@@ -187,16 +163,13 @@ artifacts:
       - **Open Questions**: Unknowns that can safely be answered later without
         changing the specs, the approach, or the task breakdown. Omit if none.
 
-      Open questions are for genuinely deferrable unknowns, not decisions you
-      skipped. If a question would change the specs, the chosen approach, or
-      the task breakdown, resolve it now - ask the user instead of guessing.
+      Maintain `design.md` in place as a clean living document: replace superseded
+      sections directly instead of prepending patch banners. Focus on architecture
+      and approach, not line-by-line implementation.
 
-      Focus on architecture and approach, not line-by-line implementation.
-      The proposal covers why and what; design covers how. Reference the
-      proposal for motivation and, once written, the specs for requirements -
-      if a section would only restate them, point to them instead.
-
-      Good design docs explain the "why" behind technical decisions.
+      NOTE ON FUTURE CHANGES: If a change is only being defined for future roadmap
+      alignment and is NOT yet entering pre-implementation preparation, stop after
+      `proposal`, `specs`, and `design`.
     requires:
       - proposal
 
@@ -205,39 +178,34 @@ artifacts:
     description: Independent pre-code test cases and repeatable acceptance entries
     template: tests.md
     instruction: |
-      An independent tester creates one tests.md before coding. Read
-      openspec/role/tester.md and project config. Do not inherit coder dialogue.
-      Initially use proposal/specs/design without waiting for plan; after plan
-      exists, review its execution arrangements before implementation.
-      Keep stable case IDs and titles. Require only the test level, actionable
-      steps and observable expected results in each case. Include only needed
-      L1-L6/LX levels; do not require an applicability matrix for every level.
-      State requirement/scenario references and shared execution context once
-      per group. Add preconditions, tools, environment, real/mock boundaries or
-      cleanup only where needed to execute or judge a case; avoid repeated fields.
-      Reserve LX strictly for scenarios the harness cannot verify and that
-      require human action or judgment. Explain the concrete limitation and
-      minimal human scope within the steps, without adding mandatory fields.
-      Verify tool-checkable behavior under L1-L6; reuse valid evidence for the
-      same version, scope and required environment without duplicate user runs.
-      Missing tools, environment, permissions or test entries mean blocked or
-      not-run, not automatic LX. Split mixed scenarios; omit LX if unnecessary.
-      Independent security review does not automatically require user execution.
-      Never assume execution or substitute model inference for evidence.
-      For necessary human acceptance (LX), ask only for pass/fail. The agent records the
-      case ID, tested version and user's actual verdict. No reply means pending;
-      never infer a pass or require the user to fill technical evidence fields.
-      L5 comes from confirmed behavioral specs. In an active change, bare
-      specs/<capability>/spec.md means its delta; explicit openspec/specs paths
-      mean durable specs. In durable suites, bare paths mean durable specs.
-      Never fall back across roots. No local structure gate currently exists;
-      reviewer manually verifies file existence, Requirement/Scenario names and coverage.
-      skip_specs changes reference the proposal's Success Criteria section instead.
-      L6 states real/mock component boundaries.
-      Coder owns development unit tests; tester owns acceptance expectations.
-      Reviewer independently reviews the cases and plan before implementation.
-      Cases describe repeatable checks, not run results. Store execution results
-      separately and synchronize durable cases by capability before archive.
+      CONDITIONAL ARTIFACT — Create ONLY if this change is entering pre-implementation
+      preparation now. If the user is proposing a future/roadmap change that is not yet
+      scheduled for implementation, skip this artifact (leave `tests.md` uncreated).
+
+      When creating `tests.md` for pre-implementation, delegate to an independent `tester`
+      session/subagent (read `openspec/role/tester.md` and project config; never draft
+      `tests.md` in the same dialogue context as `coder` implementation).
+
+      Keep stable case IDs and titles. Require only the test level (`- 用例级别：`),
+      actionable steps (`- 操作步骤：`), and observable expected results (`- 预期结果：`)
+      in each case. Include only needed L1-L6/LX levels; do not require an
+      applicability matrix for every level.
+
+      State requirement/scenario references in markdown mapping tables (`| 当前增量路径 | Requirement | Scenario | 用例 |`)
+      so `node testing/suites/verify-suite.mjs --change <name>` can automatically
+      verify every added/modified Requirement & Scenario is covered. In an active
+      change, bare `specs/<capability>/spec.md` means its delta; explicit
+      `openspec/specs/<capability>/spec.md` means durable specs. `skip_specs`
+      changes reference the proposal's `## Success Criteria` section instead.
+
+      Reserve LX strictly for scenarios the harness cannot verify through tools and
+      that require human judgment. Missing tools, credentials, or test entries mean
+      `not-run`, never automatic LX or model inference.
+
+      Run `node testing/suites/verify-suite.mjs --change <name>` (and `npm run check:spec`)
+      to validate case structure and scenario coverage. Cases describe repeatable checks,
+      not run results: store raw logs in ignored `testing/runs/<change>/` and record
+      concise summaries in `plan.md`.
     requires:
       - specs
       - design
@@ -247,59 +215,26 @@ artifacts:
     description: Execution arrangement - work packages, isolation, merge order, verification
     template: plan.md
     instruction: |
-      Create the execution plan (plan.md) that turns the specs and design into
-      dispatchable work packages. The proposal covers why, specs cover what,
-      design covers how - plan covers who does what, in which isolated
-      workspace, in which order, and how each piece is verified.
+      CONDITIONAL ARTIFACT — Create ONLY if this change is entering pre-implementation
+      preparation now. If the user is proposing a future/roadmap change that is not yet
+      scheduled for implementation, skip this artifact (leave `plan.md` uncreated).
 
-      Follow openspec/config.yaml rules. Execution is tool-neutral:
-      actively identify independent work and execute it in parallel in isolated
-      workspaces when possible. Explain dependencies, overlap or unavailable
-      tools for serial work. Use coder/tester/reviewer responsibilities from
-      openspec/role; do not bind them to a host or model.
+      Maintain `plan.md` in place (current valid state only; do not append daily
+      micro-logs or stacked revision banners).
 
-      Required content, following the template's sections:
+      Follow `openspec/config.yaml` rules:
+      - **Execution Model**: execution method, baseline Git commit, isolation boundaries.
+      - **Parallel Assessment**: identify independent work vs serialized overlap.
+      - **Work Packages**: 7-column table (`ID | Goal / Scenarios | Dependencies | Agent | Write Scope | Deliverable | Verify`) with real repository paths.
+      - **Merge Order**: integration order and re-verification for overlapping writes.
+      - **Project Verify**: commands, working directories, and pass criteria referencing `tests.md` IDs.
+      - **Code Review**: two-gate independent review model:
+        1. Pre-code gate: one combined review of `proposal/specs/design/tests/plan/tasks` after `node testing/suites/verify-suite.mjs --change <name>` passes.
+        2. Integrated delivery gate: parallel independent `tester` acceptance and `reviewer` review bound to a single local-branch Git `commit SHA` (`HEAD` with clean tracked tree) after all work packages and any tracked acceptance test code are committed. Post-gate commits that only record `Verification Results`, check off `tasks.md`, sync specs/suites, or archive inherit that tested commit's sign-off when `git diff <tested-sha>..HEAD` touches zero product/test code.
+      - **Main E2E**: single typed `yaml` block (`mode: required` alone, or `mode: not-applicable` with `reason` in `pure-refactor | docs-only | no-user-surface | isolated-internal-module`, non-empty `basis`, and non-empty `alternative_checks` list).
+      - **Risks**, **Handoff**, **Findings**, **Verification Results**: concise current state and integrated commit results.
 
-      - **Execution Model**: name the actual execution method, baseline,
-        ownership, integration method, and verification locations.
-      - **Work Packages**: one row per unit, with goal, dependencies, executor,
-        repository-relative write scope, deliverable, and executable checks.
-        Overlapping writes must be serialized in Merge Order.
-      - **Merge Order**: define integration order and re-verification for any
-        overlap. Direct serial implementation does not require a patch detour.
-      - **Project Verify**: list commands, working directories, prerequisites,
-        and pass conditions. Checks may run in any prepared workspace; final
-        validation must cover the exact integrated result to be submitted.
-      - **Code Review**: independent reviewer approves plan and tester cases
-        before coding and reviews the real delivery afterwards. Tester and
-        reviewer must not inherit coder dialogue and must assess the same
-        fixed content version. Record stable finding IDs and independent
-        retest/review closure. Self-review never substitutes for this gate.
-      - **Main E2E**: use required for runnable user-visible behavior and
-        choose available real-browser or desktop tools. Otherwise record
-        not-applicable, reason, basis, and alternative_checks.
-
-      Reference tests.md IDs instead of duplicating cases. Record handoff,
-      parallel assessment, content version, results and findings. Synchronize
-      specs/regression cases and archive before PR, then check the moved result.
-      Keep the plan free of design rationale (that belongs in design.md) and of
-      per-line task descriptions (those belong in tasks.md). Each work package
-      row here MUST have at least one corresponding task in tasks.md.
-
-      The plan is not dispatchable until: every work package has a write scope
-      that does not silently overlap another's, the merge order covers every
-      overlap, and every package has a verify step that can actually run where
-      it is executed.
-
-      Until a dedicated local gate is implemented, reviewer manually validates: required sections with
-      non-empty bodies, a Work Packages table with 7 columns and unique IDs,
-      Main E2E typed YAML consistency (one block, no duplicate keys or aliases;
-      non-empty reason/basis strings and string-list alternative_checks for
-      not-applicable; omitted/null/typed empty values for required). Each Work
-      Package ID must appear as a complete token in a real checkbox task;
-      comments/fences/prose and prefix matches do not count. Every real task
-      references a declared package. Persist verification summaries using the
-      plan template; apply config rules for evidence invalidation and reuse.
+      Validate structural rules automatically via `node testing/suites/verify-suite.mjs --change <name>`.
     requires:
       - specs
       - design
@@ -310,71 +245,23 @@ artifacts:
     description: Implementation checklist with trackable tasks
     template: tasks.md
     instruction: |
-      Create the task list that breaks down the implementation work.
+      CONDITIONAL ARTIFACT — Create ONLY if this change is entering pre-implementation
+      preparation now. If the user is proposing a future/roadmap change that is not yet
+      scheduled for implementation, skip this artifact (leave `tasks.md` uncreated).
 
-      Before writing tasks, check design.md for Open Questions. If any of them
-      would change what gets built, resolve them with the user first - do not
-      bake an unstated assumption into the task list.
-
-      **IMPORTANT: Follow the template below for tracked tasks.** The apply phase parses
-      checkbox format to track progress. A box holding only `x` counts as done,
-      upper or lower case and with any spacing, so `- [ x]` is done too. Every
-      other marker, including `- [~]`, `- [-]` and an empty `- []`, reads as
-      unfinished. A line with no checkbox is not tracked at all.
+      Maintain `tasks.md` cleanly without stacked top-level revision banners.
 
       Guidelines:
-      - Group related tracked tasks under ## numbered headings
-      - Each tracked task MUST be a checkbox: `- [ ] X.Y Task description`
-      - Tasks should be small enough to complete in one session
-      - Order tasks by dependency (what must be done first?)
-      - Track implementation and verification work that can be completed before
-        archive. If the requested workflow includes archive or work that requires
-        this change to be archived, preserve those steps as plain bullets in an
-        optional `## Workflow follow-up` section at the end of tasks.md. These
-        bullets are reference information outside tracked task progress.
-      - Each task MUST state how to verify completion (a test, command,
-        observable behavior, or delivered artifact). Put the verification in
-        that task's checkbox description. Use a separate verification task only
-        when it checks broader integration or system behavior that spans
-        multiple implementation tasks.
-      - Each task group MUST land the tests and documentation its own work
-        calls for. Do NOT collect testing or documentation into a final group -
-        when a late group first exercises work from an early one, the failures
-        cascade back through every group in between and force rework. A group
-        whose work calls for neither, such as scaffolding or dependency setup,
-        carries neither. A final group is for integration checks only, not for
-        the tests and docs an earlier group owed.
-
-      Example:
-      ```
-      # Tasks
-
-      ## 1. Setup
-
-      - [ ] 1.1 Create new module structure and verify expected files are present
-      - [ ] 1.2 Add dependencies to package.json and verify package installation succeeds
-
-      ## 2. Core Implementation
-
-      - [ ] 2.1 Implement data export function and verify the export test passes
-      - [ ] 2.2 Add CSV formatting utilities and verify unit tests cover quoting and delimiters
-      - [ ] 2.3 Document the export API in docs/export.md and verify the documented command runs as written
-      ```
-
-      When applicable, append workflow follow-up as plain bullets, for example:
-      ```
-      ## Workflow follow-up
-
-      - Archive the change after the project's review requirements are satisfied.
-      - Verify the archived result.
-      ```
-
-      Reference specs for what needs to be built, design for how to build it,
-      tests.md for acceptance cases, and plan.md for who builds which part in
-      which order. Include coder unit tests, independent tester execution and
-      reviewer gates with evidence. Every work package
-      in plan.md MUST have at least one tracked task here, and no tracked task
-      may introduce work that no work package covers.
+      - Group related tracked tasks under `##` numbered headings
+      - Each tracked task MUST be a checkbox: `- [ ] X.Y WPn Task description and completion criteria`
+      - Every real checkbox task MUST reference at least one declared Work Package ID
+        from `plan.md` as a complete token (e.g., `WP1`), and every Work Package in
+        `plan.md` MUST be referenced by at least one real checkbox task
+      - State how to verify completion inline in each task's checkbox line
+      - Each task group MUST land the unit tests and documentation its own work calls for
+      - Keep archive and post-archive checks as plain bullets under `## Workflow follow-up`
+      - Run `node testing/suites/verify-suite.mjs --change <name>` (and `npm run check:spec`)
+        to verify `plan.md ↔ tasks.md` bi-directional binding and 100% delta scenario coverage
     requires:
       - specs
       - design
@@ -385,5 +272,7 @@ apply:
   requires: [ tests, plan, tasks ]
   tracks: tasks.md
   instruction: |
-    Read context files, work through pending tasks, mark complete as you go.
-    Pause if you hit blockers or need clarification.
+    Ensure pre-code gate and `node testing/suites/verify-suite.mjs --change <name>` passed,
+    iterate through implementation tasks using targeted tests, commit clean integrated state
+    on the local feature branch, and run the single integrated independent tester + reviewer
+    gate on that commit SHA.

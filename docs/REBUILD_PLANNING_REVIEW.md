@@ -1,10 +1,10 @@
 # 重建规划独立检视
 
-> 范围变更说明（2026-11-16，非独立复审结论）：用户确认暂不适配 DeepSeek Harness 和 ZCode，对应活跃 change 已移除。下文这两项 change 的路径、摘要及审查结论保留为历史快照，可从 Git 历史追溯，不代表当前计划或当前文件仍存在。
+> 范围变更说明（2026-11-17，非独立复审结论）：① DeepSeek Harness、ZCode 及 OMP 暂不适配，对应变更已移除；② `establish-node-access` 与 `deliver-codex-session-loop` 已归档至 `openspec/changes/archive/`；③ 尚未开工的 6 个远期变更按流程轻量化（方案 A）仅保留 `proposal.md`、`specs/` 与 `design.md`，移除了预生成的 `tests/plan/tasks/review`。下文早期规划路径、文件 SHA-256 及审查结论均作为 2026-10-29 建仓期历史快照保留，可通过 Git 历史追溯。
 
 > 版本范围提示（2026-10-29）：下文为既有独立检视及固定摘要，保留原记录。随后用户确认了通用ACP/Codex首验、DeepSeek/ZCode配置与兼容验收、用户决策阻断、升级复验和v1/v2兼容目标；受影响三项proposal/spec/design/tests/plan/tasks及重设计/能力地图已修订。原结论不覆盖新文本，新增用例和多版本功能均不能视为已验收；本轮独立复查另记，不能使用旧摘要签新版本通过。
 
-结论：全部10项当前文档快照的方案、用例、计划与任务设计检视通过，未发现未闭环设计阻断。仅表示待实现文档达到本轮审查目标；本轮不授权编码、提交、推送或发布，也没有产品、安全、供应链、兼容性或正式验收通过结论。
+结论：全部10项当时文档快照的方案、用例、计划与任务设计检视通过，未发现未闭环设计阻断。仅表示待实现文档达到当时审查目标；不授权编码、提交、推送或发布，也没有产品、安全、供应链、兼容性或正式验收通过结论。
 
 独立reviewer不继承coder对话，实际读取AGENTS、OpenSpec config与reviewer职责、重设计及能力地图，并逐项审读proposal/specs/design/tests/plan/tasks；首项另审access-contract。reviewer只写各change/review.md及本报告，没有修改产品设计或独立tester用例。独立tester承担用例定义及执行安排复核，reviewer不以其自评代签。
 
@@ -12,20 +12,20 @@
 
 各报告记录逐文件SHA-256。报告自身摘要如下，用于定位这次最终复查版本；后续plan结果/进度变化须辨别与行为设计变化的区别，spec/design/contract/tests变化要按实际影响重验。
 
-| Change | 用例数 | 本轮文档结论 | 独立报告 | 报告SHA-256 |
+| Change | 用例数 | 当时文档结论 | 历史报告路径（Git 历史可查） | 报告SHA-256 |
 | --- | --- | --- | --- | --- |
-| deliver-agent-session-tree | 10 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-agent-session-tree/review.md) | `652805ECA0E54EB4C12FC590AC0460B8151D022268B091584F96F91BE4FC827C` |
-| deliver-backup-recovery | 10 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-backup-recovery/review.md) | `C3B47D5903190EBA037E068AE1230F6432F5B5EC96DD76A65739E0BBEB585C30` |
-| deliver-codex-session-loop | 31 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-codex-session-loop/review.md) | `A4E6F3064E1232C472CD936AA5A19DAB98AC1482A67CA354C9569546C52A9D39` |
-| deliver-history-navigation | 13 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-history-navigation/review.md) | `D6581689B840B603394A4C507E797D59D3AF6FFD1C65E691EF041ECAA6F5D84C` |
-| deliver-native-session-import | 10 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-native-session-import/review.md) | `87E17564D65A1D6023C9F284E60D3F8FAB7B2559F8410D43AE7B94D003D3C159` |
+| deliver-agent-session-tree | 10 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-agent-session-tree/review.md` | `652805ECA0E54EB4C12FC590AC0460B8151D022268B091584F96F91BE4FC827C` |
+| deliver-backup-recovery | 10 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-backup-recovery/review.md` | `C3B47D5903190EBA037E068AE1230F6432F5B5EC96DD76A65739E0BBEB585C30` |
+| deliver-codex-session-loop | 31 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/review.md) | `A4E6F3064E1232C472CD936AA5A19DAB98AC1482A67CA354C9569546C52A9D39` |
+| deliver-history-navigation | 13 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-history-navigation/review.md` | `D6581689B840B603394A4C507E797D59D3AF6FFD1C65E691EF041ECAA6F5D84C` |
+| deliver-native-session-import | 10 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-native-session-import/review.md` | `87E17564D65A1D6023C9F284E60D3F8FAB7B2559F8410D43AE7B94D003D3C159` |
 | deliver-session-capacity | 12 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-session-capacity/review.md) | `9A9A437B41BB2872350367274906B3B560E87E77EB507B18494EA18F650A9C66` |
-| deliver-session-data-lifecycle | 11 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-session-data-lifecycle/review.md) | `77A126199DE91D54AB3602C93DD055DDEC3996F34F9CD709BC8407B3D24D68B1` |
-| establish-node-access | 34 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/establish-node-access/review.md) | `D0B21DB495BC7A82919C92648BA06A1301F082DE4B9C85E372ABB7F4C4A6E37C` |
-| integrate-deepseek-harness | 11 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/integrate-deepseek-harness/review.md) | `AF1187DDEF63756DB3849F9976E15814A95E5BB2E02C9DCE16CAE1221319B7C5` |
-| integrate-zcode-harness | 10 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/integrate-zcode-harness/review.md) | `2D27BBAC266F594A87362249587857B72B796F2922AEC18DDBABE1CE4415B1D2` |
+| deliver-session-data-lifecycle | 11 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-session-data-lifecycle/review.md` | `77A126199DE91D54AB3602C93DD055DDEC3996F34F9CD709BC8407B3D24D68B1` |
+| establish-node-access | 34 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/archive/2026-10-30-establish-node-access/review.md) | `D0B21DB495BC7A82919C92648BA06A1301F082DE4B9C85E372ABB7F4C4A6E37C` |
+| integrate-deepseek-harness | 11 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/integrate-deepseek-harness/review.md` | `AF1187DDEF63756DB3849F958B09A7D3BC0E377462` |
+| integrate-zcode-harness | 10 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/integrate-zcode-harness/review.md` | `2D27BBAC266F594A87362249587857B72B796F2922AEC18DDBABE1CE4415B1D2` |
 
-共152条用例。所有产品用例尚未执行，not-run被明确保留；用例定义、静态规划检查与真实运行结果严格分开。
+共152条用例。所有产品用例当时尚未执行，not-run被明确保留；用例定义、静态规划检查与真实运行结果严格分开。
 
 ## 问题闭环
 
@@ -64,8 +64,6 @@ reviewer实际执行git diff --check退出0（README行尾转换提示不构成�
 
 | File | SHA-256 |
 | --- | --- |
-
-
 | docs/HARNESS_CONTROL_PLANE_REDESIGN.md | `6EBCD600C2B3896131BAC1923C5B333D544B1F50F773461D91E9F64D5A4AB3C1` |
 | docs/REBUILD_CAPABILITY_MAP.md | `CC6B8D5D36E8304F48FFD1D8E55E3F10E050A45AF22884C1E860615D2BCFEBC9` |
 | openspec/changes/deliver-codex-session-loop/design.md | `2C7EB6FEB1BA4150871C140C24809C085B78FA4545F875807AFF286D9D4A04E9` |
@@ -127,7 +125,7 @@ reviewer实际执行git diff --check退出0（README行尾转换提示不构成�
 | openspec/changes/deliver-agent-session-tree/plan.md | `702779A0AF1840FD7E6C1FA07A3B298C2C9F4F0A6B1E660B8862DFD39DDB8D86` |
 | openspec/changes/deliver-agent-session-tree/proposal.md | `7F4D36FC8C0BFF0035E77B8375F9345ED2DC0E5921D4B1A70E2CD7345C816849` |
 | openspec/changes/deliver-agent-session-tree/tasks.md | `F75DC9B543EE69524956B1C3C5B5EC7F3B6C20598A90319C3F2264058C8EE4AB` |
-| openspec/changes/deliver-agent-session-tree/tests.md | `A467C6CF73B30A674907681595D586B53C01D23CC66DA8FB32265CFF4AD49228` |
+| openspec/changes/deliver-agent-session-tree/tests.md | `2DEE4273BE6DA9019B16659B4BFF82AEDC5D4E53B4788B6BBCFF88E15391D16A` |
 | openspec/changes/deliver-agent-session-tree/specs/agent-session-tree/spec.md | `C3B47BA0BD8291F9AD568D6406E4128A501CAFE38535D3161342E6B5C8BDCE0F` |
 
 ## 2026-10-29 回收资格澄清独立复查
@@ -219,6 +217,6 @@ reviewer实际运行git diff --check退出0（已有LF/CRLF提示非差异错误
 | deliver-session-data-lifecycle | 11 | 0 |
 | deliver-backup-recovery | 10 | 0 |
 
-当前合计 193 条（L1–L6 共 192 条，LX 共 1 条）。首项已由34例调整为33例；原NA-034与新NA-033的对应关系以该change/tests.md为准，不据编号迁移历史结果。上文152例及其后各轮计数、SHA-256与通过结论仅属于各自历史快照，不改写、不签本轮新文本通过。当前数量的维护入口为[能力地图索引](REBUILD_CAPABILITY_MAP.md#待实现文档索引)。
+当前合计 193 条（L1–L6 共 192 条，LX 共 1 条）。首项已由34例调整为33例；原NA-034与新NA-033的对应关系以该change/tests.md为准，不据编号迁移历史结果。上文152例及其后各轮计数、SHA-256与通过结论仅属于各自历史快照，不改写、不签本轮新文本通过。当前数量的维护入口为[能力地图](REBUILD_CAPABILITY_MAP.md)。
 
 主执行者实际依序运行8项 openspec.cmd validate <change> --strict，均通过；另执行只读辅助自检：118个用例均含三个必填项、无重复编号，67组Requirement/Scenario引用均存在且所属关系匹配，无未引用规格场景，95项任务与声明WP关联完整。辅助匹配不证明语义或功能覆盖。git diff --check退出0，另核对本轮未跟踪文档的行尾空白与末尾换行；未执行本轮产品验收，也未取得修订后的独立tester/reviewer结论。各plan继续保留not-run并标记新文本待复核；缺失的新用例结果占位已补齐，未填入通过状态。
