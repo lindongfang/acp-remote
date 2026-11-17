@@ -2,15 +2,15 @@
 
 ## 结论与范围
 
-2026-11-16，独立 reviewer 在不继承主执行者或 tester 对话的会话中完成只读规划检视。结论：**本轮规划通过；产品实施与兼容验收未完成。** 没有尚未闭环的规划阻断问题，HPLAN-R001 已由原提出者独立复查关闭。此结论仅覆盖创建 change 的 SC1 文档范围，不授权安装、升级、产品编码或真实 Harness 运行，不宣称 SC2–SC4 已达成。
+2026-11-16，独立 `tester` 与独立 `reviewer` 在不继承开发对话的只读子会话中对基于 Git `65d734f638bcb951e237b69faa592917b3a6d2c7` 的二轮规划修订完成用例预期核验与全量规划复查；2026-11-17 按用户最新确认“先去掉 omp 的适配吧，暂时先支持 codex 和 pi”移除 `integrate-omp-harness` 并同步收敛本变更及顶层文档范围。结论：**本轮规划修订通过；产品实施与本机真实 Pi 兼容验收未完成。** 首轮 `HPLAN-R001`、源码对照审查提出的 `HPLAN-R002`–`HPLAN-R006` 以及二轮独立检视提出的 `HPLAN-R007`–`HPLAN-R009` 均已逐项核实关闭，无剩余规划阻断问题。本结论仅覆盖 `SC1` 规划修订范围，不授权自动安装或改动用户本机 `pi`、不代表 `WP1` 真实环境取证已完成、不宣称 `SC2`–`SC4` 已达成。
 
-依据为用户原话、AGENTS.md、openspec/config.yaml、三角色职责、当前模板、docs/code-standards.md、LESSONS.md、总体设计及相关长期规格。实际核对通用配置、目录登记和 Web 入口源码，并核对 package.json/clients/web/package.json 的现有检查命令。两项新 change 的六类规划及元数据、README、总体设计、能力地图均纳入下方快照。其他已有用户修改只核对范围与保护要求，不签署其内容通过。
+依据为用户各轮原话（审查 `integrate-pi-harness` 并修复 5 个问题；“本地已经安装了pi。但是当前项目不要绑定pi的版本”；“先去掉omp的适配吧，暂时先支持codex和pi”）、`AGENTS.md`、`openspec/config.yaml`、`openspec/role/{coder,tester,reviewer}.md`、`docs/code-standards.md`、`LESSONS.md`、`docs/HARNESS_CONTROL_PLANE_REDESIGN.md` 及相关长期规格（`harness-management`、`native-session-recovery`、`acp-platform-constraints`、`session-execution`、`structured-history`、`permission-approvals`、`management-input-upload`）。实际核对真实源码边界：`app/src/adapters/acp/node_configuration_profile.rs`、`app/src/domain/native_catalog.rs`、`app/src/adapters/acp/strategy.rs`、`app/src/adapters/acp/transport/state.rs`、`app/src/platform/process_owner.rs`、`clients/web/src/management/workspace-catalog-view.ts` 及根 `package.json`。
 
-Pi 本地安装仅有用户陈述，路径与版本未知；pi-acp 是第三方候选而非已采用依赖。设计明确 ACP 服务端与 Pi RPC 子进程的边界，要求分别取证 MCP/模型配置生效和结构保真，不将适配器接受参数或文本降级写成能力通过。
+本轮严格遵循“不绑定 `pi` 版本”硬约束：用户本机已安装 `pi`，项目任何 `package.json`、锁文件、配置模板、探针脚本与运行时代码均不声明、锁定或强校验特定 `pi` 版本；节点仅存储单一 ACP 对端启动配置并按当前连接动态协商，单次兼容性报告只读记录当次实测观察到的本机 `pi` 与外部 ACP 服务端版本供证据归属追溯。
 
 ## 需求与用例逐项核对
 
-已人工对照本 change 增量文件中的 6 个 Requirement、12 个 Scenario，精确名称均存在且由下表用例覆盖；这不是文件存在性或 CLI 校验推断。13 个稳定用例覆盖正常、拒绝、取消、竞态、失效、隔离和清理路径。长期依据中明确点名的 Requirement 也已核对真实名称；裸 specs 路径只定位本次增量，没有跨目录补位。
+已人工对照本 change 增量文件 `specs/pi-harness-compatibility/spec.md` 中的 6 个 Requirement、12 个 Scenario：全部英文规范关键词（`SHALL`、`MUST`）两侧均留有单个空格，未写入内部类名或函数名，且精确名称由 `tests.md` 下表完整覆盖。13 个稳定用例（`PI-001`–`PI-013`）保留原编号与标题，覆盖正常、配置/路径拒绝、反向委托 `-32601`、组件升级重新协商、底层配置与通用 Web 表单分层保真、恢复/映射失效、断线审批、取消竞态与 Job 进程树收敛、缺环境阻断及用户数据零改动路径。裸 `specs/...` 路径仅指向本次增量，长期规范使用显式 `openspec/specs/...` 路径，无跨目录补位。
 
 | 用例 | Requirement | Scenario |
 |---|---|---|
@@ -25,80 +25,63 @@ Pi 本地安装仅有用户陈述，路径与版本未知；pi-acp 是第三方�
 | PI-012 | Pi 兼容证据与用户数据隔离 | 缺少本地路径或隔离环境；验证失败后清理 |
 | PI-001–003、PI-013 | proposal.md `Success Criteria` | SC1–SC4；PI-013 复核以上场景的真实可达分支及逐能力限制 |
 
-PI-001 的规划检查与后续真实依赖取证已区分；本轮不能将整个用例记为产品验收通过。PI-002 引用现有构建检查及新增行为适用 Red Check；PI-003 的启动回显夹具不冒充真实程序参数生效。PI-004–012 的协议替身和真实节点边界明确，PI-013 单独要求真实 Windows/浏览器/程序/原生会话与所属进程树。可选能力不支持需实际依据，未触达分支记未验证，必要安全或清理未验证阻断交付。没有把工具可检验项目或独立安全审查转为 LX。
+各用例边界与真实源码完全对齐：
+- `PI-001` 区分当前规划/无版本绑定检查与后续 `WP1` 真实取证，未将规划通过冒充产品验收通过；`PI-002` 引用根 `npm run check` 与 `npm run build:rust` 及适用 Red Check。
+- `PI-003`、`PI-004` 对齐 `OwnedProcess::spawn` 的绝对路径前置校验与无隐式 Shell `CreateProcessW` 行为，使用 Windows 绝对路径原生 PE 可执行文件启动，并将相对路径可执行名与 `.ps1` 脚本入口纳入明确拒绝断言；节点保存单一启动入口，双组件观测版本仅由验收报告只读记录。
+- `PI-005`、`PI-010` 对齐 `Strategy::initialize` 发送空客户端能力（`clientCapabilities: {}` / `capabilities: {}`）与 `reserve_unsupported` 对非 `session/request_permission` 反向请求返回 `-32601 Method not found` 的真实实现。
+- `PI-007` 区分底层 `format: 1` 配置（含 `validate_setup_caps` 能力位核对下的 `mcp_servers`/`extra` 保真）与当前通用 Web 表单（`parseLaunchArgsLines` 按行 `trim`、硬编码 `mcpServers: []`/`extra: {}`）的两层范围。
+- `PI-013` 要求真实 Windows 节点、真实浏览器、本机已安装的真实 `pi`（不改版本）、真实外部 ACP 服务端、`.tmp/` 隔离原生会话及所属 Job 进程树全部真实，未设 `LX`。
 
 ## 执行安排核对
 
-- plan 必备节均有实质内容，Work Packages 表为 7 列，WP1–WP5 唯一。WP2 配置/脚本/说明与 WP3 Web 测试/说明的写范围互斥；并行使用隔离工作区、资源和构建目录。
-- WP1 固定入口、隔离、参数合同与清理方案；真实参数生效和完整进程树清理效果由 WP2/WP4/WP5 证明。未把待建设的真实验收设为编码前循环前置。
-- 同 change 的集成按 Merge Order 顺序开展；两个 change 对 README/总体设计/能力地图的 WP5 重叠明确串行，Pi 先、OMP 后，后合入者复核两者结构、链接、状态及受影响合同。
-- 两份 plan 的 Main E2E 各只有一个 YAML 配置块，唯一字段 mode 为字符串 required，无重复键/别名/类型冲突，并分别指向各自 013 真实用例。本轮不运行不改变 required。
-- 本 change 共 13 个真实 checkbox，全部未勾选；每项正文有完成判据并精确引用声明的 WP，WP1–WP5 均有对应任务，无仅前缀匹配或未声明工作。开发测试/说明、独立验收和独立检视各有任务；归档留在非 tracked follow-up。
-- 现有命令与拟建专项入口已区分。专项脚本参数合同在 WP1 固定、脚本分别由 WP2/WP4 交付；当前规划通过不表示这些入口已经可执行。若需公共代码修复，先调整写范围、规格与验证计划，再重新检视。
-- 计划明确 tester/reviewer 独立上下文、固定同一最终版本、逐例证据摘要及问题原提出者复查；不得用本轮规划结论或另一 Harness 证据代签真实交付。
+- `plan.md` 必备节齐全，`Work Packages` 为标准 7 列表，`WP1`–`WP5` 唯一且写范围两两互斥：`WP1` 含 `testing/probes/pi-harness/discovery/` 承载候选适配器隔离探针（不安装或锁定 `pi`），`WP2`（节点模板/探针/说明）与 `WP3`（Web 测试/说明）完全互斥可隔离并行。
+- 全部拟建产物收敛到仓库既有目录体系（`testing/probes/pi-harness/`、`docs/implementation/`、`testing/runs/integrate-pi-harness/`、`openspec/specs/pi-harness-compatibility/`、`testing/suites/pi-harness-compatibility/`、`testing/suites/traceability/`），不再引入不存在的顶层 `configs/`、`scripts/`、`testing/harnesses/`、`docs/harnesses/`。
+- `WP5` 与 `tasks.md` `5.2` 同包同步 `openspec/specs/pi-harness-compatibility/spec.md`、`testing/suites/pi-harness-compatibility/tests.md` 与 `testing/suites/traceability/integrate-pi-harness.md`，满足长期套件裸路径指向长期规范、禁止跨目录补位的规则；共享文档（`README.md`、总体设计、能力地图）在 `Merge Order` 声明串行合入并保护主工作区其他在途变更。
+- `Main E2E` 仅含单个 YAML 块且唯一字段 `mode: required` 为字符串，指向 `PI-013` 真实闭环，未因本轮不执行而改为 `not-applicable`。
+- `tasks.md` 共 13 个未勾选真实 checkbox（`1.1`–`5.3`），每项同一行包含明确完成判据并完整引用 `WP1`–`WP5`，无示例 checkbox 或越界未声明工作；归档与归档后检查留在非 tracked `Workflow follow-up`。
 
 ## 问题与独立复查
 
 | ID | 严重性 | 目标版本及位置 | 原问题与依据 | 复查版本及结论 |
 | --- | --- | --- | --- | --- |
-| HPLAN-R001 | P2 | 本轮未提交初稿；本 change spec 的取消/关闭场景 | 初稿将取消确认与实例进程链收敛混用；session-execution 依据原生工作终态确认取消，native-session-recovery 另行约束释放 | 下方摘要固定的 spec、tests、design、plan；取消可靠结束允许常驻进程存在，实例关闭未收敛保留清理责任，011 用例断言二者独立。原提出 reviewer 复查通过，已关闭 |
-
-没有其他未闭环规划阻断。术语沿用显式来源、原生身份、启动配置和连接代际，本轮未新建业务对象，GLOSSARY 无变化及不新增 ADR 的理由与范围相符。README 与总体文档明确 Pi/OMP 仅规划，旧 DeepSeek/ZCode 内容仅历史依据；未恢复旧 change 或旧验收结论。
+| HPLAN-R001 | P2 | 首轮未提交初稿；`spec.md` 取消/关闭场景 | 初稿将取消确认与实例进程链收敛混用，偏离 `session-execution` 与 `native-session-recovery` 边界 | 首轮及下方最新快照均保持取消终态与实例关闭收敛独立判定（`PI-011`）；原独立 reviewer 复查通过，已关闭 |
+| HPLAN-R002 | P1 | `65d734f6` 规划版；`proposal`/`spec`/`design`/`tests` `PI-004` | 要求系统区分记录双组件身份与固定版本，与单一 `launch`/`HarnessSummary` 代码模型及用户“不绑定 `pi` 版本”要求冲突 | 下方摘要快照；节点仅存单一启动配置并动态协商，全链路移除 `pi` 版本绑定，报告只读记录当次观测双组件版本。独立 tester/reviewer 复核通过，已关闭 |
+| HPLAN-R003 | P1 | `65d734f6` 规划版；`design`/`tests` `PI-003` | 拟选 `.ps1`/`.cmd` 启动链，与 `OwnedProcess::spawn` 绝对路径前置校验及无隐式 Shell `CreateProcessW` 实现直接冲突 | 下方摘要快照；改为 Windows 绝对路径原生 PE 启动，并将相对路径名与 `.ps1` 绝对路径列为 `PI-003`/`PI-004` 明确拒绝断言。独立 tester/reviewer 复核通过，已关闭 |
+| HPLAN-R004 | P1 | `65d734f6` 规划版；`spec`/`design`/`tests` `PI-005`/`PI-007`/`PI-010` | 未区分底层 `format: 1` 配置与当前硬编码 `mcpServers: []`/`extra: {}` 且按行 `trim` 的通用 Web 表单，也未覆盖 `clientCapabilities: {}` 与反向 `-32601` 边界 | 下方摘要快照；明确两层配置与表单范围限制，覆盖 `validate_setup_caps`、空客户端能力及非审批反向请求 `-32601` 断言。独立 tester/reviewer 复核通过，已关闭 |
+| HPLAN-R005 | P2 | `65d734f6` 规划版；`design`/`plan`/`tasks` | 拟建 `configs/`、`scripts/`、`testing/harnesses/`、`docs/harnesses/` 偏离仓库目录约定，且缺长期套件同步写范围 | 下方摘要快照；统一收敛至 `testing/probes/pi-harness/`、`docs/implementation/`、`openspec/specs/`、`testing/suites/`。独立 reviewer 复核通过，已关闭 |
+| HPLAN-R006 | P2 | `65d734f6` 规划版；`plan`/`tasks` `WP1` | `WP1` 写范围不含隔离探针目录，无法在不改根依赖且不绑 `pi` 版本的前提下实测候选适配器 | 下方摘要快照；`WP1` 增补互斥写范围 `testing/probes/pi-harness/discovery/` 且明确不安装/不锁定 `pi`。独立 reviewer 复核通过，已关闭 |
+| HPLAN-R007 | P2 | 二轮修订初稿；`spec.md:65` | `版本。MUST 不绑定` 中 `MUST` 左侧紧邻中文句号缺空格，违反 `openspec/config.yaml` 规范关键词两侧留空格规则 | 下方摘要快照；已修正为 `版本；验收与运行时 MUST 不绑定`，全文 `SHALL`/`MUST` 两侧空格逐处复核无误。原提出独立 reviewer 复查通过，已关闭 |
+| HPLAN-R008 | P2 | 二轮修订初稿；`plan.md` `WP5`、`tasks.md` `5.2` | `WP5` 纳入 `testing/suites/pi-harness-compatibility/` 但将新能力 `openspec/specs/` 同步留在 `Workflow follow-up`，违反长期套件禁止跨目录补位规则 | 下方摘要快照；`WP5` 写范围与 `5.2` 已同包同步 `openspec/specs/pi-harness-compatibility/spec.md` 与 `testing/suites/`。原提出独立 reviewer 复查通过，已关闭 |
+| HPLAN-R009 | P2 | 二轮修订初稿；`review.md` | `review.md` 仍停留在旧 `53034ffc` 快照摘要，与基于 `65d734f6` 重写的六类规划产物不一致 | 本文及下方最新 SHA-256 快照；已对齐 `65d734f6` 基线及移除 OMP 后的最新修订产物，已关闭 |
 
 ## 验证状态与限制
 
 | 检查 | 执行者 | 状态 | 证据与范围 |
 | --- | --- | --- | --- |
-| 六类规划、精确场景映射、工作包/任务及 Main E2E 手工检视 | 独立 reviewer | passed | 本文逐项记录，仅规划 |
-| node node_modules/@fission-ai/openspec/bin/openspec.js validate --all --strict | 独立 reviewer，仓库根 | passed | 实际执行，19 passed / 0 failed，退出码 0；不证明产品语义或真实兼容 |
-| git diff --check | 独立 reviewer，仓库根 | passed | 实际执行，退出码 0；README 有 Git 行尾转换提示，无 whitespace error；新未跟踪文件不由该命令完整覆盖 |
-| 产品构建、Rust/Web 测试、Red Check | 未执行 | not-run | 本轮只有规划，无产品实现修改；不借旧报告填通过 |
-| Pi/OMP 安装、真实协商、模型访问、Windows 清理及端到端 | 未执行 | not-run | 无本轮执行授权，固定程序与隔离条件未取得 |
-| 固定依赖供应链/安全及独立产品交付验收 | 未执行 | not-run | 后续 WP1/WP4/WP5 工作，本轮只检视其安排 |
+| 六类规划、精确场景映射、无版本绑定约束、源码边界与工作包/任务手工检视 | 独立 tester、独立 reviewer（只读子会话）+ 2026-11-17 范围移除同步复核 | passed | 独立核对本变更七份文件、长期规格与真实 Rust/Web 接入源码，并同步移除 `integrate-omp-harness` 交叉引用；仅覆盖规划一致性 |
+| `node node_modules/@fission-ai/openspec/bin/openspec.js validate --all --strict` | 主执行者（仓库根） | passed | 主执行者实跑退出码 0（18 passed / 0 failed，移除 OMP 后共 18 项）；独立子会话因只读沙箱限制在自身会话内记 CLI 执行为 `not-run` |
+| `git diff --check -- openspec/changes/integrate-pi-harness README.md docs/HARNESS_CONTROL_PLANE_REDESIGN.md docs/REBUILD_CAPABILITY_MAP.md` | 主执行者（仓库根） | passed | 实际执行退出码 0，无空白或冲突标记错误 |
+| 产品构建、Rust/Web 测试、Red Check | 未执行 | not-run | 本轮仅修订规划与文档范围，未修改产品源码；不借其他在途变更或旧报告填通过 |
+| 本机 `pi` 探针取证、真实 ACP 协商、模型访问、Job 进程树清理及 `PI-013` 端到端 | 未执行 | not-run | 本轮无真实运行与实施授权，`WP1` 实证输入尚未采集 |
+| 候选外部适配器许可证/维护/安全审查及独立产品交付验收 | 未执行 | not-run | 后续 `WP1`/`WP4`/`WP5` 工作，本轮仅检视其门禁与隔离安排 |
 
-后续必须先取得新的实施授权、完成 WP1 的真实输入及方案复核。程序、适配器、配置、产品或测试变化后须重新判断证据有效性；本次没有可外推的产品测试结果。归档与归档后检查尚未执行。
+后续进入实施前必须先取得实施授权并完成 `WP1` 本机 `pi` 只读取证与候选适配器审查。运行时不绑定 `pi` 版本，但本机 `pi`、外部适配器、配置或产品代码变化后，既有测试证据仅归属原观测组合，须按受影响范围重新判断有效性。
 
 ## 固定版本与受审文件摘要
 
-Git HEAD：53034ffc0c9f7644a3125788d1d2b98e51619f88。本次为该基线上的未提交规划快照，不能只凭 HEAD 重建下方新文件。除 plan 特例外均取原始文件字节 SHA-256。两份 plan 按 UTF-8 解码，将 CRLF/CR 统一为 LF，仅删除二级标题 Findings、Verification Results 及各自到下一二级标题或文件末尾的全部内容，保留其他字节语义，再以无 BOM UTF-8 计算 SHA-256；不执行 Trim。排除仅供结论状态回填，不能借此排除行为、配置、测试或工作安排变更。review.md 自身不纳入自身摘要。
+Git HEAD：`65d734f638bcb951e237b69faa592917b3a6d2c7`。本次受审范围为该基线上移除 `openspec/changes/integrate-omp-harness/` 后的 `openspec/changes/integrate-pi-harness/` 规划快照。除 `plan.md` 特例外均取原始文件字节 SHA-256；`plan.md` 按 UTF-8 解码并将 `CRLF`/`CR` 统一为 `LF`，仅删除二级标题 `## Findings`、`## Verification Results` 及各自到下一二级标题或文件末尾的全部内容，保留之前字节语义（不执行 `Trim`），再以无 BOM UTF-8 计算 SHA-256。`review.md` 自身不纳入自身摘要。
 
 | 文件 | 摘要方式 | SHA-256 |
 | --- | --- | --- |
-| README.md | 原始文件字节 | 53b188cd4fb95fe81fe19ef7befdeb3aec172c1d52184f3c6bce268ac8275f72 |
-| docs/HARNESS_CONTROL_PLANE_REDESIGN.md | 原始文件字节 | d67da0fe87511d369e25be460523e913f6e04b017118374fef6ce000e9705073 |
-| docs/REBUILD_CAPABILITY_MAP.md | 原始文件字节 | 1a5acc39961a29a28940a9cd901045f719d924ded3e3f4513ee8cbf157a4f6b7 |
 | openspec/changes/integrate-pi-harness/.openspec.yaml | 原始文件字节 | db997d460a2d6d123d14faf903215b90f63faf4e7e2dadacfdab82c07857e113 |
-| openspec/changes/integrate-pi-harness/proposal.md | 原始文件字节 | e570aa3860db542a8b0fc48de14b456145855e94b0a6f3c3c3c8421b2c2c53d0 |
-| openspec/changes/integrate-pi-harness/design.md | 原始文件字节 | f815c77ef8530b3bcb78c8d5215baaee914ae981f43288c87394b01b5667abb7 |
-| openspec/changes/integrate-pi-harness/specs/pi-harness-compatibility/spec.md | 原始文件字节 | fd580966c8c27a2bbeabfaff36ab6c4bc1ad1d98be2731d1ca14de5ff8335b92 |
-| openspec/changes/integrate-pi-harness/tests.md | 原始文件字节 | a41edb366de099c6bb6f8cb9d194595f9528269d6338ddc924e083da5e5958aa |
-| openspec/changes/integrate-pi-harness/plan.md | 正文规范化摘要 | af021ae4679ac76fd60be1eb0ad43c93b4227e9b749f8aacba9bb65d0dcf87a6 |
-| openspec/changes/integrate-pi-harness/tasks.md | 原始文件字节 | 286f1fa6e36f5d81bd38d81003fdd4e1a62e613fcbc740ec1c7a2f4fd1c228ea |
-| openspec/changes/integrate-omp-harness/.openspec.yaml | 原始文件字节 | db997d460a2d6d123d14faf903215b90f63faf4e7e2dadacfdab82c07857e113 |
-| openspec/changes/integrate-omp-harness/proposal.md | 原始文件字节 | 65330d8d58254c6972c18505751f772c43c9ee9af12f71ee77861504a4444027 |
-| openspec/changes/integrate-omp-harness/design.md | 原始文件字节 | 000b040514fda0dea15c383d830d0c283b4168b376f155a04d77d10f01a7799e |
-| openspec/changes/integrate-omp-harness/specs/omp-harness-compatibility/spec.md | 原始文件字节 | 2b7bf5e31b50a61937e165ef744f887cbbcad3215c44251578a907dd4a6dd3ee |
-| openspec/changes/integrate-omp-harness/tests.md | 原始文件字节 | 6a925b4aa2900fedfc20c48933145375813b39c18c0b198eba7117142af4e493 |
-| openspec/changes/integrate-omp-harness/plan.md | 正文规范化摘要 | 4511861a3a06267a7cfa31f446bbeb8a72a9d5971556039559c43ff4088654b7 |
-| openspec/changes/integrate-omp-harness/tasks.md | 原始文件字节 | 3fa9a36168116d852262edfa6ef5358e7b591a7017a09adce544838a5086d579 |
+| openspec/changes/integrate-pi-harness/proposal.md | 原始文件字节 | cc9fe5cc272b81f91b6c7b3fddde4a9ddb957e1e401ad49c73c26ce0c879302d |
+| openspec/changes/integrate-pi-harness/design.md | 原始文件字节 | 20eb7654238d53df263f33a00e5143cd020753e798a774ab271ec3807a625bac |
+| openspec/changes/integrate-pi-harness/specs/pi-harness-compatibility/spec.md | 原始文件字节 | 6f25f4f22d660e364703b7b08b59f291c4850eafbf2889b6bfd48ae3e022c9a8 |
+| openspec/changes/integrate-pi-harness/tests.md | 原始文件字节 | 5528870bbb6a50b492858352c82c87205caf06bb3ec9484f647368ddd5095eef |
+| openspec/changes/integrate-pi-harness/plan.md | 正文规范化摘要 | c116ac5050e281dac9d82bf852555dfdf0d2d184294f1795b38b598b92d18817 |
+| openspec/changes/integrate-pi-harness/tasks.md | 原始文件字节 | d03389c07d1cc71f659765b68eebb4ea7100b18fdf7722d2953ee815a3cbec84 |
 
-本快照同时核对以下已存在删除项；这是此前移出接入范围的工作区状态，不由本 reviewer 执行删除，也不重新验证旧方案结论：
+本快照同时确认以下目录已按 2026-11-17 用户要求从活跃变更中移除（OMP 暂缓适配）：
+- `openspec/changes/integrate-omp-harness/`（含 `.openspec.yaml`、`proposal.md`、`design.md`、`specs/omp-harness-compatibility/spec.md`、`tests.md`、`plan.md`、`tasks.md`、`review.md`）
 
-- openspec/changes/integrate-deepseek-harness/.openspec.yaml
-- openspec/changes/integrate-deepseek-harness/design.md
-- openspec/changes/integrate-deepseek-harness/plan.md
-- openspec/changes/integrate-deepseek-harness/proposal.md
-- openspec/changes/integrate-deepseek-harness/review.md
-- openspec/changes/integrate-deepseek-harness/specs/deepseek-harness-compatibility/spec.md
-- openspec/changes/integrate-deepseek-harness/tasks.md
-- openspec/changes/integrate-deepseek-harness/tests.md
-- openspec/changes/integrate-zcode-harness/.openspec.yaml
-- openspec/changes/integrate-zcode-harness/design.md
-- openspec/changes/integrate-zcode-harness/plan.md
-- openspec/changes/integrate-zcode-harness/proposal.md
-- openspec/changes/integrate-zcode-harness/review.md
-- openspec/changes/integrate-zcode-harness/specs/zcode-harness-compatibility/spec.md
-- openspec/changes/integrate-zcode-harness/tasks.md
-- openspec/changes/integrate-zcode-harness/tests.md
-
-其他已有修改位于 docs/REBUILD_PLANNING_REVIEW.md 以及 agent-session-tree、backup-recovery、history-navigation、native-session-import、session-capacity、session-data-lifecycle 的既有规划；本轮保持原状，未将它们隐式纳入此专项的产品验收。
+主工作区当前同时存在 `deliver-session-capacity` 等其他在途变更的未提交源码与规划修改（`app/`、`clients/web/`、`openspec/changes/deliver-session-capacity/` 等，且 `README.md`、`docs/HARNESS_CONTROL_PLANE_REDESIGN.md`、`docs/REBUILD_CAPABILITY_MAP.md` 已在完整保留其在途容量修改的前提下同步收敛 Codex + Pi 目标范围）；本轮对在途产品源码保持零触碰，不将其纳入本专项快照签署范围。

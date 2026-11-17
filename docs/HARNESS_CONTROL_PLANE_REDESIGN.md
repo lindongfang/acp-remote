@@ -1,6 +1,6 @@
 # Harness Control Plane 重新设计：讨论结论
 
-> 接入范围调整（2026-11-16）：用户确认暂不适配 DeepSeek Harness 和 ZCode，移除 `integrate-deepseek-harness`、`integrate-zcode-harness` 活跃变更；后续同日用户要求建立 Pi 与 OMP 接入 change，当前目标范围为 Codex、Pi、OMP，其中 Pi/OMP 仅完成规划、不声明兼容。下文涉及 DeepSeek、ZCode 的既有调研和历史确认仅作历史依据，不再构成实施或验收要求；通用 ACP 能力规则不变。
+> 接入范围调整（2026-11-17）：用户确认暂缓 OMP（Oh My Pi）适配并移除 `integrate-omp-harness` 活跃变更，当前接入目标范围收敛为 Codex 与 Pi（其中 Pi 仅完成无版本绑定规划、尚未实施，不声明兼容）。结合 2026-11-16 已暂不适配并移除的 DeepSeek Harness 与 ZCode，下文涉及 OMP、DeepSeek、ZCode 的既有调研和历史确认仅作历史依据，不再构成实施或验收要求；通用 ACP 能力规则不变。
 
 > Q-003（2026-11-02）最新确认：尽可能直接复用ACP标准能力，Harness不支持直接报错，不建立额外平台能力准入或兼容兜底；管理审计默认保留与工具原位更新以通用闭环当前harness-management、management-audit、structured-history规格为准。先同步spec与关联定义再继续实现，历史报告不因本次修订自动覆盖新要求。
 
@@ -22,7 +22,7 @@
 
 ## 1. 一页摘要
 
-ACP Remote 的目标调整为：基于 ACP 和 Tailscale 网络路径，统一管理 Harness 的实例、会话生命周期、执行调度、状态、权限审批和审计。Harness 是实际运行任务的程序，当前重点接入目标为 Codex、Pi、OMP；Pi/OMP 尚处于规划阶段。
+ACP Remote 的目标调整为：基于 ACP 和 Tailscale 网络路径，统一管理 Harness 的实例、会话生命周期、执行调度、状态、权限审批和审计。Harness 是实际运行任务的程序，当前重点接入目标为 Codex 与 Pi（Pi 尚处于规划阶段，OMP 暂缓适配）。
 
 已确认的核心原则：
 
@@ -65,7 +65,7 @@ Web / Mobile / CLI / IDE
            ACP
             |
             v
-Codex / Pi / OMP
+       Codex / Pi
             |
             v
 Magpie / Models / MCP / Tools
@@ -213,7 +213,7 @@ Agent升级后的连接按ACP重新协商；不支持或协议错误直接报告
 - `session/request_permission` 是请求/响应；取消当前轮次时，客户端必须将相关待处理权限请求回复为 `cancelled`。
 - 取消未确认或连接丢失时，不假装取消完成，也不盲目重发原输入；按已知事实记录中断或结果未知。
 
-其他版本按对应规范映射，不把 v1 的完成信号套用到其他版本。三款 Harness 的验证是接入验收：核对适配器是否正确处理规范消息及已协商能力，不重新决定协议已定义的语义，也不要求 Harness 遵循平台自造的流程。
+其他版本按对应规范映射，不把 v1 的完成信号套用到其他版本。计划内各款 Harness 的验证是接入验收：核对适配器是否正确处理规范消息及已协商能力，不重新决定协议已定义的语义，也不要求 Harness 遵循平台自造的流程。
 
 R2-001：取消必须区分活动前台、待确认输入与已可靠空闲。以 v2 为例，前台已确认 idle 且无待确认输入时，取消不要求额外完成通知；不能仅因发送取消而新增输入阻挡或假报后台停止。存在活动或待确认输入时仍跟踪对应事实；与自然完成交错时接受实际正常终态，不要求额外 cancelled 事件。具体行为见 [执行规格的“空闲取消与活动前台取消分开”](../openspec/changes/deliver-codex-session-loop/specs/session-execution/spec.md)，协议依据为 [ACP v2 取消](https://agentclientprotocol.com/protocol/v2/prompt-lifecycle#cancellation)。
 
@@ -420,15 +420,15 @@ ARCH-001 追加规格场景覆盖：Run 结束后后台审批及 Agent 自发前
 
 ## 9. 首批 Harness 调研状态与证据
 
-本节记录本轮调研，不是已执行的兼容性测试报告。查阅的是官方文档与 ACP 适配器主分支；主分支不等于已发布版本，实施时必须固定版本并验证。
+本节记录本轮调研，不是已执行的兼容性测试报告。查阅的是官方文档与 ACP 适配器主分支；主分支不等于已发布版本，实施时必须核实实际程序与证据范围。
 
-当前目标范围为 Codex、Pi、OMP，Pi/OMP 尚未进行真实兼容性验收。DeepSeek Harness 和 ZCode 已于 2026-11-16 暂时移出接入计划，下表保留其历史调研状态，不作为当前交付要求。此前 Claude 的调研也不作为当前接入依据。
+当前目标范围为 Codex 与 Pi，Pi 尚未进行真实兼容性验收。OMP（Oh My Pi）已于 2026-11-17 暂缓适配并移出接入计划，DeepSeek Harness 和 ZCode 已于 2026-11-16 暂时移出接入计划；下表保留其历史状态，不作为当前交付要求。此前 Claude 的调研也不作为当前接入依据。
 
 | Harness | 本轮发现 | 对设计的含义 |
 |---|---|---|
-| Codex | App Server 提供按原线程 ID 恢复和独立历史读取；codex-acp 有 resume/load 路径 | 既有调研不能证明当前 ACP 路径支持完整历史读取、分页及外部更新，须按固定版本重新核验 |
-| Pi（新增规划） | 用户称本地已安装；本会话未定位路径和版本，外部 ACP 服务端为候选 | 见 [Pi 接入规划](../openspec/changes/integrate-pi-harness/proposal.md)，程序及适配器分别固定证据，不将 RPC 当 ACP |
-| OMP（新增规划） | 按 Oh My Pi 规划，候选为原生 ACP 入口；安装与版本未知 | 见 [OMP 接入规划](../openspec/changes/integrate-omp-harness/proposal.md)，独立验证，不继承 Pi 能力结论 |
+| Codex | App Server 提供按原线程 ID 恢复和独立历史读取；codex-acp 有 resume/load 路径 | 既有调研不能证明当前 ACP 路径支持完整历史读取、分页及外部更新，须按实际受测组合核验 |
+| Pi（新增规划） | 用户确认本机已安装且项目不绑定 Pi 版本；候选为外部 ACP 服务端对接本机 `pi` | 见 [Pi 接入规划](../openspec/changes/integrate-pi-harness/proposal.md)，运行时不锁定版本，单次报告只读记录观测版本，不将 RPC 当 ACP |
+| OMP（历史规划，暂不适配） | 曾按 Oh My Pi 原生 `omp acp` 候选规划，2026-11-17 确认暂缓适配 | 已移出当前接入范围并移除对应 change；不作为其他能力的交付或验收前置 |
 | ZCode（历史规划，暂不适配） | 尚未核实实际程序、固定版本、ACP 接入路径与协商能力 | 已移出当前接入范围；既有规划不代表真实兼容性已验收 |
 | DeepSeek Harness（历史调研，暂不适配） | 2026-10-30 发布的 dsh-v0.2.1-rc.5，ACP 文档及方法注册仍仅提供 list/resume/close 等，无 session/load、历史重放及删除；本轮未升级或实测该版本 | 已移出当前接入范围；原版本调研不代表新版执行、审批、资源或历史已验收 |
 
@@ -460,7 +460,7 @@ ARCH-001 追加规格场景覆盖：Run 结束后后台审批及 Agent 自发前
 
 ### 10.2 必须实测的能力
 
-至少对三款 Harness 的固定版本验证：
+对当前计划内各款 Harness 的受测组合验证：
 
 1. 正常结束后释放进程，再恢复原会话并继续输入，上下文连续。
 2. 页面断开不停止Harness及已受理队列；有重放则读取衔接，无重放可使用当前连接模式并明显提示历史限制。
@@ -486,7 +486,7 @@ ARCH-001 追加规格场景覆盖：Run 结束后后台审批及 Agent 自发前
 | `docs/FRONTEND_DESIGN.md` | 父倒序/展开子正序分页、前端参数默认10轮、保存透明与异常错误提示 |
 | `docs/SYNC_PROTOCOL.md` 与配套资产 | 原生历史与当前连接观测、来源身份、重连和分页；不再使用平台历史提交位置 |
 | `docs/SECURITY_DESIGN.md` 与身份合同 | 个人使用的认证和撤销、审批有效性、外部客户端边界与敏感数据保护 |
-| `docs/ACP_COMPATIBILITY_MATRIX.md` 与机器矩阵 | 三款 Harness 的实际支持范围及顺序/恢复验收 |
+| `docs/ACP_COMPATIBILITY_MATRIX.md` 与机器矩阵 | 计划内各款 Harness 的实际支持范围及顺序/恢复验收 |
 | `docs/CONFIG_REFERENCE.md` | 原生读取、缓存背压、管理存储失败与内存限制，以及默认 30 分钟回收、50 个已加载主会话上限等正式配置（若暴露） |
 | 原 `docs/NODE_LINK_PROTOCOL.md` 及相关 ADR | 已随旧架构退役；本轮不建立跨节点协议，不保留兼容入口 |
 | `openspec/GLOSSARY.md` 与相关 ADR | 正式采纳新模型时统一术语、记录取代关系，避免新旧语义混用 |

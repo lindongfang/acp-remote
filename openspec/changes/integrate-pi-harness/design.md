@@ -2,58 +2,67 @@
 
 ## Context
 
-动机及授权见 proposal.md。本轮创建规划，不改变产品代码。旧 DeepSeek/ZCode 方案仅供结构参考，当前权威为 openspec/specs；归档的通用闭环资料只用于解释实现依据，不继承其验收结果。
+动机及两轮用户确认见 proposal.md。本轮修订规划，不改动产品代码。当前行为权威为 `openspec/specs/`；归档的通用闭环资料仅解释现有实现边界，不继承旧 DeepSeek/ZCode 的孤立目录或历史结论。
 
-已读现有入口：app/src/adapters/acp/node_configuration_profile.rs 解析 format-one 配置并保留原始字段；catalog_draft_document.rs 处理 install_harness/publish_profile；app/src/node/catalog.rs 管理登记；clients/web/src/management/workspace-catalog-view.ts 已有通用程序、参数、环境及来源输入。相关现有测试在 node_configuration_profile/tests.rs、node/catalog/development_tests.rs 和 clients/web/tests 中。优先产出这些入口可消费的配置和独立合同验证，不凭空创建厂商运行时模块。
+已核对真实接入源码与平台边界：
+- `app/src/adapters/acp/node_configuration_profile.rs`（`parse_profile`）严格按闭集字段解析 `format: 1` 配置：仅含单一 `launch`（`executable_utf16le_base64`、`arguments_utf16le_base64`、`environment`）与 `recipes`（`wire`、`mcp_servers`、`additional_directories`、`extra`），多出未知字段直接拒绝。
+- `app/src/domain/native_catalog.rs`（`HarnessSummary`）、`catalog_draft_document.rs` 与 `app/src/node/catalog.rs` 仅维护单一 Harness 定义与显式 `source_id`；`app/src/adapters/acp/strategy.rs`（`Strategy::select`、`initialize`、`validate_setup_caps`）仅读取对端单一 `agentInfo`/`info`，固定发出空客户端能力（`clientCapabilities: {}` / `capabilities: {}`），并在下发非空 `mcp_servers` 或 `additional_directories` 前校验对端能力位；`app/src/adapters/acp/transport/state.rs`（`reserve_unsupported`）对 `session/request_permission` 之外的反向请求统一回 `-32601 Method not found`。
+- `app/src/platform/process_owner.rs`（`OwnedProcess::spawn`）先强制要求 `executable` 与 `cwd` 均为绝对路径，再以挂起态直接调用 Win32 `CreateProcessW`（`lpApplicationName = spec.executable`，无任何隐式 Shell）并绑定 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 作业对象。
+- `clients/web/src/management/workspace-catalog-view.ts`（`validateInstallHarnessInput`、`parseLaunchArgsLines`）已提供通用 `executable`、按行 `trim` 过滤空行的 `args`、`env`、`wire` 与 `additionalDirectories` 输入，但当前硬编码 `mcpServers: []`、`extra: {}`。
 
 ### 调研依据与证据等级
 
-- 2026-11-16 读取 Pi 上游 README（https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/README.md），当前内容指向 earendil-works/pi；本地安装包名、路径和版本仍需核实，不能因上游迁移擅自升级用户安装。
-- 同日读取 pi-acp README（https://raw.githubusercontent.com/svkozak/pi-acp/main/README.md）。文档描述 ACP→Pi RPC 子进程链及会话映射，并列出独立思考流、Client 文件/终端委托和 MCP 参数传递限制。只作为候选风险，未固定发布版本、未运行真实程序。
-
-以上都是可变化的上游 main 文档，属于调研证据；实施时须固定标签/提交、程序摘要及依赖锁定结果。JSON-RPC 2.0 不是 ACP v2；本地真实协商和操作结果仍未验证。
+- 2026-11-16 读取 Pi 上游 README（https://raw.githubusercontent.com/badlogic/pi-mono/main/packages/coding-agent/README.md），当前指向 `earendil-works/pi`。用户已明确本机已安装 `pi` 且**本项目不绑定 Pi 版本**；实施时只读定位本机已有入口并对接，绝不在仓库锁死版本或擅自升级用户安装。
+- 同日读取 `pi-acp` README（https://raw.githubusercontent.com/svkozak/pi-acp/main/README.md），其描述 ACP→Pi RPC 子进程链、会话映射及思考流、Client 文件/终端委托、MCP 传递限制。该仓库仍属待审候选，本地尚未实跑验证。
 
 ## Goals / Non-Goals
 
-目标：形成标准 ACP 启动配置、隔离验证入口、逐能力报告和通用 Web 使用说明。复用既有来源、配置版本、工作区授权和连接生命周期。
+目标：在不修改通用产品代码、不绑定本机 Pi 版本的前提下，基于现有目录与进程边界建立可消费的 Windows 绝对路径原生可执行启动配置模板、`testing/probes/pi-harness/` 隔离探测与验收入口、逐能力实证报告及 `docs/implementation/` 使用说明。
 
-非目标：新增厂商业务对象、私有会话读取、平台聊天持久化、扩展兼容兜底、原生自动回收新策略或直接控制用户正在运行的真实会话。
+非目标：扩充平台双组件目录字段、私改通用 Web 安装表单、实现 Pi RPC 客户端、私读映射或原生会话文件、在仓库打包/锁定 `pi` 本体版本、添加隐式 Shell 启动兜底或直接触碰用户正在使用的真实会话。
 
 ## Decisions
 
-### 接入边界与候选入口
+### 1. 不绑定 Pi 版本与外部 ACP 服务端隔离探测
 
-优先评估已存在的外部 pi-acp 服务端，由节点按普通 ACP 程序启动；平台边界仍是 ACP，不在 Rust 中实现 Pi RPC 客户端。适配器不是已批准依赖，WP1 固定真实组件组合并完成维护状态、许可证、供应链及语义审查后才确定配置。若候选不满足必要语义，只产出缺口报告；不在本 change 自制桥接或静默接受结构丢失。
+本机 `pi` 视为用户外部运行环境：仓库根、`app/`、`clients/web/` 及 `testing/probes/pi-harness/` 的任何依赖清单、锁文件、配置模板或脚本均**不添加 `pi` 包、不硬编码或校验特定 Pi 版本号**。本地 `pi` 升级后直接沿通用 ACP 重新协商。
 
-单独验证适配器会话映射在重启、缺失时的标准响应，平台不直接读取该映射或 Pi 会话文件。模型配置、MCP 参数和思考/工具流是否真正传递必须取证，不能把接收参数当作生效。节点共享输入队列保持唯一平台受理语义，不将适配器队列完成冒充模型执行完成。
+参照 `testing/probes/codex-session-loop/` 的成熟做法，`WP1` 在 `testing/probes/pi-harness/discovery/` 建立隔离探针：若本机未预装外部 ACP 服务端，仅在该探针子目录按项目供应链审查规则锁定候选适配器（如 `pi-acp`）自身测试依赖，不污染产品依赖，且通过环境变量或参数调用本机已安装的 `pi`。单次探测与验收报告只读采集当次实测观察到的 `pi` 版本与适配器版本作为证据上下文，不形成运行时白名单。若候选适配器许可证、安全或基础 ACP 语义不达标，在 `WP1` 直接出具阻断报告，不自制私有桥接。
 
-### 配置与身份沿现有目录服务
+### 2. 单一启动入口、Windows 绝对路径无 Shell 启动链与双组件证据分层
 
-将已核实程序和独立 argv 编入现有配置格式，以明确来源绑定原生身份。示例中只有占位路径和非敏感参数；不把用户绝对路径或密钥提交入库。Windows 上 .cmd/.ps1 启动链与原生可执行入口分别验证，防止空格、引号或非 ASCII 路径改变参数。不通过拼接未转义 shell 字符串绕过启动配置。
+复用现有 `format: 1` 单一 `launch` 与单 `HarnessSummary` 模型，不在节点运行时拆分“适配器身份 + Pi 本体身份”。系统层保存完整启动命令链（`executable` + `arguments` + `environment`）与显式 `source` 并记录连接协商出的对端 `agentInfo`；双组件身份与当次观测版本的拆分对照放在 `testing/runs/integrate-pi-harness/` 报告与说明文档中完成。
 
-依赖证据用于交付审计，不成为运行时版本白名单。默认继承节点环境及显式覆盖遵循长期规格，测试隔离用显式测试根，不引入环境白名单或物理存储指纹准入。
+针对 `OwnedProcess::spawn` 强制要求绝对路径且直接将 `executable` 传给 `CreateProcessW` `lpApplicationName`（无 Shell）的真实约束：
+- 标准配置模板将 **Windows 绝对路径**的原生 PE 可执行文件（如 `C:\...\node.exe` 占位路径，不接受裸 `node.exe` 相对文件名）设为 `executable`，将外部 ACP 服务端入口脚本绝对路径及转发参数放入独立 `arguments` 数组，通过 `environment`（覆盖或默认继承 `PATH` 及隔离配置根）让适配器拉起本机 `pi`；配置模板仅含占位路径与非敏感示例，不含用户真实绝对路径或密钥。
+- 相对路径可执行名（触发 `InvalidSpec`）与直接把 `.ps1` 绝对路径设为 `executable`（触发 `CreateProcessW` 非可执行失败）分别作为启动拒绝用例验证；避免依赖 `.cmd` 间接包装层以免引入额外 `cmd.exe` 子进程干扰管道与退出观测。
 
-### 内容、权限与恢复复用通用实现
+### 3. 客户端空能力委托核验与底层 Profile / 通用 Web 表单分层
 
-能力行为详见 specs/pi-harness-compatibility/spec.md。标准操作不支持直接报错；历史不可读不整体拒绝可用操作。必备方法与可选能力按实际协议处理，不创造额外探测门槛。真实审批先可靠保存，且交付时请求仍有效；不因未提供审批就替 Harness 伪造或默认批准请求。
+本平台连接初始化固定发送 `clientCapabilities: {}`，且对非 `session/request_permission` 的反向请求一律回 `-32601`。因此 `WP1` 探针与 `WP4` 闭环必须实证核查：在此空客户端能力下，`pi-acp` + 本机 `pi` 是由 Pi 本地内置工具直接执行读写/命令，还是因请求 `fs/*`/`terminal/*` 被 `-32601` 阻断；以及本地执行时是否仍产生 ACP `session/request_permission`（若不产生，如实记录审批能力未提供，绝不伪造审批请求或默认批准）。
 
-故障注入只在隔离测试进行。公共 ACP 错误须先定位证据再在共享模块修复，必要时单独登记对应长期规格的变更；不得在专项目录创建私有补丁分支。Pi/OMP 之间不共享受测结果，其他能力 change 不以两者完成为前置。
+配置传递按真实通道分层验证：
+- **底层节点配置合同（`format: 1`）**：通过 `parse_profile` / 节点认证目录上传接口验证完整 UTF-16LE 参数（含空格、引号、非 ASCII、首尾空白）以及在对端声明相应能力位时的非空 `mcp_servers`、`extra` 字段解析与出站保真，并取证真实适配器是否向 `pi` 生效而非静默丢弃。
+- **通用 Web 表单范围（`workspace-catalog-view.ts`）**：按页面当前实际能力验证绝对路径 `executable`、按行 `trim` 的非空 `args`、`env`、`wire` 与 `additionalDirectories` 登记、能力错误、历史不完整提示、审批及取消/释放分开展示；页面当前固定 `mcpServers: []`、`extra: {}` 如实写入 `docs/implementation/pi-harness-web.md` 与报告限制说明，不在本 change 越界修改 `clients/web/src/`。
 
-### 资源所有者与关闭
+### 4. 目录收敛、同快照长期同步与 Windows 完整进程树关闭
 
-节点拥有启动的连接、任务及完整 Windows 进程树；取消等待真实结果，关闭先冻结相关派发、协调审批与执行，再结束所属资源并等待收敛。超时发布失败/未知，清理和 join 责任保留。测试捕获进程树前后证据；不按进程名批量终止用户程序，不因父进程退出宣称所有后代已释放。无法隔离共享会话的释放应明确拒绝。
+全部专项资产对齐仓库既有目录体系：探测、无密钥配置模板、开发验证与验收脚本归入 `testing/probes/pi-harness/`（按 `discovery/`、`profiles/`、`verify.ps1`、`acceptance/` 划分子路径以隔离写范围），实施与使用说明归入 `docs/implementation/pi-harness.md` 与 `docs/implementation/pi-harness-web.md`，运行证据归入 `testing/runs/integrate-pi-harness/`；交付检视无阻断后，在同一工作包一并同步长期规范 `openspec/specs/pi-harness-compatibility/spec.md`、长期用例套件 `testing/suites/pi-harness-compatibility/tests.md` 与追溯矩阵 `testing/suites/traceability/integrate-pi-harness.md`（禁止长期套件跨目录指向活动 change），不新建 `configs/`、`scripts/`、`testing/harnesses/` 或 `docs/harnesses/`。
+
+资源关闭遵循 `OwnedProcess` Job Object 与 `LESSONS.md` 硬约束：取消等待原生工作可靠终态（常驻 `pi-acp`/`pi` 进程可保留）；实例关闭或节点停止须协调原生 runtime 关闭并确认 Job 内全部后代进程（含 `pi-acp` 拉起的 `pi` RPC 子进程及工具孙进程）归零，超时保留清理与 join 责任。严禁按 `pi`/`node` 进程名批量强杀，严禁将父进程退出冒充后代已释放。
 
 ## Risks / Trade-offs
 
-- [尚未定位本地入口/版本] → WP1 只进行环境取证并报告缺口，未满足条件不进入接入配置实现或宣称支持。
-- [候选 ACP 服务端与真实能力不符] → 分组件、分能力报告；不改变通用规则，不以降低输入/输出保真通过验收。
-- [认证、插件与项目配置污染测试] → 使用隔离工作区、来源、会话根和显式测试配置；不复制凭据值到文档，不修改用户配置。
-- [程序生成后台后代进程] → Windows 完整树清理及异常路径是真实验收必需项，mock 成功不代替。
+- [本机 `pi` 具体入口与候选适配器表现未实测] → `WP1` 在隔离探针目录只读定位本机 `pi` 并实测候选适配器，未满足条件不进入 `WP2`。
+- [平台 `clientCapabilities: {}` 导致 `pi-acp` 工具委托报错或无审批事件] → 实证区分“-32601 阻断工具”与“Pi 本地直接执行无 ACP 审批”，按真实结果记录能力边界，不私加未授权客户端委托执行器。
+- [通用 Web 表单未暴露 `mcpServers`/`extra`] → 分开验证底层 `format: 1` 文档通道与当前 Web 表单已暴露字段，不伪称页面已支持编辑。
+- [本机认证、扩展与真实会话被测试污染，或升级改变行为] → 强制使用 `.tmp/` 下独立会话/配置根，不绑定 `pi` 版本；升级后旧报告归属原观测组合，未复验项标未验证。
+- [适配器拉起多层后代进程] → 以 Job Object 活动进程计数与进程树快照取证，mock 不替代真实验收。
 
 ## Migration Plan
 
-本轮无迁移、安装或依赖变更。后续只新增显式 Harness 定义和来源配置，复用现有数据库模式，不扫描导入私有正文。部署前审查所需依赖并按项目规则锁定解析结果。回滚停止新派发并协调关闭本次所属实例，保留来源、原生绑定及管理事实；不删除原生会话、认证和用户设置，不自动回退程序版本。
+本轮无迁移、安装或产品依赖变更。后续仅在 `testing/probes/pi-harness/`、`docs/implementation/`、`openspec/specs/` 与 `testing/suites/` 交付专项资产，运行时复用现有 SQLite 目录模式，不在仓库绑定 `pi` 版本。探针如引入第三方适配器测试包须单独审查并在探针目录锁定自身解析结果。回滚只需移除专项探针/说明并协调关闭本次测试实例，不触碰用户本机 `pi` 安装、原生会话、认证与全局设置。
 
 ## Implementation Gate
 
-本地程序及 ACP 入口的身份/路径/版本、隔离会话与认证条件、启动参数合同及清理方案尚未固定。这些是 WP1 明确取证条件，不是可忽略的 Open Questions，也不阻止本次先完成规划。若确认结果要求改变上述 ACP 边界，则修订方案后重新检视；否则在现有分工内填写真实配置。独立方案/用例检视、WP1 条件及新的实施授权齐备后才编码。真实参数生效和完整进程树清理效果由 WP2 开发验证、WP4 独立实测及 WP5 交付检视证明，不将尚未实现的产品验收作为编码前置。
+本机 `pi` 实际可调用路径、候选外部 ACP 服务端的供应链/许可证审查、空客户端能力下的真实握手与委托表现、隔离配置/会话根环境变量及进程树验证方案属于 `WP1` 实证门禁，不阻止本轮先完成规划修订。若 `WP1` 取证要求改变通用 ACP 代码、扩充目录 schema 或引入客户端文件/终端委托能力，则超出本 change，须停下报告并另行决策；否则在确认方案/用例检视通过且获实施授权后按 `WP2`–`WP5` 推进。
