@@ -727,6 +727,9 @@ async fn capacity_l6_operation(
         serde_json::json!({"selection":f.selection_json(),"operation":operation}),
     )
     .await?;
+    if registered["ok"] != true {
+        return Ok(registered);
+    }
     let operation = registered["result"]["sourceOperationId"]
         .as_str()
         .ok_or("source_operation_not_registered")?;
@@ -742,7 +745,19 @@ async fn capacity_l6_new(f: &mut R3WssCase) -> CapacityL6Result<String> {
     let result = capacity_l6_operation(f, serde_json::json!({"kind":"create"})).await?;
     if result["ok"] != true || result["result"]["outcome"] != "succeeded" {
         // Do not print the upstream message, raw response, auth path or body.
-        return Err("real_new_not_confirmed_auth_or_capability_required");
+        return Err(if result["ok"] != true {
+            match result["error"]["code"].as_str() {
+                Some("session_capacity_full") => "real_new_capacity_full",
+                Some("rate_limit") => "real_new_rate_limit",
+                Some("node_stopping") => "real_new_node_stopping",
+                Some("invalid_configuration") => "real_new_invalid_configuration",
+                Some("invalid_target") => "real_new_invalid_target",
+                Some("revoked") | Some("unauthenticated") => "real_new_revoked",
+                _ => "real_new_not_confirmed_auth_or_capability_required",
+            }
+        } else {
+            "real_new_not_confirmed_auth_or_capability_required"
+        });
     }
     result["result"]["response"]["nativeSessionId"]
         .as_str()
@@ -968,6 +983,10 @@ async fn capacity_l6_view_records(
             Some("invalid_target") => "real_view_invalid_target",
             Some("invalid_state") => "real_view_invalid_state",
             Some("node_stopping") => "real_view_node_stopping",
+            Some("invalid_source") => "real_view_invalid_source",
+            Some("view_unavailable") => "real_view_unavailable",
+            Some("rate_limit") => "real_view_rate_limit",
+            Some("revoked") => "real_view_revoked",
             _ => "real_view_not_available",
         });
     }

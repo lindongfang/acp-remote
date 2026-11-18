@@ -67,6 +67,11 @@ fn capacity_l6_last_slot_view_refusal(read: &serde_json::Value) -> CapacityL6Res
         Some("read_failed") => Err("real_replay_read_failed_at_last_slot"),
         Some("session_tree_unverified") => Err("real_replay_tree_unverified_at_last_slot"),
         Some("node_stopping") => Err("real_replay_node_stopping_at_last_slot"),
+        Some("invalid_source") => Err("real_replay_invalid_source_at_last_slot"),
+        Some("view_unavailable") => Err("real_replay_view_unavailable_at_last_slot"),
+        Some("queue_rejected") => Err("real_replay_queue_rejected_at_last_slot"),
+        Some("revoked") => Err("real_replay_revoked_at_last_slot"),
+        Some("invalid_client") => Err("real_replay_invalid_client_at_last_slot"),
         _ => Err("real_replay_did_not_refuse_last_slot_owned_by_create"),
     }
 }
@@ -129,10 +134,23 @@ async fn capacity_l6_last_slot(
         serde_json::json!({"selection":f.selection_json(),"operation":{"kind":"create"}}),
     )
     .await?;
-    let operation = registered["result"]["sourceOperationId"]
-        .as_str()
-        .ok_or("last_slot_create_not_registered")?
-        .to_owned();
+    let operation = match registered["result"]["sourceOperationId"].as_str() {
+        Some(op) => op.to_owned(),
+        None => {
+            if registered["ok"] != true {
+                return Err(match registered["error"]["code"].as_str() {
+                    Some("session_capacity_full") => "last_slot_create_capacity_full",
+                    Some("node_stopping") => "last_slot_create_node_stopping",
+                    Some("invalid_configuration") => "last_slot_create_invalid_configuration",
+                    Some("invalid_target") => "last_slot_create_invalid_target",
+                    Some("rate_limit") => "last_slot_create_rate_limit",
+                    Some("revoked") => "last_slot_create_revoked",
+                    _ => "last_slot_create_not_registered",
+                });
+            }
+            return Err("last_slot_create_not_registered");
+        }
+    };
     let node = f.node.as_ref().ok_or("last_slot_node_missing")?;
     let native = node
         .session_services
@@ -267,7 +285,9 @@ async fn capacity_l6_last_slot(
         if queued["ok"] != true
             || !state["active"].is_null()
             || !state["priority"].is_null()
-            || !state["waiting"].as_array().is_some_and(|waiting| waiting.len() == 1)
+            || !state["waiting"]
+                .as_array()
+                .is_some_and(|waiting| waiting.len() == 1)
         {
             return Err("real_execution_last_slot_attempt_not_one_accepted_input");
         }

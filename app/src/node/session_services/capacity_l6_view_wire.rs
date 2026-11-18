@@ -83,15 +83,19 @@ async fn capacity_l6_drain_snapshot(
     socket: &mut ManagementSocket,
     stream: Id128,
 ) -> CapacityL6Result<(Vec<(RecordKind, Vec<u8>)>, bool)> {
-    capacity_l6_drain_view(socket, stream, false).await
+    capacity_l6_drain_view(socket, stream).await
 }
 
 async fn capacity_l6_drain_original_complete(
     socket: &mut ManagementSocket,
     stream: Id128,
 ) -> CapacityL6Result<Vec<(RecordKind, Vec<u8>)>> {
-    let (records, complete) = capacity_l6_drain_view(socket, stream, true).await?;
-    if !complete {
+    let (records, rebound) = capacity_l6_drain_view(socket, stream).await?;
+    let has_complete = rebound
+        || records
+            .iter()
+            .any(|(kind, _)| *kind == RecordKind::SnapshotEnd);
+    if !has_complete {
         return Err("view_original_read_not_complete");
     }
     Ok(records)
@@ -100,7 +104,6 @@ async fn capacity_l6_drain_original_complete(
 async fn capacity_l6_drain_view(
     socket: &mut ManagementSocket,
     stream: Id128,
-    await_original_complete: bool,
 ) -> CapacityL6Result<(Vec<(RecordKind, Vec<u8>)>, bool)> {
     let credit = TransferHeader::credit(stream, 0)
         .encode(&[])
@@ -138,8 +141,7 @@ async fn capacity_l6_drain_view(
                             false
                         };
                         records.push((kind, body));
-                        if rebound || (!await_original_complete && kind == RecordKind::SnapshotEnd)
-                        {
+                        if rebound || kind == RecordKind::SnapshotEnd {
                             return Ok((records, rebound));
                         }
                     }
@@ -331,4 +333,19 @@ fn capacity_l6_view_wire_rebound_cannot_hide_invalid_or_unrelated_status() {
         assert_eq!(assembly.last_packet, 1);
         assert_eq!(assembly.pending.as_ref().expect("original prefix").3, b"ab");
     }
+}
+
+#[test]
+fn capacity_l6_view_wire_snapshot_end_completes_assembly_without_rebound() {
+    let stream = Id128::new([7; 16]);
+    let mut assembly = CapacityL6RecordAssembly::new(stream);
+    let end_header =
+        TransferHeader::data(stream, 1, 1, 0, 0, RecordKind::SnapshotEnd, 0).expect("snapshot end");
+    let (kind, actual) = assembly
+        .receive(end_header, &[])
+        .expect("receive end")
+        .expect("record complete");
+    assert_eq!(kind, RecordKind::SnapshotEnd);
+    assert!(actual.is_empty());
+    assert_eq!(assembly.last_packet, 1);
 }
