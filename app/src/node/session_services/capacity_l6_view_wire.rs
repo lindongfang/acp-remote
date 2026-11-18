@@ -112,7 +112,8 @@ async fn capacity_l6_drain_view(
         .send(Message::Binary(credit.into()))
         .await
         .map_err(|_| "view_initial_credit_failed")?;
-    timeout(Duration::from_secs(90), async {
+    let packets = std::sync::atomic::AtomicU64::new(0);
+    let timed = timeout(Duration::from_secs(90), async {
         let mut assembly = CapacityL6RecordAssembly::new(stream);
         let mut records = Vec::new();
         loop {
@@ -120,6 +121,7 @@ async fn capacity_l6_drain_view(
                 Some(Ok(Message::Binary(bytes))) => {
                     let (header, body) = TransferHeader::decode(&bytes)
                         .map_err(|_| "view_received_invalid_header")?;
+                    packets.store(header.packet(), std::sync::atomic::Ordering::Relaxed);
                     let record = assembly.receive(header, body)?;
                     let credit = TransferHeader::credit(stream, header.packet())
                         .encode(&[])
@@ -158,8 +160,17 @@ async fn capacity_l6_drain_view(
             }
         }
     })
-    .await
-    .map_err(|_| "view_snapshot_deadline_elapsed")?
+    .await;
+    match timed {
+        Ok(inner) => inner,
+        Err(_) => {
+            if packets.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                Err("view_snapshot_deadline_elapsed_zero_packets")
+            } else {
+                Err("view_snapshot_deadline_elapsed_partial_packets")
+            }
+        }
+    }
 }
 
 #[test]

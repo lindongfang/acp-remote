@@ -178,7 +178,7 @@ async fn capacity_l6_clock_rebind(
             .ok_or("clock_cache_stream_missing")?,
     )
     .map_err(|_| "clock_cache_stream_invalid")?;
-    let (records, again) = capacity_l6_drain_snapshot(&mut f.peers[0].socket, next).await?;
+    let (records, again) = capacity_l6_drain_snapshot(&mut f.peers[0].socket, next).await.map_err(|e| match e { "view_snapshot_deadline_elapsed_zero_packets" => "clock_cache_rebind_zero_packets", "view_snapshot_deadline_elapsed_partial_packets" => "clock_cache_rebind_partial_packets", _ => e })?;
     if again || !capacity_l6_clock_has_body(&records, expected) {
         return Err("clock_cached_body_or_stable_generation_missing");
     }
@@ -209,7 +209,7 @@ async fn capacity_l6_clock_cache_open(
     .map_err(|_| "clock_cache_initial_stream_invalid")?;
     // Drain with continuous credit until the original read actually completes;
     // a snapshot boundary alone does not permit replacing the active pump.
-    let _original = capacity_l6_drain_original_complete(&mut f.peers[0].socket, stream).await?;
+    let _original = capacity_l6_drain_original_complete(&mut f.peers[0].socket, stream).await.map_err(|e| match e { "view_snapshot_deadline_elapsed_zero_packets" => "clock_cache_original_zero_packets", "view_snapshot_deadline_elapsed_partial_packets" => "clock_cache_original_partial_packets", _ => e })?;
     capacity_l6_clock_rebind(f, stream, expected).await
 }
 
