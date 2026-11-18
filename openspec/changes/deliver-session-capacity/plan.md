@@ -1,3 +1,6 @@
+2026-11-18 L6 单调时钟与重放死锁修复评估（[CP026修复评估](../../../testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp026-remediation-v1/ASSESSMENT.md)）：
+针对 ACP V2 重放快照死锁与自动回收候选扫描空闲时钟污染两大核心问题完成生产代码精确修复（reader.rs 移除无 marker 快照当前性过度限制，capacity_automatic.rs 移除候选比对中误调 activity.touch() 的时钟污染）。在隔离数据根下执行了完整的 68 分钟真实单调时钟物理测试 capacity_l6_cp026_real_replay_clock_and_pressure，真实物理事实表明：29 分钟近超时真实重放成功刷新活动时钟（actual_replay_received_near_timeout passed），未重放缓存会话在 1830071ms 准时超时释放（cache_only_actual_1800_no_keepalive passed），重放会话在 1799 秒存活并在 1828811ms 准时超时（after_last_receive_1799_then_1800_and_scan passed），专属 Windows Job 进程树与端口 100% 干净关闭并脱敏敏感信息（complete_owned_job_cleanup passed）。任务项 4.3 达成完成判据并已勾选；4.2 因上游 Codex/OpenAI 外部账户限额（至 2026-12-10 11:44）阻断外部真实 50 模型根请求，严格保持未勾选；5.1/5.2 保持未勾选。当前整体任务推进至 17/20。
+
 ## 当前续作记录（2026-11-18）
 
 > v9的`real_replay_accepted_last_slot_owned_by_create`已查明不是`admit_replay_capacity`的source-only或child快速路径绕过。只读身份历史显示`2026-11-18 00:02–00:06`的真实模型轮次持续返回额度上限至`2026-12-10 11:44`，另有一次`gpt-6.1-sol`不受当前ChatGPT账户支持；49个所谓保护根在最后名额阶段已不保持真实已知活动，自动回收按规则腾出名额后重放成功。v9仍为`blocked/fullCpPassed=false`，清理为`joined=true`、`metadataConfirmed=true`、`portClosed=true`、活动进程0；原始证据及关键约束见[v9诊断包](../../../testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp011-v9-diagnostic/ASSESSMENT.md)。
