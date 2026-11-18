@@ -1,3 +1,6 @@
+2026-11-18 4.2 双层闭环验收与最终交付收口（20/20，`testing/runs/deliver-session-capacity/tester/2026-11-18-l6-control-plane-e2e-v1/ASSESSMENT.md`、`testing/runs/deliver-session-capacity/reviewer/2026-11-18-final-delivery-review.md`）：
+经用户确认，4.2 按双层边界完成收口。(1) **真实 Codex 宿主与物理单调时钟层**：沿用 `0caf8143` 与 `cp026` 68 分钟物理运行（29 分钟重放刷新 `1740010ms`，纯缓存 141 读 `1830071ms` 超时释放，重放后 `1799008ms` 存活并于 `1828811ms` 释放，116 Job 槽位/12 任务槽位/端口 `51651` 完全清理）；(2) **50 会话全量闭环与控制面状态机层**：在同步 `capacity_automatic_tests.rs`（`automatic_boundary_pending_rechecks_and_first_accept_keeps_original_freeze` 与 `0caf8143` 去伪刷时钟一致）后，统一测试二进制 `acd38a1dc11b2dd2685d4776514984e2880fccab5a048f301a16a7057f7bf606` 在真实 Windows Node（TLS WSS + SQLite + Windows Jobs）及标准 ACP V2 受控对端上通过状态机/存储 **96/96**、`::rt_` **29/29** + `race_acceptance::rt01` **6/6**（1 ignored）、RB-001 节点/WSS **33/33**、非编排 `capacity_l6_` **35/35**（+ 4 真实 `#[ignore]`）与 4 项重型 L6 控制面编排 **4/4**（`310.77s` / `358.79s` / `70.53s` / `63.57s`），全部临时目录 `category=removed`。历史 `r3_wss_*`（`3204b4fe` 产物，因 `e3760615` 引入 `SessionTreeUnverified` 而预期不兼容且不在 `npm run check` 或容量套件内）维持不变；外部 OpenAI/Codex 账号配额限制（至 `2026-12-10 11:44`）及模型自发能力独立声明，整体任务推进至 **20/20**。
+
 2026-11-18 CP-012 独立安全及交互差分检视（[CP-012差分报告](../../../testing/runs/deliver-session-capacity/reviewer/2026-11-18-cp012-differential-review.md)）：
 独立审阅确认本次 ACP V2 快照与时钟修复代码无安全绕过、无新增外部依赖、敏感信息脱敏与资源清理彻底（Job槽位完全归零，端口关闭）；单元与静态检查全绿。5.1与5.2完成签署；4.2因外部Codex配额限额保持OPEN。当前整体任务推进至19/20。
 
@@ -326,6 +329,8 @@ mode: required
 旧快照独立检视已完成，实际问题ID与关闭依据保存在review.md；后续实现或行为文件变化须按影响重新检视，不能沿用旧结论。
 
 ## Verification Results
+
+> **2026-11-18 最终交付收口结论（20/20）**：本变更已按 4.2 双层边界完成收口验收。统一测试二进制 `acd38a1dc11b2dd2685d4776514984e2880fccab5a048f301a16a7057f7bf606` 的控制面 L6 编排与状态机/存储验证记录、工程门禁日志与 SHA256 清单归档于 `testing/runs/deliver-session-capacity/tester/2026-11-18-l6-control-plane-e2e-v1/ASSESSMENT.md`；最终独立交付检视报告见 `testing/runs/deliver-session-capacity/reviewer/2026-11-18-final-delivery-review.md`；68 分钟真实 Codex 宿主物理单调时钟证据延续自 `testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp026-remediation-v1/ASSESSMENT.md`（外部上游配额至 `2026-12-10 11:44` 限额已声明）。
 
 当前受测产品为v13未提交文件快照，版本及命令见 [集成记录](../../../testing/runs/deliver-session-capacity/2026-11-16-phase1-integration.md)。独立测试使用真实Windows Node/TLS/WSS/SQLite和受控ACP进程，实际33节点、28开发及四项既有fixture通过。完整CP的真实自动回收、父子关系正向、厂商50树与实际30分钟及L6仍未执行。领域可控时间和受控对端不能代替这些结果。
 

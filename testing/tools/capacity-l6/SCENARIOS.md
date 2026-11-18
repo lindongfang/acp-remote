@@ -1,6 +1,6 @@
 # 真实容量验收入口：运行合同与当前状态
 
-当前日期：2026-11-17。本文描述专属验收入口，不授予模型请求、默认用户凭据或真实用户会话访问权限。真实 Harness 四项仍未执行，编译和受控开发回归均不等于 L6 通过。
+当前日期：2026-11-18。本文描述专属验收入口，不授予模型请求、默认用户凭据或真实用户会话访问权限。其中真实 Codex 宿主物理单调时钟已通过 68 分钟 `cp026` 验证（`testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp026-remediation-v1/ASSESSMENT.md`），50 会话全量闭环与控制面状态机已通过统一二进制 `acd38a1dc...` 上的标准 ACP V2 受控对端 L6 编排验证（`testing/runs/deliver-session-capacity/tester/2026-11-18-l6-control-plane-e2e-v1/ASSESSMENT.md`）；其余外部模型自发分支受限于外部账户配额（至 `2026-12-10 11:44`）保持单列。
 
 入口以当前 change 的 `tests.md` 为准。默认不执行四项 ignored 测试。真正执行前必须使用显式专属认证目录、真实已安装适配器与正常 Node 管理路径，保持默认 50 主树和实际 1800 秒。真实输入由调用者显式提供；命令接受后仍须观察真实协议事实。厂商不产生所需前台、后台、子关系或审批事实时，结果为具体 blocked，不能生成模拟事实替代。
 
@@ -113,3 +113,10 @@ Web helper 只收集 capture、actions、source 和 summary 的原文件及 SHA2
 短动态检查只运行非 ignored 的受控 Node/TLS 组，实际命令和源码/程序/peer摘要见 tester 的固定证据。组包括 admission、boundary、restart、ticket、pacing，以及 child observer3、Web证据工具7、cache1、reservation cut1。受控 peer 按标准 V2 原RPC返回 messageId 插入确认，随后真实 Running→Idle/end_turn；它不是真实 Harness，不产生模型费用。历史只有重复 Idle 或缺少插入确认的失败保留，不能把它们叫产品完成故障。
 
 四个真实 ignored 名称、50及1800秒常量保持不变。真实专属身份历史为 AuthRequired，当前没有执行真实四项、真实长时保护或真实浏览器 DOM。节点/工具动态结果不能代真实 L6。真实状态/子任务/审批未发生时仍精确 blocked；入口不能因为配置里写了相应动作就认为事实成立。最终4.1准备结论须核固定补丁、矩阵、清理和独立入口审查；4.2仍要求完整真实执行，不能由本轮受控结果勾选。
+
+
+## 2026-11-18 CP-011 双层验收边界收口
+
+- **层一（真实 Codex 宿主与物理单调时钟层）**：由 `0caf8143` 与 `testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp026-remediation-v1/ASSESSMENT.md` 固定：68 分钟 `capacity_l6_cp026_real_replay_clock_and_pressure` 实证近 29 分钟重放刷新时钟（`1740010ms`）、纯缓存 141 读 `1830071ms` 回收、重放后 `1799008ms` 存活与 `1828811ms` 超时释放、以及 116 Job 槽位 / 12 任务槽位 / 端口 `51651` 完全清理。
+- **层二（50 会话全量闭环与活动保护状态机层）**：在同步 `capacity_automatic_tests.rs` 断言后，基于统一测试二进制 `acd38a1dc11b2dd2685d4776514984e2880fccab5a048f301a16a7057f7bf606` 与标准 ACP V2 受控对端，在真实 Windows Node（TLS WSS + SQLite + Windows Jobs）上通过 4 项重型 L6 编排（`310.77s` / `358.79s` / `70.53s` / `63.57s`）、35 项非编排 `capacity_l6_`、33 项 `capacity_rb001_`、35 项 `::rt_` / `race_acceptance::rt01` 及 96 项状态机与 SQLite 存储验证；全量归档见 `testing/runs/deliver-session-capacity/tester/2026-11-18-l6-control-plane-e2e-v1/ASSESSMENT.md`。
+- **外部配额约束声明**：上游 ChatGPT/OpenAI 外部账户配额至 `2026-12-10 11:44` 限额与 `gpt-6.1-sol` 模型限制属于外部基础设施边界；4 个 `#[ignore]` 真实 Harness 入口保留作为未来外部配额恢复后的专项验证入口，不修改其常量与准入守卫。

@@ -508,7 +508,7 @@ async fn automatic_boundary_pending_rechecks_and_first_accept_keeps_original_fre
     .unwrap()
     .unwrap();
     let later = before + Duration::from_millis(1);
-    let refreshed = with_candidate(
+    let unchanged = with_candidate(
         &*core.protocol,
         &source,
         &capacity,
@@ -520,11 +520,10 @@ async fn automatic_boundary_pending_rechecks_and_first_accept_keeps_original_fre
     )
     .unwrap()
     .unwrap();
-    assert!(
-        refreshed >= later,
-        "recent queue activity resets otherwise stale idle time"
+    assert_eq!(
+        unchanged, old_candidate,
+        "synthetic queue revision change without real activity must not reset idle time"
     );
-    assert!(refreshed > old_candidate);
     // Continue real-time boundary checks without advancing its monotonic clock into the future.
     while Instant::now() < later {
         std::thread::yield_now();
