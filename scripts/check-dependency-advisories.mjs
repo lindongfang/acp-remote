@@ -2,10 +2,11 @@
 //
 // 为什么需要它而不是直接跑 `npm audit`：`npm audit` 没有 ignore 机制（`npm audit --help`
 // 里没有这个选项），而仓库里总会有**上游无修复**或修复代价过高的 advisory（当前是
-// `deepmerge`、`node-forge`、`uuid`、`decode-uri-component` 与 `zod`）。直接跑 audit 会让 `deps` job
+// `deepmerge`、`uuid`、`decode-uri-component`、`glob`、`minimatch` 与 `zod`）。直接跑 audit 会让 `deps` job
 // 永远红灯，于是每次合并都得走管理员 bypass —— 那会让「绕过门禁」变成习惯，是比单条
 // advisory 更大的风险。反过来，advisory 被上游撤回或修复后，对应登记项会以「本次未命中」
-// 提示，复核后即应删除（`braces` 的 GHSA-vfj7-8cjw-p6xm 于 2026-10-23 撤回，登记项已删除）。
+// 提示，复核后即应删除（`braces` 的 GHSA-vfj7-8cjw-p6xm 于 2026-10-23 撤回，登记项已删除；
+// `node-forge` 的 GHSA-86w9-cpqp-85rv 随升至 1.4.3 已修复并删除）。
 //
 // 判定面 = 下面的 `PROJECTS`：仓库根与 `clients/app`。后者是**独立 npm 工程**
 // （自带 package.json/package-lock.json），根目录的 `npm ci` / `npm run check` 都不覆盖它；
@@ -58,16 +59,6 @@ const ALLOWED = [
       "deepmerge 发布修复版本，或 Expo 移除 `@expo/config` 对 deepmerge 的依赖时删除本条并升级。",
   },
   {
-    id: "GHSA-86w9-cpqp-85rv",
-    project: "clients/app",
-    package: "node-forge",
-    severity: "high",
-    reason:
-      "上游无修复（无已发布的修复版）。本工程不可达：它位于 @expo/code-signing-certificates，属 Expo Updates 的代码签名路径，而本项目只做 `expo export --platform web`、不产出 Updates 签名包，且不进 web 产物（已导出产物的字符级核对中 node-forge 0 命中）。",
-    expires:
-      "上游为 node-forge 发布修复版，或 Expo 换掉 @expo/code-signing-certificates 链时删除本条。",
-  },
-  {
     id: "GHSA-w5hq-g745-h8pq",
     project: "clients/app",
     package: "uuid",
@@ -86,6 +77,36 @@ const ALLOWED = [
       "**真实可达、本次不修**（与上面三条的「不可达」性质不同，不得混为一谈）：它在 web 产物里，路径是 expo-router 的 parseQueryParams → query-string.parse → decode，打开带畸形百分号编码 query 的链接即可触发指数级解码 DoS。本次不修的理由是修复代价高于收益：唯一修复版 0.5.0 是 ESM、与 query-string@7 的 CJS require() 不兼容，强压会直接崩溃；有效路径只有升到 Expo SDK 58（expo-router@58 移除 query-string），而 SDK 58 当前是 npm `next` 标签、期望 react-native 0.88.0-rc.4（RC），且实测其依赖树里 braces/node-forge/uuid 原样保留——付出跨 SDK major 的代价也只清掉 4 条里的一条。",
     expires:
       "Expo SDK 58 进入 npm `latest` 时升级 expo-router 并删除本条（当前 `latest` 仍是 SDK 57，本条到期条件未满足）。",
+  },
+  {
+    id: "GHSA-qr28-fpjm-wq7f",
+    project: "clients/app",
+    package: "decode-uri-component",
+    severity: "high",
+    reason:
+      "同 GHSA-vcc3-ghjq-m6fr 同一依赖链（`expo-router@57 → query-string@7.1.3 → decode-uri-component@^0.2.2`）：唯一修复版 `>= 0.5.1` 延续 0.5.x 的纯 ESM 发布，与 `query-string@7` 的 CommonJS `require()` 不兼容，无法在不升 Expo SDK 58（跨 major 移除 `query-string`）的前提下升级。",
+    expires:
+      "clients/app 随专门的 Expo SDK 58+ 升级移除 `query-string` 链后删除本条。",
+  },
+  {
+    id: "GHSA-3g3m-2fjr-6pw4",
+    project: "clients/app",
+    package: "glob",
+    severity: "moderate",
+    reason:
+      "仅存在于 `expo@57 → @expo/cli / @expo/config / @expo/config-plugins / @expo/fingerprint / @expo/metro-config` 构建期工具链（范围锁在 `^13.0.0`，当前 13.0.6）；修复版 `>= 14.0.2` 属跨 major 升级，且 `glob` 不进入导出的 web 产物。",
+    expires:
+      "Expo 工具链升级到 `glob >= 14.0.2`（如随 Expo SDK 主版本升级）后删除本条。",
+  },
+  {
+    id: "GHSA-g3hv-75wg-m249",
+    project: "clients/app",
+    package: "minimatch",
+    severity: "moderate",
+    reason:
+      "仅存在于 `expo@57 → @expo/cli / @expo/fingerprint → glob@13` 构建期工具链（范围锁在 `^10.2.2`，当前 10.2.6）；修复版 `>= 11.0.1` 属跨 major 升级，实测导出的 web 产物 `dist/_expo/static/js/web/*.js` 0 命中 `minimatch`。",
+    expires:
+      "Expo 工具链升级到 `minimatch >= 11.0.1`（如随 Expo SDK 主版本升级）后删除本条。",
   },
   {
     id: "GHSA-mrhx-c7xc-m3w5",
