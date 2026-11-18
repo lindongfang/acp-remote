@@ -1078,6 +1078,28 @@ async fn run_authenticated_loop(
                     Ok(frame) => frame,
                     Err(close) => break close,
                 };
+                #[cfg(feature = "approval-owner-acceptance-fixtures")]
+                {
+                    use std::io::Write;
+                    let msg = match &frame {
+                        ClientFrame::Shared(b) => {
+                            if let Ok((h, _)) = crate::application::shared_views::wire::TransferHeader::decode(b) {
+                                format!("server_recv: Shared(kind={:?}, p={}, r={})
+        ", h.kind(), h.packet(), h.record())
+                            } else {
+                                format!("server_recv: Shared(unknown, len={})
+        ", b.len())
+                            }
+                        }
+                        ClientFrame::Command(c) => format!("server_recv: Command({})
+        ", c.action),
+                        _ => "server_recv: other
+        ".to_string(),
+                    };
+                    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("D:\\Project\\acp-remote\\.tmp\\cp026_server_recv.log") {
+                        let _ = f.write_all(msg.as_bytes());
+                    }
+                }
                 #[cfg(test)]
                 if state.test_hooks.fresh_command_window.load(std::sync::atomic::Ordering::SeqCst) {
                     command_window = CommandWindow::new();

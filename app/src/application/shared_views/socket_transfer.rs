@@ -537,6 +537,20 @@ impl SocketTransferStream {
         Ok(())
     }
     fn notify_document_commit(&self) {
+        #[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("D:\\Project\\acp-remote\\.tmp\\cp026_server_recv.log")
+            {
+                let _ = f.write_all(
+                    b"notify_document_commit: called
+",
+                );
+            }
+        }
         let observer = self
             .inner
             .document_commit
@@ -782,6 +796,22 @@ impl SocketTransferStream {
             }
             if ack != s.packet {
                 return Err(ViewError::InvalidCursor);
+            }
+            #[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
+            {
+                use std::io::Write;
+                let line = format!(
+                    "accept_control_phase: ack={}, phase={:?}, committed={}, packet={}
+",
+                    ack, s.phase, s.committed, s.packet
+                );
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open("D:\\Project\\acp-remote\\.tmp\\cp026_server_recv.log")
+                {
+                    let _ = f.write_all(line.as_bytes());
+                }
             }
             match s.phase {
                 Phase::Started | Phase::Flushing => {
