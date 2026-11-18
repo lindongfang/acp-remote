@@ -997,7 +997,7 @@ async fn capacity_l6_view_records(
     )
     .map_err(|_| "view_stream_invalid")?;
     let mut original_records =
-        capacity_l6_drain_original_complete(&mut f.peers[0].socket, stream).await.map_err(|e| match e { "view_snapshot_deadline_elapsed_zero_packets" => "view_records_original_zero_packets", "view_snapshot_deadline_elapsed_partial_packets" => "view_records_original_partial_packets", _ => e })?;
+        capacity_l6_drain_original_complete(&mut f.peers[0].socket, stream).await.map_err(|e| Box::leak(format!("view_records_original_{e}").into_boxed_str()) as &'static str)?;
     // The real management rebind waits for this original read's Complete before
     // publishing its replacement stream. SnapshotEnd alone is not completion.
     let rebound = capacity_l6_call_collect(
@@ -1016,7 +1016,7 @@ async fn capacity_l6_view_records(
             .ok_or("rebound_stream_missing")?,
     )
     .map_err(|_| "rebound_stream_invalid")?;
-    let (records, again) = capacity_l6_drain_snapshot(&mut f.peers[0].socket, stream).await.map_err(|e| match e { "view_snapshot_deadline_elapsed_zero_packets" => "view_records_rebound_zero_packets", "view_snapshot_deadline_elapsed_partial_packets" => "view_records_rebound_partial_packets", _ => e })?;
+    let (records, again) = capacity_l6_drain_snapshot(&mut f.peers[0].socket, stream).await.map_err(|e| Box::leak(format!("view_records_rebound_{e}").into_boxed_str()) as &'static str)?;
     if again {
         return Err("completed_read_changed_again");
     }

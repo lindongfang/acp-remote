@@ -113,6 +113,8 @@ async fn capacity_l6_drain_view(
         .await
         .map_err(|_| "view_initial_credit_failed")?;
     let packets = std::sync::atomic::AtomicU64::new(0);
+    let last_raw_kind = std::sync::atomic::AtomicU8::new(0);
+    let records_count = std::sync::atomic::AtomicUsize::new(0);
     let timed = timeout(Duration::from_secs(90), async {
         let mut assembly = CapacityL6RecordAssembly::new(stream);
         let mut records = Vec::new();
@@ -122,6 +124,14 @@ async fn capacity_l6_drain_view(
                     let (header, body) = TransferHeader::decode(&bytes)
                         .map_err(|_| "view_received_invalid_header")?;
                     packets.store(header.packet(), std::sync::atomic::Ordering::Relaxed);
+                    if let Some(k) = header.record_kind() {
+                        last_raw_kind.store(match k {
+                            RecordKind::OriginalRaw => 1,
+                            RecordKind::Status => 2,
+                            RecordKind::ItemProjection => 3,
+                            RecordKind::SnapshotEnd => 4,
+                        }, std::sync::atomic::Ordering::Relaxed);
+                    }
                     let record = assembly.receive(header, body)?;
                     let credit = TransferHeader::credit(stream, header.packet())
                         .encode(&[])
@@ -143,6 +153,7 @@ async fn capacity_l6_drain_view(
                             false
                         };
                         records.push((kind, body));
+                        records_count.store(records.len(), std::sync::atomic::Ordering::Relaxed);
                         if rebound || kind == RecordKind::SnapshotEnd {
                             return Ok((records, rebound));
                         }
@@ -164,11 +175,11 @@ async fn capacity_l6_drain_view(
     match timed {
         Ok(inner) => inner,
         Err(_) => {
-            if packets.load(std::sync::atomic::Ordering::Relaxed) == 0 {
-                Err("view_snapshot_deadline_elapsed_zero_packets")
-            } else {
-                Err("view_snapshot_deadline_elapsed_partial_packets")
-            }
+            let p = packets.load(std::sync::atomic::Ordering::Relaxed);
+            let k = last_raw_kind.load(std::sync::atomic::Ordering::Relaxed);
+            let r = records_count.load(std::sync::atomic::Ordering::Relaxed);
+            let msg = format!("view_snapshot_deadline_elapsed_p{p}_k{k}_r{r}");
+            Err(Box::leak(msg.into_boxed_str()))
         }
     }
 }
