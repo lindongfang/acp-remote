@@ -121,7 +121,7 @@
 
 ### Chromium A/B 开发自测
 
-2026-10-29 先使用真实 Windows 节点、自签名 localhost 证书、ego Chromium A 和隔离 Edge B 完成一次开发自测。该轮证书错误仅通过测试专用自动化忽略，不作为受信证书证据；完整记录见 [最终开发运行](../testing/runs/establish-node-access/2026-10-29-final-development.md)。
+2026-10-29 先使用真实 Windows 节点、自签名 localhost 证书、ego Chromium A 和隔离 Edge B 完成一次开发自测。该轮证书错误仅通过测试专用自动化忽略，不作为受信证书证据；完整记录见本地最终开发运行 `testing/runs/establish-node-access/2026-10-29-final-development.md`。
 
 - A/B 均完成配对码 lookup、原子 claim、本机交互终端明确 `y` 批准、WSS hello/challenge/proof 认证和 `device.list`；浏览器读取到的 P-256 私钥均为 `extractable === false`。
 - 在批准响应丢失后立即停止节点，再以同一数据目录重启；B 使用已保存公钥恢复认证，状态从 `pending_confirmation` 变为 `consumed`，并保持 owner 批准时记录的 clientId，无需重新执行 `device pair`。
@@ -131,7 +131,7 @@
 - 节点通过 owner IPC 正常停止并输出 `ACP Remote node stopped`；A 页面进入节点停止状态。停止后进程、TCP `28444`、`acp-remote.*` named pipe 均不可见，同目录重启成功，证明数据目录锁已释放。
 - 节点重启后 A 使用相同 clientId 和非导出私钥恢复认证；已撤销 B 仍收到 `4401`，撤销状态没有因重启复活。
 
-随后使用 `tailscale cert` 为 `faraday.tail74842e.ts.net` 取得 Let's Encrypt 受信证书，并以 `https://faraday.tail74842e.ts.net:28444` 完成一轮真实 Tailscale 开发测试。Chromium 未忽略证书错误，页面 `isSecureContext === true`；A/B 重新完成 lookup、claim、本机显式 `y` 批准、WSS 认证和 `device.list`。A 撤销 B 后列表 revision 为 3，B 既有连接收到 `4410 / revoked`，重载收到 `4401 / authentication failed`；正常停止后端口释放，同目录重启时 A 恢复、B 继续拒绝。证书、私钥和浏览器资料只保存在 `.tmp/`，完整记录见 [受信 TLS 与 Tailscale 开发运行](../testing/runs/establish-node-access/2026-10-29-trusted-tailscale-development.md)。
+随后使用 `tailscale cert` 为 `faraday.tail74842e.ts.net` 取得 Let's Encrypt 受信证书，并以 `https://faraday.tail74842e.ts.net:28444` 完成一轮真实 Tailscale 开发测试。Chromium 未忽略证书错误，页面 `isSecureContext === true`；A/B 重新完成 lookup、claim、本机显式 `y` 批准、WSS 认证和 `device.list`。A 撤销 B 后列表 revision 为 3，B 既有连接收到 `4410 / revoked`，重载收到 `4401 / authentication failed`；正常停止后端口释放，同目录重启时 A 恢复、B 继续拒绝。证书、私钥和浏览器资料只保存在 `.tmp/`，完整记录见本地受信 TLS 与 Tailscale 开发运行 `testing/runs/establish-node-access/2026-10-29-trusted-tailscale-development.md`。
 
 ## 2026-10-30 当前验证与剩余范围
 
@@ -146,9 +146,9 @@ R20开发全量检查实际通过：144项Rust库测试、4项固定签名向量
 
 本机UNC SMB正控制可双向通信而普通产品管道拒绝，独立reviewer确认远程拒绝开关实效子项通过；这是本机回环SMB，不宣称另一机器或另一SID。R17迟到身份写入问题已独立关闭，慢writer两种真实WSS队列超限也已独立通过。
 
-管理分页、撤销并发和浏览器多页恢复已由独立tester收口，详见同日r17-management、web-evidence-merge及r6-e2e报告。R20已提交批准后Ctrl-C提示的原问题也由原tester真实终端复测关闭，详见[复测报告](../testing/runs/establish-node-access/2026-10-30-approval-cancel-r20-retest.md)：先给诚实恢复指引，再按同指纹查询确认实际ID；信任保留且同key重启恢复。
+管理分页、撤销并发和浏览器多页恢复已由独立tester收口，详见同日r17-management、web-evidence-merge及r6-e2e报告。R20已提交批准后Ctrl-C提示的原问题也由原tester真实终端复测关闭，详见本地复测报告 `testing/runs/establish-node-access/2026-10-30-approval-cancel-r20-retest.md`：先给诚实恢复指引，再按同指纹查询确认实际ID；信任保留且同key重启恢复。
 
-另一真实Windows SID的pair/stop已使用用户授权的现有abc账户补验，详见[跨SID独立补验](../testing/runs/establish-node-access/2026-10-30-cross-sid-r20-acceptance.md)。两个真实控制台命令均exit1、无超时，在私有目录解析阶段被DACL拒绝；不冒称该次到达服务端token比较。随后owner查询正常，数据库及审计逻辑摘要不变，正常stop释放端口/pipe/锁；看守进程后续缺席确认独立保存，原初次观察不改写。账号未创建、删除或修改，密码不进入测试资产。NA012其他正交子项沿用报告明确的独立证据范围，最终逐例与交付结论见plan引用的独立汇总和检视。
+另一真实Windows SID的pair/stop已使用用户授权的现有abc账户补验，详见本地跨SID独立补验 `testing/runs/establish-node-access/2026-10-30-cross-sid-r20-acceptance.md`。两个真实控制台命令均exit1、无超时，在私有目录解析阶段被DACL拒绝；不冒称该次到达服务端token比较。随后owner查询正常，数据库及审计逻辑摘要不变，正常stop释放端口/pipe/锁；看守进程后续缺席确认独立保存，原初次观察不改写。账号未创建、删除或修改，密码不进入测试资产。NA012其他正交子项沿用报告明确的独立证据范围，最终逐例与交付结论见plan引用的独立汇总和检视。
 
 用户原30447体验节点未被这些源码构建自动替换。同用户恶意进程访问已解密内存或冒充owner仍在既定威胁边界之外。
 

@@ -2,7 +2,7 @@
 
 ## 职责与输入
 
-遵守根 [AGENTS.md](../../AGENTS.md)、[docs/code-standards.md](../../docs/code-standards.md) 和 [openspec/config.yaml](../config.yaml)；仅对 `.openspec.yaml` 为 `schema: spec-driven` 且已通过编码前门禁的变更开展实现（`schema: spec-only` 远期变更保持需求态冻结），读取用户已确认要求、`specs`/`design`、`plan`、`tester` 维护的 `tests` 及编码前门禁结论。主执行者可兼任 `coder` 并负责统筹与子包闭环，但不能代签最终独立验收和交付检视。
+遵守根 [AGENTS.md](../../AGENTS.md)、[docs/code-standards.md](../../docs/code-standards.md) 和 [openspec/config.yaml](../config.yaml)；仅对 `.openspec.yaml` 为 `schema: spec-driven`、无 `x-deferred: true` 标记且已在 `plan.md` `## Code Review` 表登记编码前门禁 `passed` 的变更开展实现（带 `x-deferred: true` 的远期变更保持需求态冻结），读取用户已确认要求、`specs`/`design`、`plan`、`tester` 维护的 `tests` 及编码前门禁结论。主执行者可兼任 `coder` 并负责统筹与子包闭环，但不能代签最终独立验收和交付检视。
 
 ## 执行
 
@@ -16,5 +16,5 @@
 ## 交付与修复
 
 - 中间子包开发与局部缺陷修复由主执行者/`coder` 自行快速闭环，无需逐个补丁拉起独立角色审查。
-- `tasks.md` 勾选遵循两阶段规则：开发实现任务（如 `1.x`）在具备真实单测与文档证据时勾选 `- [x]`，随业务代码与需入库的自动化验收测试代码一同提交至本地工作分支，生成干净的受测集成 `commit SHA`（配合 `git status` 干净状态）交接给独立 `tester` 和 `reviewer`；集成交付门禁任务（如 `2.1`）在受测 `commit SHA` 中保持 `- [ ]`。不再维护未提交文件的手工 SHA-256 清单或源码副本包。
+- `tasks.md` 勾选遵循两阶段规则：开发实现任务（如 `1.x`）在具备真实单测与文档证据时勾选 `- [x]`；在用户已授权实施该变更且工作区无无关未提交修改的前提下，随业务代码与需入库的自动化验收测试代码一同提交至本地功能分支，生成干净的受测集成 `commit SHA`（配合 `git status` 干净状态）交接给独立 `tester` 和 `reviewer`；集成交付门禁任务（如 `2.1`）在受测 `commit SHA` 中保持 `- [ ]`（`coder` 在此停手，不得越权自勾），严禁未获要求 `push`、变基或发布，不再维护未提交文件的手工 SHA-256 清单或源码副本包。
 - 针对集成门禁提出的稳定问题 ID，修复后提交新 commit 并说明影响范围，交原提出者做增量重测/复查关闭，不得代关阻断问题。门禁通过后回填 `plan.md` 结果摘要、勾选 `tasks.md` 集成门禁任务及同步归档的纯文档 commit 在零产品/测试代码改动下直接继承受测 commit 结论。

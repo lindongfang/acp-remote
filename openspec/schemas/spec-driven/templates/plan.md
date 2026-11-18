@@ -1,6 +1,6 @@
 ﻿# Plan
 
-<!-- 计划仅在 schema: spec-driven 变更进入实施准备时生成，原地维护当前有效状态（不堆叠顶部历史横幅、重复二级标题或微测日记）。遵循 openspec/config.yaml。 -->
+<!-- 计划仅在无 x-deferred: true 标记且变更进入实施准备时生成，原地维护当前有效状态（不堆叠顶部历史横幅、重复二级标题或微测日记）。遵循 openspec/config.yaml。 -->
 
 ## Execution Model
 
@@ -32,12 +32,12 @@
 
 ## Code Review
 
-<!-- 两道独立门禁：① 编码前合审方案与用例；② 集成 commit SHA 交付检视。机械结构交由 node testing/suites/verify-suite.mjs --change <name> 与 npm run check:spec 校验。 -->
+<!-- 两道独立门禁：① 编码前合审方案与用例；② 集成 commit SHA 交付检视。机械结构交由 node testing/suites/verify-suite.mjs --change <name> 与 npm run check:spec 校验。编码前门禁通过后须将对应行 Status 更新为 passed 并记录规划快照依据（才能启动 coder 编码）。 -->
 
-| Gate / Scope | Reviewer Agent | Review Focus | Pass Condition |
-| --- | --- | --- | --- |
-| <!-- 编码前门禁 --> | <!-- 独立 reviewer --> | <!-- 需求依据、协议安全边界、测试充分性 --> | <!-- verify-suite.mjs --change <name> 与 npm run check:spec 通过且无阻断问题 --> |
-| <!-- 集成交付门禁 --> | <!-- 独立 reviewer --> | <!-- 集成 commit diff、验收代码真实性、协议语义、资源清理与证据 --> | <!-- 全部阻断问题在新 commit 复查闭环 --> |
+| Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes |
+| --- | --- | --- | --- | --- | --- |
+| <!-- 编码前门禁 --> | <!-- 独立 reviewer --> | <!-- 需求依据、协议安全边界、测试充分性 --> | <!-- verify-suite.mjs --change <name> 与 npm run check:spec 通过且无阻断问题 --> | <!-- pending / passed / blocked --> | <!-- 规划基线快照或本地审查路径（反引号文本） --> |
+| <!-- 集成交付门禁 --> | <!-- 独立 reviewer --> | <!-- 集成 commit diff、验收代码真实性、协议语义、资源清理与证据 --> | <!-- 全部阻断问题在新 commit 复查闭环 --> | <!-- pending / passed / blocked --> | <!-- 受测集成 commit SHA 与复查结论 --> |
 
 ## Main E2E
 
@@ -66,7 +66,7 @@ mode: required
 
 ## Verification Results
 
-<!-- 仅维护当前有效集成版本的精简结果摘要；详细原始日志保存在本地被忽略的 testing/runs/<change>/ 下。门禁通过后仅回填本节、勾选集成门禁任务及归档的纯文档提交直接继承受测 commit SHA 结论。 -->
+<!-- 仅维护当前有效集成版本的精简结果摘要；详细原始日志保存在本地被忽略的 testing/runs/<change>/ 下（请用反引号文本路径提及，严禁写 Markdown 超链接指向被忽略目录）。门禁通过后仅回填本节、更新 Code Review 状态、勾选集成门禁任务及归档的纯文档提交直接继承受测 commit SHA 结论。 -->
 
 - 受测版本：<!-- 本地工作分支 Git commit SHA（受跟踪文件工作区干净） -->
 - 执行者与环境：<!-- tester / reviewer、OS 及关键工具版本 -->

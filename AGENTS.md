@@ -32,7 +32,7 @@
 ## 4. 流程与文档维护
 
 - 错题记录和晋升规则以 [LESSONS.md](LESSONS.md) 为准；硬规则及审查要求以 [docs/code-standards.md](docs/code-standards.md) 为准。
-- OpenSpec 变更流程唯一来源为 [openspec/config.yaml](openspec/config.yaml)，产物结构和模板在 [openspec/schemas/](openspec/schemas/)，角色职责在 [openspec/role/](openspec/role/)。不在本文件复制流程细则。
+- OpenSpec 变更流程唯一来源为 [openspec/config.yaml](openspec/config.yaml)，产物结构和模板在 [openspec/schemas/](openspec/schemas/)，角色职责在 [openspec/role/](openspec/role/)。不在本文件复制流程细则。执行 OpenSpec 技能时，`openspec/config.yaml` 中的门禁停手、编码前门禁与归档四步为本仓强制规则（优先级高于 `.agents/skills/` 中的默认可选提示），严禁直接裸跑 `openspec archive` CLI 命令。
 - 新产品规格、术语、架构决策及验收用例按当前方案建立；仅在需要时创建，不预填尚未确认的能力。
 - 修改行为、接口或依赖时，同步维护负责该内容的设计、规格和验证资产。重叠内容保留一个权威定义，其他位置链接引用。
 - 项目定位、可用能力、开始方式或主要目录变化时更新 README；Agent 工作方式变化时更新本文件。
@@ -44,4 +44,4 @@
 - 引入产品实现时，同步建立真实编译、测试、协议合同和前端检查。静态检查通过不能代替产品功能验收。
 - 安全、供应链、真实 Harness 和独立验收分别记录证据；未执行或环境受限时如实说明，不能用自测代签独立审查。
 - 完成后检查实际差异及格式，不混入临时文件或无关修改。交付说明包含改动、验证和实质性限制。
-- 未获要求不提交、推送或发布；不隐式改写 Git 索引、文件执行位或用户已有修改。
+- 用户明确授权实施某变更且工作区无无关未提交修改时，允许在该本地功能分支按 OpenSpec 门禁节点创建常规 commit；其他情况未获要求不提交，任何时候未获明确要求不推送、变基/改写历史、修改文件执行位、触碰用户无关修改或发布。

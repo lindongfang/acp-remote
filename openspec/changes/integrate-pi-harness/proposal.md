@@ -25,14 +25,14 @@
 - **不绑定 Pi 版本**：不在仓库依赖、锁文件、启动配置模板、探针脚本或平台代码中固定、打包或校验特定 Pi 版本；直接对接用户本机已安装的 `pi`，不擅自安装、升级或降级本机 `pi`。
 - 仅交付无版本绑定的接入配置及真实兼容性验收；复用通用 ACP 与现有单入口目录模型，不扩充双组件目录字段、不私改通用 Web 安装表单、不创建厂商协议客户端、私有历史读取器、永久聊天副本或自动能力兜底。
 - 不恢复 DeepSeek/ZCode/OMP 计划，不继承旧变更的任务勾选、孤立顶层目录结构、历史验收或已失效的重放准入规则。
-- 当前处于远期需求与设计定义阶段（`schema: spec-only`），本轮不运行真实 Harness、不修改本机认证、会话、密钥或产品代码；正式启动本变更时先升格为 `schema: spec-driven` 并基于当时真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`。
+- 当前处于远期需求与设计定义阶段（`.openspec.yaml` 标记 `x-deferred: true`），本轮不运行真实 Harness、不修改本机认证、会话、密钥或产品代码；正式启动本变更时先移除 `x-deferred: true` 并基于当时真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`。
 
 ### 成功判据
 
 - SC1（规划阶段）：完成 `proposal.md`、增量规格 `specs/pi-harness-compatibility/spec.md` 与 `design.md` 规划收敛并同步对齐 Codex + Pi 目标范围，消除与现有源码模型及仓库目录约定的冲突，严格校验通过；未解决的真实环境取证列为正式开工后的首阶段前置条件。
 - SC2（后续交付）：在不绑定本机 Pi 版本的前提下，明确外部 ACP 服务端来源、许可证、隔离探针依赖边界与符合 Windows 无 Shell 约束的原生可执行启动链，形成无密钥配置模板及脱敏环境记录（仅只读记录当次实测观察到的本机 Pi 版本）。
 - SC3（后续交付）：真实验证输入、结构输出、客户端空能力声明下的工具与委托行为、权限请求（若提供）、取消、页面断线、恢复/历史与完整进程树释放；区分底层配置合同与当前通用 Web 表单范围，支持、不支持、未验证及平台未实现分别记录。
-- SC4（后续交付）：正式开工升格 `schema: spec-driven` 后补齐独立 `tests.md`、`plan.md` 与 `tasks.md`，经编码前门禁与实现后由独立 `tester`/`reviewer` 核对同一受测集成 `commit SHA`，逐例报告结果并按仓库套件规范同步长期资产；缺环境或所需证据记未执行，不以模拟或其他 Harness 结果代签。
+- SC4（后续交付）：正式开工移除 `x-deferred: true` 后补齐独立 `tests.md`、`plan.md` 与 `tasks.md`，经编码前门禁与实现后由独立 `tester`/`reviewer` 核对同一受测集成 `commit SHA`，逐例报告结果并按仓库套件规范同步长期资产；缺环境或所需证据记未执行，不以模拟或其他 Harness 结果代签。
 
 ## What Changes
 
@@ -67,7 +67,7 @@
   3. **Web 表单与客户端委托边界**：区分底层 `format: 1` 配置（支持 `mcp_servers`、`extra`、原始 UTF-16LE 参数）与当前通用 Web 表单（固定 `mcpServers: []`、`extra: {}` 且按行 `trim` 参数），并将平台 `clientCapabilities: {}` 及非审批反向请求返回 `-32601` 下的 `pi-acp` 工具/审批真实行为列为前置探测与闭环验收必查项。
   4. **目录收敛**：统一对齐仓库既有 `testing/probes/pi-harness/`、`docs/implementation/`、`testing/runs/integrate-pi-harness/`、`openspec/specs/` 与 `testing/suites/`，取消新建 `configs/`、`scripts/`、`testing/harnesses/`。
   5. **隔离探测写范围**：允许前置探测阶段在 `testing/probes/pi-harness/discovery/` 建立隔离协议探针（仅按需锁定候选适配器探针自身依赖，绝不安装或绑定 `pi` 本体）。
-- 第三轮确认（2026-11-17）：用户确认**先去掉 OMP 的适配，暂时先支持 Codex 和 Pi**，并按远期变更轻量化规则切换为 `schema: spec-only`（正式排期开工时再升格为 `schema: spec-driven` 生成 `tests/plan/tasks`）。
+- 第三轮确认（2026-11-17）：用户确认**先去掉 OMP 的适配，暂时先支持 Codex 和 Pi**，并按远期变更轻量化规则在 `.openspec.yaml` 标记 `x-deferred: true`（正式排期开工时再移除该标记并生成 `tests/plan/tasks`）。
 - 实施前阻断输入：本机已安装 `pi` 的实际调用入口、候选外部 ACP 服务端可用性与许可证审查、隔离认证与会话根、Windows 完整进程树收敛验证方法。允许先完成需求与设计冻结；正式适配与验收前须在开工首阶段实证解决。
 - 依赖选择若要求新增私有桥接、丢失关键结构或改变安全/数据权威，超出本 change；报告具体差异并单独决定，不通过降级绕过。
 - 术语复核：Pi 是具体程序标识，不是新增业务对象；沿用接入来源、启动配置、原生身份及连接代际，GLOSSARY 无需变更。当前不形成新跨层决策，暂不新增 ADR。

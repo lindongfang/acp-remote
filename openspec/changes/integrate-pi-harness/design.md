@@ -2,7 +2,7 @@
 
 ## Context
 
-动机及用户确认见 [proposal.md](proposal.md)。本变更当前处于远期需求与设计定义态（`schema: spec-only`），具体施工工作包划分与验收用例在正式排期升格 `schema: spec-driven` 时基于当时真实代码树建立。当前行为权威为 `openspec/specs/`；归档的通用闭环资料仅解释现有实现边界，不继承旧 DeepSeek/ZCode 的孤立目录或历史结论。
+动机及用户确认见 [proposal.md](proposal.md)。本变更当前处于远期需求与设计定义态（`.openspec.yaml` 标记 `x-deferred: true`），具体施工工作包划分与验收用例在正式排期移除 `x-deferred: true` 时基于当时真实代码树建立。当前行为权威为 `openspec/specs/`；归档的通用闭环资料仅解释现有实现边界，不继承旧 DeepSeek/ZCode 的孤立目录或历史结论。
 
 已核对真实接入源码与平台边界：
 - `app/src/adapters/acp/node_configuration_profile.rs`（`parse_profile`）严格按闭集字段解析 `format: 1` 配置：仅含单一 `launch`（`executable_utf16le_base64`、`arguments_utf16le_base64`、`environment`）与 `recipes`（`wire`、`mcp_servers`、`additional_directories`、`extra`），多出未知字段直接拒绝。
@@ -67,4 +67,4 @@
 
 ## Open Questions
 
-本机 `pi` 实际可调用路径、候选外部 ACP 服务端的供应链/许可证审查、空客户端能力下的真实握手与委托表现、隔离配置/会话根环境变量及进程树验证方案留待升格 `schema: spec-driven` 后的前置探测阶段实证解决。若实证结果要求改变通用 ACP 代码、扩充目录 schema 或引入客户端文件/终端委托能力，则超出本 change 边界，须停下报告并另行决策。
+本机 `pi` 实际可调用路径、候选外部 ACP 服务端的供应链/许可证审查、空客户端能力下的真实握手与委托表现、隔离配置/会话根环境变量及进程树验证方案留待移除 `x-deferred: true` 进入实施准备后的前置探测阶段实证解决。若实证结果要求改变通用 ACP 代码、扩充目录 schema 或引入客户端文件/终端委托能力，则超出本 change 边界，须停下报告并另行决策。

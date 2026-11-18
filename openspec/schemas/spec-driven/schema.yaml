@@ -1,6 +1,6 @@
 name: spec-driven
 version: 1
-description: ACP Remote full delivery workflow - proposal → specs/design → tests → plan → tasks (use spec-only schema for frozen roadmap changes)
+description: "ACP Remote full delivery workflow - proposal → specs/design → tests → plan → tasks (mark .openspec.yaml x-deferred: true for frozen roadmap changes)"
 artifacts:
   - id: proposal
     generates: proposal.md
@@ -10,8 +10,10 @@ artifacts:
       Create the proposal document that establishes WHY this change is needed.
 
       NOTE ON ROADMAP CHANGES: If the user is only defining a future roadmap change that
-      is NOT scheduled for implementation yet, use `schema: spec-only` (`openspec new change
-      "<name>" --schema spec-only`) instead of `spec-driven`.
+      is NOT scheduled for implementation yet, keep `schema: spec-driven` and add
+      `x-deferred: true` to `.openspec.yaml`, stopping after `proposal.md`, `specs/`, and
+      `design.md`. When scheduled for implementation later, remove `x-deferred: true`
+      and generate `tests.md`, `plan.md`, and `tasks.md` against the current codebase.
 
       Sections:
       - **Why**: 1-2 sentences on the problem or opportunity. What problem does this solve? Why now?
@@ -38,7 +40,8 @@ artifacts:
       Every change must either declare at least one capability (new or modified) or
       explicitly opt out via `skip_specs: true` in `.openspec.yaml` when no spec-level
       behavior changes (pure refactor, tooling, docs). Do not invent a requirement just
-      to satisfy validation.
+      to satisfy validation. Changes marked `x-deferred: true` MUST declare at least
+      one capability and MUST NOT set `skip_specs: true` or `retire_capabilities: true`.
 
       Maintain `proposal.md` in place starting with `# <Title>` as a clean living document:
       update sections directly when decisions evolve instead of stacking historical revision
@@ -126,7 +129,12 @@ artifacts:
       - **Open Questions**: Unknowns that can safely be answered later without changing specs or approach. Omit if none.
 
       Maintain `design.md` in place starting with `# <Title>` as a clean living document:
-      replace superseded sections directly instead of prepending patch banners.
+      replace superseded sections directly instead of prepending patch banners. Never link
+      to `.gitignore` paths (such as `testing/runs/`) with Markdown `[text](path)` syntax;
+      use backticked plain paths instead.
+
+      ROADMAP BOUNDARY: If `.openspec.yaml` sets `x-deferred: true`, stop after
+      `proposal`, `specs`, and `design`; do NOT create `tests.md`, `plan.md`, or `tasks.md`.
     requires:
       - proposal
 
@@ -156,7 +164,11 @@ artifacts:
         Requirements & Scenarios) and explicit `openspec/specs/<capability>/spec.md` for
         optional cross-capability regression references.
       - `skip_specs: true` changes: `| 来源文档 | 章节 | 成功判据 | 用例 |` with rows
-        `| proposal.md | Success Criteria | SC1 | <Case IDs> |`.
+        `| proposal.md | Success Criteria | SCn | <Case IDs> |`, covering 100% of every
+        `SCn` declared in `proposal.md` `## Success Criteria`.
+      - Standard non-exempt changes MUST use the canonical 4-column mapping table (do not
+        use legacy 2-column tables). Ensure stable case IDs do not collide with other active
+        changes or unrelated durable suites.
 
       Reserve LX strictly for scenarios the harness cannot verify through tools and
       that require human judgment. Missing tools, credentials, or test entries mean
@@ -164,7 +176,8 @@ artifacts:
 
       Run `node testing/suites/verify-suite.mjs --change <name>` and `npm run check:spec`
       to validate case structure and 100% scenario coverage before the Pre-code Gate.
-      Store raw run logs in ignored `testing/runs/<change>/` and concise summaries in `plan.md`.
+      Store raw run logs in ignored `testing/runs/<change>/` (referenced with backticked
+      inline paths only, never Markdown links) and concise summaries in `plan.md`.
     requires:
       - specs
       - design
@@ -183,11 +196,11 @@ artifacts:
       - **Work Packages**: 7-column table (`ID | Goal / Scenarios | Dependencies | Agent | Write Scope | Deliverable | Verify`) with real repository paths.
       - **Merge Order**: integration order and re-verification for overlapping writes.
       - **Project Verify**: commands, working directories, and pass criteria referencing `tests.md` IDs.
-      - **Code Review**: two-gate independent review model:
-        1. Pre-code gate: one combined review of `proposal/specs/design/tests/plan/tasks` after `node testing/suites/verify-suite.mjs --change <name>` and `npm run check:spec` pass.
-        2. Integrated delivery gate: parallel independent `tester` acceptance and `reviewer` review bound to a single local-branch Git `commit SHA` (`HEAD` with clean tracked tree) after all implementation work packages (with implementation tasks checked off) and any tracked acceptance test code are committed. Post-gate pure-doc commits that record `Verification Results`, check off the gate task in `tasks.md`, and archive inherit that tested commit's sign-off when `git diff <tested-sha>..HEAD` touches zero product/test code.
+      - **Code Review**: 6-column table (`Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes`) for the two-gate independent review model:
+        1. Pre-code gate: one combined review of `proposal/specs/design/tests/plan/tasks` after `node testing/suites/verify-suite.mjs --change <name>` and `npm run check:spec` pass; set `Status` to `passed` and record the reviewed planning snapshot/reference in `plan.md` before coding starts.
+        2. Integrated delivery gate: parallel independent `tester` acceptance and `reviewer` review bound to a single local-branch Git `commit SHA` (`HEAD` with clean tracked tree) after all implementation work packages (with implementation tasks checked off) and any tracked acceptance test code are committed. Post-gate pure-doc commits that record `Verification Results`, update `Code Review` `Status`, check off the gate task in `tasks.md`, fix relative link depth on archive, and archive inherit that tested commit's sign-off when `git diff <tested-sha>..HEAD` touches zero product/test code.
       - **Main E2E**: single typed `yaml` block (`mode: required` alone, or `mode: not-applicable` with `reason` in `pure-refactor | docs-only | no-user-surface | isolated-internal-module`, non-empty `basis`, and non-empty `alternative_checks` list).
-      - **Risks**, **Handoff**, **Findings**, **Verification Results**: concise current state and integrated commit results.
+      - **Risks**, **Handoff**, **Findings**, **Verification Results**: concise current state and integrated commit results (refer to `testing/runs/` with backticked inline paths only, never Markdown links).
 
       Validate structural rules automatically via `node testing/suites/verify-suite.mjs --change <name>`.
     requires:
@@ -213,10 +226,7 @@ artifacts:
       - Two-phase checkbox rule: check off implementation tasks (`1.x` etc.) once their unit tests
         and docs pass BEFORE committing the integrated `<tested-sha>`; keep the integrated gate
         task (e.g., `2.1`) unchecked in `<tested-sha>` and check it off in the post-gate pure-doc commit
-      - Keep archive steps as plain bullets under `## Workflow follow-up` (sync `openspec/specs/` when
-        applicable → move change to `openspec/changes/archive/` → merge `### <ID>` case bodies &
-        `Source definitions` into primary owner `testing/suites/<capability>/tests.md` and update
-        `## 需求关联` on affected suites → run `npm run check:spec`)
+      - Keep archive steps as plain bullets under `## Workflow follow-up` (NEVER use `- [ ]` or `- [x]` checkboxes here; sync `openspec/specs/` when applicable → move change to `openspec/changes/archive/` & adjust external relative links + `README.md`/`docs/` refs → merge `### <ID>` case bodies & chronologically ordered `Source definitions` into primary owner `testing/suites/<capability>/tests.md`, update `## 需求关联` and handle `REMOVED`/`retire_capabilities` cleanup → run `npm run check:spec`)
       - Run `node testing/suites/verify-suite.mjs --change <name>` and `npm run check:spec`
         to verify `plan.md ↔ tasks.md` bi-directional binding and 100% scenario coverage
     requires:
@@ -229,11 +239,4 @@ apply:
   requires: [ tests, plan, tasks ]
   tracks: tasks.md
   instruction: |
-    Ensure `node testing/suites/verify-suite.mjs --change <name>`, `npm run check:spec`, and the
-    independent `reviewer` Pre-code Gate passed before writing product code. Do NOT implement in
-    the same session that authored `tests.md`; if `tests.md` was written in this session, stop
-    and continue implementation in a new session. Implement tasks
-    iteratively with targeted tests, check off completed implementation tasks, commit a clean
-    integrated state on the local feature branch (leaving the integrated gate task unchecked),
-    run the parallel independent `tester` + `reviewer` gate on that commit SHA, and check off
-    the gate task with `Verification Results` in the post-gate pure-doc commit.
+    Ensure `.openspec.yaml` does NOT set `x-deferred: true`, `node testing/suites/verify-suite.mjs --change <name>` and `npm run check:spec` passed, and `plan.md` `## Code Review` marks the Pre-code Gate `Status` as `passed` before writing product code. Do NOT implement in the same session that authored `tests.md`; if `tests.md` was written in this session, stop and continue implementation in a new session. Implement tasks iteratively with targeted tests, check off completed implementation tasks (1.x), commit a clean integrated state on the local feature branch (leaving the integrated gate task unchecked and pausing there—config.yaml overrides default skill loops), run the parallel independent `tester` + `reviewer` gate on that commit SHA, and check off the gate task with `Verification Results` in the post-gate pure-doc commit.

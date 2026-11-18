@@ -19,7 +19,7 @@
 - `<capability>`: <能力覆盖的行为边界简述>
 
 ### Modified Capabilities
-<!-- 规范级行为发生变化的既有能力（使用 openspec/specs/ 下精确单层目录名），每项对应创建增量 specs/<existing-capability>/spec.md。无修改写“无”。纯重构/工具/文档变更若无任何能力增改，在 .openspec.yaml 设置 skip_specs: true。 -->
+<!-- 规范级行为发生变化的既有能力（使用 openspec/specs/ 下精确单层目录名），每项对应创建增量 specs/<existing-capability>/spec.md。无修改写“无”。纯重构/工具/文档变更若无任何能力增改，在 .openspec.yaml 设置 skip_specs: true；未排期开工的远期规划请在 .openspec.yaml 设置 x-deferred: true（须至少声明一个能力，不可设 skip_specs: true）。 -->
 - `<existing-capability>`: <修改的需求范围简述>
 
 ## Impact

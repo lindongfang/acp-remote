@@ -5,7 +5,7 @@
 
 # 会话管理、存储与同步实施合同
 
-状态：2026-10-30 WP1 重基准修订，待独立 tester/reviewer 核对；不是实现或互操作通过声明。本文是本 change 的 wire（线上编码）、存储升级与同步细节的单一来源。行为权威仍为本 change specs 及重设计；节点认证、撤销与固定预算继承[已归档接入合同](../archive/2026-10-30-establish-node-access/access-contract.md) §4–6，本文只扩展会话操作，不替代节点信任规则。
+状态：2026-10-30 WP1 重基准修订，待独立 tester/reviewer 核对；不是实现或互操作通过声明。本文是本 change 的 wire（线上编码）、存储升级与同步细节的单一来源。行为权威仍为本 change specs 及重设计；节点认证、撤销与固定预算继承[已归档接入合同](../2026-10-30-establish-node-access/access-contract.md) §4–6，本文只扩展会话操作，不替代节点信任规则。
 
 ## 1. 现有基线与接线
 

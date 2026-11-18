@@ -6,9 +6,9 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 ## 当前状态
 
-项目已有可运行的 Windows Rust 节点和同源 Web 配对/管理页面，覆盖本机命名管道、DPAPI 身份、SQLite、直接 TLS、配对 HTTP、WSS 管理、设备列表与撤销。普通调试构建也将 Web 资源编译到 exe，可复制单个二进制运行。`establish-node-access` 已完成33例验收及独立检视，于2026-10-30归档。证据覆盖受信 TLS/Tailscale、Chromium A/B、身份持久性、撤销和重启、跨 Windows 用户拒绝，以及已定义的事务、崩溃、限额和供应链检查；不代表后续 Harness 能力已实现。固定版本、验证范围及归档前历史记录见 [归档计划](openspec/changes/archive/2026-10-30-establish-node-access/plan.md) 和 [验收记录](testing/runs/establish-node-access/)。
+项目已有可运行的 Windows Rust 节点和同源 Web 配对/管理页面，覆盖本机命名管道、DPAPI 身份、SQLite、直接 TLS、配对 HTTP、WSS 管理、设备列表与撤销。普通调试构建也将 Web 资源编译到 exe，可复制单个二进制运行。`establish-node-access` 已完成33例验收及独立检视，于2026-10-30归档。证据覆盖受信 TLS/Tailscale、Chromium A/B、身份持久性、撤销和重启、跨 Windows 用户拒绝，以及已定义的事务、崩溃、限额和供应链检查；不代表后续 Harness 能力已实现。固定版本、验证范围及归档前历史记录见 [归档计划](openspec/changes/archive/2026-10-30-establish-node-access/plan.md) 和本地验收目录 `testing/runs/establish-node-access/`。
 
-归档结果与历史路径映射见[归档记录](testing/runs/establish-node-access/2026-10-30-archive-record.md)。完整产品目标见 [Harness Control Plane 设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md)。
+归档结果与历史路径映射见本地归档记录 `testing/runs/establish-node-access/2026-10-30-archive-record.md`。完整产品目标见 [Harness Control Plane 设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md)。
 
 `deliver-codex-session-loop` 已于 2026-11-16 归档，实际验证范围以[归档计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md)为准；归档本身不代表任意 Harness 已验收。Pi 接入规划与范围调整见[能力地图](docs/REBUILD_CAPABILITY_MAP.md)。
 

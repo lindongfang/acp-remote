@@ -10,7 +10,7 @@
 
 - [establish-node-access](../openspec/changes/archive/2026-10-30-establish-node-access/proposal.md) 已归档，节点与客户端信任规格及 33 例验收有效。
 - [deliver-codex-session-loop](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/proposal.md) 已归档，通用会话闭环、共享队列、严格审批及 ACP 重放/当前连接视图规格已同步至 `openspec/specs/`。
-- 当前活跃实施中的变更为 [deliver-session-capacity](../openspec/changes/deliver-session-capacity/proposal.md)。其余 6 个尚未开工的远期变更按轻量化规则仅维护需求与设计层（`proposal.md`、`specs/`、`design.md`），待正式开工时再基于当时真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`，不提前预生成或跨变更陪跑重审。
+- 当前活跃实施中的变更为 [deliver-session-capacity](../openspec/changes/deliver-session-capacity/proposal.md)。其余 6 个尚未开工的远期变更在 `.openspec.yaml` 中标记 `x-deferred: true`，按轻量化规则仅维护需求与设计层（`proposal.md`、`specs/`、`design.md`），待正式开工时再移除 `x-deferred: true` 并基于当时真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`，不提前预生成或跨变更陪跑重审。
 
 ## 能力归属与阶段职责
 
