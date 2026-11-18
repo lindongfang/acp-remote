@@ -34,12 +34,12 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-struct SourceBoundary<S> {
-    scope: S,
-    source: Arc<SourceAuthority>,
-    resource: Option<Arc<ResourceAuthority>>,
-    kind: LifecycleKind,
-    rpc: RpcScalar,
+pub(super) struct SourceBoundary<S> {
+    pub(super) scope: S,
+    pub(super) source: Arc<SourceAuthority>,
+    pub(super) resource: Option<Arc<ResourceAuthority>>,
+    pub(super) kind: LifecycleKind,
+    pub(super) rpc: RpcScalar,
 }
 impl<S: Clone + Eq + Send + Sync + 'static> LifecycleWriteBoundary<S> for SourceBoundary<S> {
     fn check_and_poll(
@@ -179,6 +179,9 @@ where
                 observed_sequence: 0,
             }),
             targets: Mutex::new(HashMap::new()),
+            capacity: Mutex::new(HashMap::new()),
+            capacity_reservations: Arc::new(Mutex::new(Vec::new())),
+            capacity_activity: Mutex::new(super::capacity_activity::CapacityActivity::default()),
             external_reads: Mutex::new(HashMap::new()),
             all_resources: Mutex::new(Vec::new()),
             close_intent: OnceLock::new(),
@@ -201,6 +204,7 @@ where
             pump: OnceLock::new(),
             cleanup: OnceLock::new(),
             observations: Mutex::new(Vec::new()),
+            tree_observations: Mutex::new(Vec::new()),
             physical_closed: Mutex::new(None),
             owner_closed: Mutex::new(None),
             owner_witness: Mutex::new(None),
@@ -258,7 +262,7 @@ where
         self: &Arc<Self>,
         proof: crate::application::queue_owner::ReadTargetProof,
         read: Arc<super::read_source::ReadAcquisitionState<P>>,
-    ) -> Result<(Arc<SourceSlot<P, L>>, Arc<ResourceSlot<P>>), DispatchError>
+    ) -> Result<(), DispatchError>
     where
         G: super::ReadConfigurationPort,
     {
@@ -266,8 +270,31 @@ where
         self.queue.verify_read_target(&proof)?;
         let plan = self.configuration.resolve_read(&proof).await?;
         self.queue.verify_read_target(&proof)?;
+        if plan.target != proof.target()
+            || plan.native != *proof.native()
+            || plan.source_id != proof.native().source().0
+        {
+            return Err(DispatchError::InvalidConfiguration);
+        }
+        let path = self
+            .repository
+            .resolve_session_tree(proof.native(), &self.deadline()?)
+            .await?;
+        if !path.ancestors.is_empty() {
+            let subject = proof.native().clone();
+            self.ensure_child_read(
+                subject,
+                path,
+                Arc::new(plan.into_source()),
+                read,
+                move || proof.require_current(),
+            )
+            .await?;
+            return Ok(());
+        }
         self.ensure_planned_resource(ResourceTargetOrigin::Read(proof), plan, Some(read))
             .await
+            .map(|_| ())
     }
 
     pub(super) async fn ensure_source_read(
@@ -290,7 +317,24 @@ where
             return Err(DispatchError::InvalidConfiguration);
         }
         proof.require_current()?;
-        let source = self.ensure_source_slot(Arc::new(plan))?;
+        let path = match self
+            .repository
+            .resolve_session_tree(proof.native(), &self.deadline()?)
+            .await
+        {
+            Ok(path) => Some(path),
+            Err(DispatchError::SessionTreeUnverified) => None,
+            Err(error) => return Err(error),
+        };
+        if let Some(path) = path.filter(|path| !path.ancestors.is_empty()) {
+            let subject = proof.native().clone();
+            return self
+                .ensure_child_read(subject, path, Arc::new(plan), read, move || {
+                    proof.require_current()
+                })
+                .await;
+        }
+        let source = self.capacity_source(proof.native(), Arc::new(plan)).await?;
         let core = self.clone();
         let slot = source.clone();
         self.run_source_job(source, async move {
@@ -302,7 +346,13 @@ where
                     .memory
                     .lock()
                     .is_ok_and(|memory| memory.scope.is_none() && memory.initialized.is_none());
-                if bootstrap && !slot.pre.authority.closed.load(Ordering::Acquire) {
+                if bootstrap
+                    && !matches!(
+                        error,
+                        DispatchError::SessionCapacityFull | DispatchError::SessionTreeUnverified
+                    )
+                    && !slot.pre.authority.closed.load(Ordering::Acquire)
+                {
                     core.fail_source(&slot, *error);
                 }
             }
@@ -379,6 +429,7 @@ where
                 .lock()
                 .map_err(|_| DispatchError::Stopped)?
                 .get(proof.native())
+                .filter(|capability| capability.require_current().is_ok())
                 .cloned();
             if let Some(existing) = existing {
                 existing
@@ -409,20 +460,26 @@ where
                     &source.plan.configuration,
                     raw_setup,
                 )?);
-                let created = Arc::new(super::SourceReadCapability {
-                    kind: super::read_source::ReadTargetKind::SourceOnly,
-                    source: connection.clone(),
-                    pre_source: source.pre.clone(),
-                    pre_resource: None,
-                    native: proof.native().clone(),
-                    scope,
-                    binding,
-                    wire,
-                    setup,
-                    resume: None,
-                    changed: source.changed.clone(),
-                    view_handoff: Arc::downgrade(&source.view_attachment),
-                });
+                let capacity = self.capacity_resource(source, proof.native())?;
+                let created = Arc::new(super::SourceReadCapability::RootResource(
+                    super::read_source::RootReadCapability {
+                        kind: super::read_source::ReadTargetKind::SourceOnly,
+                        source: connection.clone(),
+                        pre_source: source.pre.clone(),
+                        pre_resource: Some(capacity.pre.clone()),
+                        capacity_admission: self.read_capacity(source, &capacity),
+                        capacity,
+                        native: proof.native().clone(),
+                        scope,
+                        binding,
+                        wire,
+                        setup,
+                        resume: OnceLock::new(),
+                        activation_lock: tokio::sync::Mutex::new(()),
+                        changed: source.changed.clone(),
+                        view_handoff: Arc::downgrade(&source.view_attachment),
+                    },
+                ));
                 let mut external_reads = source
                     .external_reads
                     .lock()
@@ -439,14 +496,6 @@ where
         Ok((source.clone(), capability))
     }
 
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Publish the original source inventory and its cleanup task slots as one installation operation."
-    )]
-    #[expect(
-        clippy::significant_drop_tightening,
-        reason = "The source inventory stays locked through stable cleanup task registration."
-    )]
     async fn ensure_planned_resource(
         self: &Arc<Self>,
         accepted: ResourceTargetOrigin,
@@ -460,184 +509,9 @@ where
             return Err(DispatchError::InvalidConfiguration);
         }
         accepted.require_current()?;
-        // A previous closure is not a restore authorization. New accepted work must not
-        // silently reopen the native target or replay the interrupted input.
-        {
-            let sources = self.sources.lock().map_err(|_| DispatchError::Stopped)?;
-            for source in &*sources {
-                let resources = source
-                    .all_resources
-                    .lock()
-                    .map_err(|_| DispatchError::Stopped)?;
-                if resources.iter().any(|resource| {
-                    resource.pre.native == *accepted.native()
-                        && resource.pre.authority.closed.load(Ordering::SeqCst)
-                }) {
-                    return Err(DispatchError::ResourceUnconfirmed);
-                }
-            }
-        }
-        let source = {
-            let mut sources = self.sources.lock().map_err(|_| DispatchError::Stopped)?;
-            self.running()?;
-            let existing = sources.clone();
-            let mut found = None;
-            for source in &existing {
-                if source.pre.authority.closed.load(Ordering::SeqCst)
-                    || source.pre.metadata().source_id != plan.source_id
-                    || source.plan.configuration.identity != plan.configuration.identity
-                    || source.plan.configuration.revision != plan.configuration.revision
-                    || !self.launcher.same_plan(&source.plan.launch, &plan.launch)
-                    || source.plan.setups.len() != plan.setups.len()
-                {
-                    continue;
-                }
-                let mut equal = true;
-                for (wire, setup) in &plan.setups {
-                    let Some((_, current)) = source.plan.setups.iter().find(|(v, _)| v == wire)
-                    else {
-                        equal = false;
-                        break;
-                    };
-                    if !self.protocol.setups_equal(current, setup)? {
-                        equal = false;
-                        break;
-                    }
-                }
-                if equal {
-                    found = Some(source.clone());
-                    break;
-                }
-            }
-
-            if let Some(source) = found {
-                source
-            } else {
-                if existing.iter().any(|source| {
-                    source.pre.metadata.source_id == plan.source_id
-                        && source.plan.configuration.identity == plan.configuration.identity
-                        && source.plan.configuration.revision == plan.configuration.revision
-                        && self.launcher.same_plan(&source.plan.launch, &plan.launch)
-                        && source
-                            .memory
-                            .lock()
-                            .map_or(true, |memory| memory.phase == SourcePhase::Unknown)
-                }) {
-                    return Err(DispatchError::ResourceUnconfirmed);
-                }
-                let now = self.clock.unix_millis();
-                let authority = Arc::new(SourceAuthority {
-                    closed: AtomicBool::new(false),
-                    closing: AtomicBool::new(false),
-                    quarantined: AtomicBool::new(false),
-                    required: std::sync::atomic::AtomicUsize::new(0),
-                    gate: Mutex::new(()),
-                    #[cfg(windows)]
-                    result_epochs: Mutex::new(Vec::new()),
-                });
-                let pre = Arc::new(PreSourceProbe {
-                    metadata: SourceMetadata {
-                        source_id: plan.source_id,
-                        instance_id: Self::new_id()?,
-                        runtime: self.runtime,
-                        connection_epoch: Self::new_id()?,
-                        config_identity: plan.configuration.identity,
-                        config_revision: plan.configuration.revision,
-                        owner_kind: self.launcher.owner_kind(),
-                        created_at_ms: now,
-                    },
-                    authority,
-                });
-                let (controller, permit) = SourceLaunchController::create();
-                let progress = Arc::new(super::tasks::CloseProgress::child(
-                    self.close_progress.clone(),
-                ));
-                let changed = Arc::new(tokio::sync::Notify::new());
-                let view_attachment = Arc::new(super::view_attachment::ViewAttachmentHandoff::new(
-                    changed.clone(),
-                ));
-                if self.view_factory.get().is_none() {
-                    view_attachment.disable(None);
-                }
-                let source = Arc::new(SourceSlot {
-                    pre,
-                    plan: Arc::new(plan.into_source()),
-                    recorded: AtomicBool::new(false),
-                    controller,
-                    launch_outcome: Mutex::new(None),
-                    permit: Mutex::new(Some(permit)),
-                    owned: Mutex::new(None),
-                    io: Mutex::new(None),
-                    source: OnceLock::new(),
-                    gate: OnceLock::new(),
-                    memory: Mutex::new(SourceMemory {
-                        phase: SourcePhase::Reserved,
-                        scope: None,
-                        binding: None,
-                        initialized: None,
-                        error: None,
-                        requirements: HashMap::new(),
-                        observed_sequence: 0,
-                    }),
-                    targets: Mutex::new(HashMap::new()),
-                    external_reads: Mutex::new(HashMap::new()),
-                    all_resources: Mutex::new(Vec::new()),
-                    close_intent: OnceLock::new(),
-                    close_deadline: Mutex::new(None),
-                    operations: Mutex::new(HashMap::new()),
-                    #[cfg(windows)]
-                    source_replies: Mutex::new(HashMap::new()),
-                    tasks: super::tasks::TaskRegistry::with_progress(progress.clone()),
-                    jobs: super::tasks::TaskRegistry::with_progress(progress.clone()),
-                    approval_recoveries: Mutex::new(Vec::new()),
-                    metadata_closer: OnceLock::new(),
-                    metadata_close: super::source_jobs::SourceCloseOperation::new(),
-                    progress,
-                    changed,
-                    view_attachment,
-                    install: tokio::sync::Mutex::new(()),
-                    close: tokio::sync::Mutex::new(()),
-                    raw: Mutex::new(Vec::new()),
-                    loss: Mutex::new(None),
-                    pump: OnceLock::new(),
-                    cleanup: OnceLock::new(),
-                    observations: Mutex::new(Vec::new()),
-                    physical_closed: Mutex::new(None),
-                    owner_closed: Mutex::new(None),
-                    owner_witness: Mutex::new(None),
-                    io_closed: Mutex::new(None),
-                    closure: Mutex::new(None),
-                    controls: Mutex::new(Vec::new()),
-                    control_staging: Mutex::new(Vec::new()),
-                    retired_runs: Mutex::new(Vec::new()),
-                    dispatches: Mutex::new(Vec::new()),
-                    dispatch_closures: Mutex::new(None),
-                    permissions: Mutex::new(HashMap::new()),
-                    prepared: Mutex::new(None),
-                    prepare_failure: Mutex::new(None),
-                    bound_record: Mutex::new(None),
-                    spawned_record: Mutex::new(None),
-                    failure_record: Mutex::new(None),
-                    initialize: Mutex::new(None),
-                });
-                if self.view_factory.get().is_some()
-                    && super::view_attachment::register_closer(
-                        &self.tasks,
-                        &source.view_attachment,
-                        &source.pre,
-                    )
-                    .is_err()
-                {
-                    source.view_attachment.disable(Some(
-                        crate::domain::shared_view::ViewError::CaptureUnavailable,
-                    ));
-                }
-                sources.push(source.clone());
-                self.start_source_cleanup(&source)?;
-                self.start_source_metadata_closer(&source)?;
-                source
-            }
-        };
+        let source = self
+            .capacity_source(accepted.native(), Arc::new(plan.into_source()))
+            .await?;
         let core = self.clone();
         let slot = source.clone();
         self.run_source_job(source, async move {
@@ -647,7 +521,13 @@ where
                     .memory
                     .lock()
                     .is_ok_and(|memory| memory.scope.is_none() && memory.initialized.is_none());
-                if bootstrap && !slot.pre.authority.closed.load(Ordering::Acquire) {
+                if bootstrap
+                    && !matches!(
+                        error,
+                        DispatchError::SessionCapacityFull | DispatchError::SessionTreeUnverified
+                    )
+                    && !slot.pre.authority.closed.load(Ordering::Acquire)
+                {
                     core.fail_source(&slot, *error);
                 }
             }
@@ -677,6 +557,21 @@ where
             .reserve_source(&source.pre, &deadline)
             .await?;
         source.recorded.store(true, Ordering::SeqCst);
+        let capacity = self.capacity_resource(source, accepted.native())?;
+        // Admission may close another tree on this same source. Retain the original
+        // reservation owner, but release the install lock across that coordination.
+        drop(install_guard);
+        self.reserve_native_capacity(source, &capacity).await?;
+        let install_guard = source.install.lock().await;
+        self.running()?;
+        accepted.require_current()?;
+        if source.pre.authority.closed.load(Ordering::Acquire)
+            || source.pre.authority.closing.load(Ordering::Acquire)
+            || capacity.pre.authority.closed.load(Ordering::Acquire)
+            || capacity.pre.authority.releasing.load(Ordering::Acquire)
+        {
+            return Err(DispatchError::ResourceUnconfirmed);
+        }
         let existing_resource = {
             source
                 .targets
@@ -698,11 +593,7 @@ where
                     reserved_at_ms: self.clock.unix_millis(),
                 },
                 native: accepted.native().clone(),
-                authority: Arc::new(ResourceAuthority {
-                    source: source.pre.authority.clone(),
-                    closed: AtomicBool::new(false),
-                    releasing: AtomicBool::new(false),
-                }),
+                authority: capacity.pre.authority.clone(),
             });
             let resource = Arc::new(ResourceSlot {
                 target: Arc::new(NativeTarget::new(pre.clone())),
@@ -1342,7 +1233,7 @@ where
         reason = "Keep the original load reservation/frame/ticket, native response and reliable Loaded transition in one owner operation."
     )]
     async fn load_resource(
-        &self,
+        self: &Arc<Self>,
         source: &Arc<SourceSlot<P, L>>,
         resource: &Arc<ResourceSlot<P>>,
         accepted: &ResourceTargetOrigin,
@@ -1437,21 +1328,27 @@ where
             *resource.load.lock().map_err(|_| DispatchError::Stopped)? = Some(operation.clone());
             operation
         };
+        let capacity = self.capacity_resource(source, resource.pre.native())?;
         let capability = resource.read_capability.get_or_init(|| {
-            Arc::new(super::SourceReadCapability {
-                kind: super::read_source::ReadTargetKind::Target,
-                source: connection.clone(),
-                pre_source: source.pre.clone(),
-                pre_resource: Some(resource.pre.clone()),
-                native: resource.pre.native.clone(),
-                scope: scope.clone(),
-                binding,
-                wire,
-                setup: setup.clone(),
-                resume: Some(operation.clone()),
-                changed: source.changed.clone(),
-                view_handoff: Arc::downgrade(&source.view_attachment),
-            })
+            Arc::new(super::SourceReadCapability::RootResource(
+                super::read_source::RootReadCapability {
+                    kind: super::read_source::ReadTargetKind::Target,
+                    source: connection.clone(),
+                    pre_source: source.pre.clone(),
+                    pre_resource: Some(resource.pre.clone()),
+                    capacity_admission: self.read_capacity(source, &capacity),
+                    capacity: capacity.clone(),
+                    native: resource.pre.native.clone(),
+                    scope: scope.clone(),
+                    binding,
+                    wire,
+                    setup: setup.clone(),
+                    resume: OnceLock::from(operation.clone()),
+                    activation_lock: tokio::sync::Mutex::new(()),
+                    changed: source.changed.clone(),
+                    view_handoff: Arc::downgrade(&source.view_attachment),
+                },
+            ))
         });
         if let Some(read) = read {
             read.publish(capability.clone())?;

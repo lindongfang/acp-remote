@@ -1,5 +1,6 @@
 import "./styles.css";
 import { managementRequestErrorMessage } from "./management/error-messages";
+import { sessionCapacityPanel } from "./management/session-capacity";
 
 import {
   CatalogActionError,
@@ -26,6 +27,7 @@ import {
   type ApprovalView,
   type NativeReleaseRegistered,
   type NativeReleaseStatus,
+  type SessionCapacity,
   type SessionQueueSnapshot,
   type SessionQueueEntry,
   type SessionViewOpened,
@@ -168,6 +170,7 @@ let approvalStatus: ApprovalStatus | null = null;
 let nativeReleaseTargetId: string | null = null;
 let nativeReleaseRegistration: NativeReleaseRegistered | null = null;
 let nativeReleaseStatus: NativeReleaseStatus | null = null;
+let sessionCapacity: SessionCapacity | null = null;
 let activeBodyRead: {
   readonly streamId: string;
   readonly reader: QueuedBodyReader;
@@ -639,6 +642,7 @@ async function openManagement(
   currentDevices = [];
   currentRevision = null;
   catalogInventory = null;
+  sessionCapacity = null;
   nextDeviceCursor = null;
   inspectedQueue = null;
   suspendSharedView();
@@ -904,6 +908,8 @@ function showManagementDashboard(
   }
   fragment.append(sessionQueuePanel(record));
   fragment.append(sessionApprovalPanel(record));
+  fragment.append(sessionCapacityPanel(document, sessionCapacity, management !== null,
+    (submit) => { void refreshSessionCapacity(record, submit); }));
   fragment.append(nativeReleasePanel(record));
   fragment.append(workspaceCatalogPanel(record));
   fragment.append(sourceSessionPanel(record));
@@ -1311,10 +1317,10 @@ function nativeReleasePanel(record: IdentityRecord): HTMLElement {
     );
   }
   const actions = element("div", "action-row");
-  const release = button("执行原生释放", "danger-button");
-  release.disabled =
-    nativeReleaseStatus?.state === "released" ||
-    nativeReleaseStatus?.state === "releasing";
+  const release = button(
+    nativeReleaseStatus?.state === "released" ? "重试释放协调" : "执行原生释放",
+    "danger-button",
+  );
   release.addEventListener("click", () => {
     release.disabled = true;
     void executeNativeRelease(record, release);
@@ -1550,6 +1556,7 @@ async function executeNativeRelease(
     );
     if (generation !== managementGeneration) return;
     nativeReleaseStatus = status;
+    sessionCapacity = null;
     showManagementDashboard(
       record,
       status.state === "released"
@@ -1564,6 +1571,25 @@ async function executeNativeRelease(
       undefined,
       `原生释放失败：${managementErrorMessage(error)}`,
     );
+  }
+}
+
+async function refreshSessionCapacity(
+  record: IdentityRecord, submit: HTMLButtonElement,
+): Promise<void> {
+  const connection = management;
+  const generation = managementGeneration;
+  if (connection === null) return;
+  try {
+    const capacity = await connection.inspectSessionCapacity();
+    if (generation !== managementGeneration) return;
+    sessionCapacity = capacity;
+    showManagementDashboard(record, "会话名额已从节点刷新。");
+  } catch (error) {
+    if (generation !== managementGeneration) return;
+    sessionCapacity = null;
+    submit.disabled = false;
+    showManagementDashboard(record, undefined, `名额读取失败：${managementErrorMessage(error)}`);
   }
 }
 

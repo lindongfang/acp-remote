@@ -20,10 +20,18 @@ use tokio::{
 mod lifecycle;
 mod observed;
 pub use observed::*;
+#[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+pub mod capacity_close_write_fault;
 mod reader;
 mod state;
 mod writer;
 use state::{Core, WriteCell};
+#[derive(Clone, Copy)]
+enum EnqueueMode {
+    Ordinary,
+    ObservedPrompt,
+    AutomaticClose,
+}
 #[derive(Clone)]
 pub struct ConnectionScope(Arc<()>);
 impl PartialEq for ConnectionScope {
@@ -354,6 +362,13 @@ pub enum UpdateOrigin {
     DuringResume,
     DuringReplay,
 }
+/// Temporal classification of an update, independent of its receipt read window.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UpdateFreshness {
+    Current,
+    History,
+    Unconfirmed,
+}
 #[derive(Clone, Debug)]
 pub enum Incoming {
     Response {
@@ -389,6 +404,7 @@ pub struct Received {
     sequence: u64,
     receipt_order: u64,
     incoming: Incoming,
+    update_freshness: Option<UpdateFreshness>,
     view_context: ViewReadContextKind,
     view_window: Option<ReceivedReadWindow>,
 }
@@ -434,6 +450,10 @@ impl ReceivedReadWindow {
     }
 }
 impl Received {
+    #[must_use]
+    pub const fn update_freshness(&self) -> Option<UpdateFreshness> {
+        self.update_freshness
+    }
     pub(crate) const fn view_read_context(&self) -> ViewReadContextKind {
         self.view_context
     }
@@ -594,7 +614,7 @@ impl Connection {
         frame: EncodedFrame,
         fence: Arc<dyn WriteFence>,
         write_deadline: Instant,
-        observed_prompt: bool,
+        mode: EnqueueMode,
     ) -> Result<WriteTicket, EnqueueError> {
         let mut state = self.core.lock();
         let error = if (state.observed
@@ -602,7 +622,7 @@ impl Connection {
                 reservation.kind(),
                 OutboundKind::Request(RequestKind::Prompt(_))
             )
-            && !observed_prompt)
+            && !matches!(mode, EnqueueMode::ObservedPrompt))
             || reservation.scope() != self.scope()
         {
             Some(AcpError::InvalidRequestScope)
@@ -631,11 +651,21 @@ impl Connection {
             });
         }
         reservation.cell.lock().progress = WriteProgress::Queued;
+        #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+        let capacity_close_fault = capacity_close_write_fault::claim(
+            &self.core,
+            &reservation.cell.identity,
+            matches!(mode, EnqueueMode::AutomaticClose),
+            frame.bytes.len(),
+        );
         state.queue.push_back(state::Command {
             cell: reservation.cell.clone(),
             bytes: frame.bytes,
             fence,
             deadline: write_deadline,
+            automatic_close: matches!(mode, EnqueueMode::AutomaticClose),
+            #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+            capacity_close_fault,
         });
         reservation.armed = false;
         let result = WriteTicket {

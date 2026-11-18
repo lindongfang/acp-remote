@@ -25,6 +25,7 @@ pub(crate) struct RouteMarker {
     pub version: u64,
     pub cut: u64,
     pub rpc: Option<super::read_control::RpcScalar>,
+    pub restore: Option<super::send_epoch::RestoredDisplayTarget>,
 }
 pub(crate) struct ReadCompleteMarker {
     pub key: NativeSessionKey,
@@ -356,6 +357,26 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SourceProducer<S, R>
         read: Option<ReadEpoch>,
         rpc: Option<super::read_control::RpcScalar>,
     ) -> Result<(u64, u64), ViewError> {
+        self.publish_route(key, read, rpc, None)
+    }
+    pub(crate) fn restore_route(
+        &mut self,
+        key: NativeSessionKey,
+        restored: super::send_epoch::RestoredDisplayTarget,
+    ) -> Result<(u64, u64), ViewError> {
+        self.publish_route(key, None, None, Some(restored))
+    }
+    #[allow(
+        clippy::needless_pass_by_ref_mut,
+        reason = "Only the exclusive producer publishes ordered capture markers"
+    )]
+    fn publish_route(
+        &mut self,
+        key: NativeSessionKey,
+        read: Option<ReadEpoch>,
+        rpc: Option<super::read_control::RpcScalar>,
+        restore: Option<super::send_epoch::RestoredDisplayTarget>,
+    ) -> Result<(u64, u64), ViewError> {
         if self.state.sealed.load(Ordering::Acquire) {
             return Err(ViewError::SourceReleased);
         }
@@ -402,6 +423,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SourceProducer<S, R>
             version,
             cut,
             rpc: rpc.clone(),
+            restore,
         }));
         if let (Some(read), Some(rpc)) = (read, rpc) {
             self.reads.push(ReadRoute {
@@ -717,6 +739,9 @@ impl<R> IngressProbe<R> {
     #[must_use]
     pub fn failure(&self) -> Option<ViewError> {
         self.state.error()
+    }
+    pub(crate) fn route_failure(&self) -> Option<ViewError> {
+        self.state.route_error()
     }
     /// Registers the notification before checking the actual processed frontier.
     /// # Errors

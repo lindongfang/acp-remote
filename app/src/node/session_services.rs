@@ -48,6 +48,11 @@ use crate::{
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 pub(super) mod queue_reads;
 
+pub struct SessionCapacityView {
+    pub(crate) resources: crate::application::native_dispatch::CapacitySnapshot,
+    pub(crate) automatic_recycling: bool,
+}
+
 pub(super) type ProductQueue = QueueService<
     NodeRequestAuthority,
     Arc<AcpNativeAdapter>,
@@ -377,14 +382,32 @@ impl NodeManagementSessionServices {
         match release.phase {
             NativeReleaseStoredPhase::Releasing => {}
             NativeReleaseStoredPhase::Registered => return Err(NativeReleaseError::Conflict),
-            NativeReleaseStoredPhase::Released | NativeReleaseStoredPhase::Failed => {
+            NativeReleaseStoredPhase::Released => {
+                let release = self
+                    .native_release_operations
+                    .finish(
+                        actor,
+                        operation,
+                        None,
+                        SystemNodeClock.unix_millis(),
+                        &deadline,
+                    )
+                    .await
+                    .map_err(NativeReleaseError::Registry)?;
+                return native_release_snapshot(release);
+            }
+            NativeReleaseStoredPhase::Failed => {
                 return native_release_snapshot(release);
             }
         }
-        RequestAuthority::resolve_target(&self.release_authority, release.target)
+        let native = RequestAuthority::resolve_target(&self.release_authority, release.target)
             .await
             .map_err(NativeReleaseError::Registry)?;
-        match self.native.release_target(release.target).await {
+        match self
+            .native
+            .release_native(operation, release.target, native)
+            .await
+        {
             Ok(()) => {
                 let finished = self
                     .native_release_operations
@@ -400,6 +423,18 @@ impl NodeManagementSessionServices {
                 native_release_snapshot(finished)
             }
             Err(error) => {
+                if matches!(
+                    error,
+                    DispatchError::StorageUnavailable
+                        | DispatchError::CommitUnconfirmed
+                        | DispatchError::SqlCloseUnconfirmed { .. }
+                        | DispatchError::ResourceUnconfirmed
+                        | DispatchError::RequiredStateUnavailable
+                ) {
+                    // The original runtime operation retains its close proof and owned work.
+                    // Keep the durable release retryable until those necessary facts converge.
+                    return Err(NativeReleaseError::Native(error));
+                }
                 let error_code = native_release_error_code(error);
                 self.native_release_operations
                     .finish(
@@ -414,6 +449,24 @@ impl NodeManagementSessionServices {
                 Err(NativeReleaseError::Native(error))
             }
         }
+    }
+    pub(crate) async fn session_capacity(
+        &self,
+        actor: &AuthenticatedActor,
+    ) -> Result<SessionCapacityView, NativeReleaseError> {
+        self.release_authority
+            .current(actor)
+            .await
+            .map_err(NativeReleaseError::Registry)?;
+        let resources = self
+            .native
+            .inspect_capacity()
+            .await
+            .map_err(NativeReleaseError::Native)?;
+        Ok(SessionCapacityView {
+            resources,
+            automatic_recycling: self.native.automatic_recycling_enabled(),
+        })
     }
     pub(crate) async fn native_release_status(
         &self,

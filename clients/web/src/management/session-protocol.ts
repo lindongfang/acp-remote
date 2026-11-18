@@ -567,6 +567,13 @@ export interface NativeReleaseRegistered {
   readonly targetId: string;
   readonly state: "registered";
 }
+export interface SessionCapacity {
+  readonly limit: number;
+  readonly occupied: number;
+  readonly reserved: number;
+  readonly closedPending: number;
+  readonly automaticRecycling: boolean;
+}
 
 export interface SourceLaunchSelectionInput {
   readonly sourceId: string;
@@ -1472,6 +1479,33 @@ export function parseNativeReleaseRegisterResult(
     }),
   );
 }
+export function parseSessionCapacity(value: JsonValue): SessionCapacity {
+  return responseResult(() => {
+    const count = (input: JsonValue | undefined): number => {
+      if (typeof input !== "number" || !Number.isSafeInteger(input) ||
+        input < 0 || input > 0xffff_ffff) {
+        throw new SessionProtocolError("invalid_frame");
+      }
+      return input;
+    };
+    const capacity = closed(value, {
+      limit: count,
+      occupied: count,
+      reserved: count,
+      closedPending: count,
+      automaticRecycling: (input) => {
+        if (typeof input !== "boolean") throw new SessionProtocolError("invalid_frame");
+        return input;
+      },
+    });
+    // Upgrade may retain more old resources than the new limit.
+    if (capacity.limit === 0 ||
+      capacity.reserved + capacity.closedPending > capacity.occupied) {
+      throw new SessionProtocolError("invalid_frame");
+    }
+    return capacity;
+  });
+}
 
 export function parseNativeReleaseStatusResult(
   value: JsonValue,
@@ -1875,6 +1909,7 @@ const SHAPES = {
     workspaceId: requireSessionId,
   },
   "catalog.inventory": {},
+  "session.capacity.inspect": {},
   "approval.list": {},
   "approval.read": { approvalId: requireSessionId },
   "approval.register": { approvalId: requireSessionId, choiceId: requireSessionId },

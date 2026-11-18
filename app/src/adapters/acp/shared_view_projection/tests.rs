@@ -312,6 +312,19 @@ async fn exercise(version: Version) {
         .capture_received(&event)
         .expect("capture candidate original");
     if version == Version::V2 {
+        pw.write_all(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"replay_complete"}}}"#).await.expect("replay boundary before mandatory current state");
+        pw.write_all(b"\n").await.expect("LF");
+        let marker = received
+            .next()
+            .await
+            .expect("actual marker parse")
+            .expect("actual marker");
+        capture.capture_received(&marker).expect("capture marker");
+        assert!(
+            !facts
+                .observe_received(&marker)
+                .expect("marker cannot complete RPC")
+        );
         pw.write_all(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"state_update","state":"idle"}}}"#).await.expect("mandatory native state");
         pw.write_all(b"\n").await.expect("LF");
         let event = received

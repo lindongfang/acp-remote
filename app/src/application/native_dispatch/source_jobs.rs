@@ -267,6 +267,7 @@ where
         } else {
             self.ensure_closed_approval_inventory(source)?;
             self.reconcile_source_observations(source).await?;
+            self.reconcile_tree_observations(source).await?;
             self.reconcile_source_lifecycle(source).await?;
             self.reconcile_approval_requests(source).await?;
             self.reconcile_source_controls(source).await?;
@@ -278,7 +279,38 @@ where
                     .await?;
             }
         }
-        self.persist_source_closed(source).await
+        self.persist_source_closed(source).await?;
+        // Only the original, fully reconciled source closure can abandon unknown
+        // Create/load responsibilities. Timeouts and process disappearance cannot.
+        let mut reservations = source
+            .capacity_reservations
+            .lock()
+            .map_err(|_| DispatchError::ResourceUnconfirmed)?
+            .clone();
+        {
+            let capacity = source
+                .capacity
+                .lock()
+                .map_err(|_| DispatchError::ResourceUnconfirmed)?;
+            for resource in capacity.values() {
+                if let Some(record) = resource
+                    .record
+                    .lock()
+                    .map_err(|_| DispatchError::ResourceUnconfirmed)?
+                    .as_ref()
+                {
+                    reservations.push(record.id);
+                }
+            }
+        }
+        reservations.sort_by_key(|id| id.encode());
+        reservations.dedup();
+        for id in reservations {
+            self.repository
+                .abandon_capacity(id, &source.pre, &self.deadline()?)
+                .await?;
+        }
+        Ok(())
     }
     fn cache_source_quiescence(
         source: &Arc<SourceSlot<P, L>>,

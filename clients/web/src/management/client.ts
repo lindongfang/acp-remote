@@ -45,6 +45,7 @@ import {
   parseInputUploadStatus,
   parseNativeReleaseRegisterResult,
   parseNativeReleaseStatusResult,
+  parseSessionCapacity,
   parseProductTargetRecord,
   parseSessionCommand,
   parseSessionConsumeResult,
@@ -79,6 +80,7 @@ import {
   type InputUploadStatus,
   type NativeReleaseRegistered,
   type NativeReleaseStatus,
+  type SessionCapacity,
   type ProductTargetRecord,
   type QueueMutationDto,
   type SessionConsumeResult,
@@ -1115,6 +1117,10 @@ export class ManagementConnection {
       throw new ManagementProtocolError("invalid_response");
     }
     return parsed;
+  }
+
+  async inspectSessionCapacity(): Promise<SessionCapacity> {
+    return this.#command("session.capacity.inspect", {}, parseSessionCapacity);
   }
 
   async inspectNativeReleaseStatus(

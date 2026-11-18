@@ -181,6 +181,9 @@ const fn registry_error(error: RegistryError) -> ViewError {
 }
 const fn dispatch_error(error: DispatchError) -> ViewError {
     match error {
+        DispatchError::SessionCapacityFull | DispatchError::SessionTreeUnverified => {
+            ViewError::NativeFailure(error)
+        }
         DispatchError::InvalidTarget => ViewError::InvalidTarget,
         DispatchError::InvalidSource => ViewError::InvalidSource,
         DispatchError::InvalidScope => ViewError::InvalidScope,
@@ -219,6 +222,7 @@ where
                 .acquire_read_source(proof, reason)
                 .map_err(dispatch_error)?;
             let capability = acquisition.source_capability().await?;
+            crate::adapters::acp::native_views::admit_replay_capacity(&capability).await?;
             self.authority.register_native_source(&capability)?;
             let attachment = capability.source().views().map_err(|_| {
                 capability
@@ -233,15 +237,18 @@ where
                 tokio::pin!(changed);
                 changed.as_mut().enable();
                 capability.require_current()?;
+                if let Some(error) = views.core.probe.route_failure() {
+                    return Err(error);
+                }
                 if views.core.probe.is_sealed() {
                     return Err(ViewError::SourceReleased);
                 }
                 match views.core.target(capability.native()) {
-                    Ok(_) => {
+                    Ok(target) if target.send.current()? => {
                         capability.require_current()?;
                         break;
                     }
-                    Err(ViewError::InvalidTarget) => {}
+                    Ok(_) | Err(ViewError::InvalidTarget) => {}
                     Err(error) => return Err(error),
                 }
                 tokio::select! {
@@ -284,6 +291,7 @@ where
                 .acquire_read_source(proof, reason)
                 .map_err(dispatch_error)?;
             let capability = acquisition.source_capability().await?;
+            crate::adapters::acp::native_views::admit_replay_capacity(&capability).await?;
             self.authority.register_native_source(&capability)?;
             let attachment = capability.source().views().map_err(|_| {
                 capability
@@ -298,15 +306,18 @@ where
                 tokio::pin!(changed);
                 changed.as_mut().enable();
                 capability.require_current()?;
+                if let Some(error) = views.core.probe.route_failure() {
+                    return Err(error);
+                }
                 if views.core.probe.is_sealed() {
                     return Err(ViewError::SourceReleased);
                 }
                 match views.core.target(capability.native()) {
-                    Ok(_) => {
+                    Ok(target) if target.send.current()? => {
                         capability.require_current()?;
                         break;
                     }
-                    Err(ViewError::InvalidTarget) => {}
+                    Ok(_) | Err(ViewError::InvalidTarget) => {}
                     Err(error) => return Err(error),
                 }
                 tokio::select! {
@@ -338,6 +349,7 @@ where
                 .acquire_source_read(proof, reason)
                 .map_err(dispatch_error)?;
             let capability = acquisition.source_capability().await?;
+            crate::adapters::acp::native_views::admit_replay_capacity(&capability).await?;
             self.authority.register_native_source(&capability)?;
             let attachment = capability.source().views().map_err(|_| {
                 capability
@@ -352,14 +364,18 @@ where
                 tokio::pin!(changed);
                 changed.as_mut().enable();
                 capability.require_current()?;
+                if let Some(error) = views.core.probe.route_failure() {
+                    return Err(error);
+                }
                 if views.core.probe.is_sealed() {
                     return Err(ViewError::SourceReleased);
                 }
                 match views.core.target(capability.native()) {
-                    Ok(_) => {
+                    Ok(target) if target.send.current()? => {
                         capability.require_current()?;
                         break;
                     }
+                    Ok(_) => {}
                     Err(ViewError::InvalidTarget) => {
                         if !external_bound {
                             attachment.ensure_external_target(capability.native().clone())?;

@@ -1547,6 +1547,15 @@ where
             digest.raw(&observation.persisted_fingerprint()?);
         }
         drop(observations);
+        let tree_observations = source
+            .tree_observations
+            .lock()
+            .map_err(|_| DispatchError::Stopped)?;
+        digest.length(tree_observations.len())?;
+        for observation in &*tree_observations {
+            digest.raw(&observation.persisted_fingerprint()?);
+        }
+        drop(tree_observations);
         let controls = source.controls.lock().map_err(|_| DispatchError::Stopped)?;
         digest.length(controls.len())?;
         for control in &*controls {

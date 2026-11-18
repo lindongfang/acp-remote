@@ -23,6 +23,8 @@ const REQUEST_ERROR_MESSAGES: Record<ManagementErrorCode, string> = {
   invalid_release: "原生释放登记身份无效或不存在。",
   release_failed: "原生释放操作失败。",
   release_unconfirmed: "原生释放结果未确认。",
+  session_capacity_full: "会话名额已满，节点未取得可用名额。请稍后重试，或显式释放不再需要的原生会话；关闭未确认时仍占用名额。",
+  session_tree_unverified: "节点尚不能确认该会话的主执行树归属，暂时无法加载。无需加载的查询仍可使用。",
   protocol_failure: "原生协议操作失败或不可用。",
   invalid_upload_state: "上传阶段或声明的正文长度与当前状态不一致。",
   upload_conflict: "上传内容或偏移存在冲突。",

@@ -1282,6 +1282,27 @@ where
         Ok(((reservation, frame), kind))
     })
     .await?;
+    if kind == SourceRequestKind::Create {
+        {
+            let mut reservations = source
+                .capacity_reservations
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?;
+            reservations
+                .try_reserve(1)
+                .map_err(|_| DispatchError::StorageUnavailable)?;
+            reservations.push(operation.registration.id.entity());
+        }
+        native
+            .core
+            .admit_capacity(&super::super::CapacityReservation {
+                id: operation.registration.id.entity(),
+                source: source.pre.clone(),
+                native: None,
+                create_operation: Some(operation.registration.id.entity()),
+            })
+            .await?;
+    }
     let rpc = reservation.rpc().clone();
     let scope = reservation.scope();
     let frame_length = frame.byte_len_checked()?;
@@ -1292,6 +1313,7 @@ where
         scope.clone(),
         rpc.clone(),
         kind,
+        wire,
         frame_length,
         tracking,
         native.core.environment.clone(),
@@ -1397,7 +1419,7 @@ where
     .await?;
     if matches!(transport, TransportFact::Zero { .. }) {
         cell.release_after_original_zero(&ticket)?;
-        return write_fact(
+        let fact = write_fact(
             native,
             operation,
             access,
@@ -1407,7 +1429,19 @@ where
             },
             SourceSqlRole::Finish,
         )
-        .await;
+        .await?;
+        if kind == SourceRequestKind::Create {
+            native
+                .core
+                .repository
+                .abandon_capacity(
+                    operation.registration.id.entity(),
+                    &source.pre,
+                    &native.core.deadline()?,
+                )
+                .await?;
+        }
+        return Ok(fact);
     }
     loop {
         let changed = cell.changed.notified();
@@ -1427,6 +1461,9 @@ where
                 SourceSqlRole::Response,
             )
             .await?;
+            if kind == SourceRequestKind::Create && cell.tree_unverified() {
+                return Err(DispatchError::SessionTreeUnverified.into());
+            }
             let (outcome, failure) = if cell.ownership_failed() {
                 (
                     SourceSessionOutcome::Unknown,
@@ -1442,6 +1479,48 @@ where
             } else {
                 (SourceSessionOutcome::Succeeded, None)
             };
+            if kind == SourceRequestKind::Create
+                && outcome == SourceSessionOutcome::Succeeded
+                && response.kind == SourceResponseKind::Created
+            {
+                let key = crate::domain::native::NativeSessionKey::from_config(
+                    Some(source.pre.metadata.source_id),
+                    response
+                        .native_session_id
+                        .as_deref()
+                        .ok_or(DispatchError::InvalidTarget)?,
+                )
+                .map_err(|_| DispatchError::InvalidTarget)?;
+                let record = native
+                    .core
+                    .repository
+                    .bind_created_capacity(
+                        operation.registration.id.entity(),
+                        &key,
+                        &source.pre,
+                        &native.core.deadline()?,
+                    )
+                    .await?;
+                let capacity = native.core.capacity_resource(&source, &key)?;
+                *capacity.record.lock().map_err(|_| DispatchError::Stopped)? = Some(record);
+                let mut activity = source
+                    .capacity_activity
+                    .lock()
+                    .map_err(|_| DispatchError::Stopped)?;
+                activity.created(key.native_id(), wire, std::time::Instant::now());
+                activity.verify_root(key.native_id())?;
+                let _gate = source
+                    .pre
+                    .authority
+                    .gate
+                    .lock()
+                    .map_err(|_| DispatchError::Stopped)?;
+                source
+                    .pre
+                    .authority
+                    .quarantined
+                    .store(activity.has_unowned(), std::sync::atomic::Ordering::Release);
+            }
             return write_fact(
                 native,
                 operation,

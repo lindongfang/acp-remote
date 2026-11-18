@@ -1,11 +1,14 @@
 //! Supported structures and additive schema migration.
 use super::approval_owner_schema;
+use super::automatic_capacity_release_schema;
 use super::management_audit_schema;
 use super::native_dispatch_schema;
 use super::native_release_schema;
 use super::node_catalog_schema;
 use super::product_schema;
 use super::registration_schema;
+use super::session_capacity_schema;
+use super::session_tree_schema;
 use super::source_sessions_schema;
 use crate::domain::EntityId;
 use crate::domain::management_audit::AuditStoreError;
@@ -113,6 +116,9 @@ async fn validate_required_triggers(connection: &mut SqliteConnection) -> Result
         .chain(native_dispatch_schema::DEFINITIONS)
         .chain(native_release_schema::DEFINITIONS)
         .chain(source_sessions_schema::DEFINITIONS)
+        .chain(session_capacity_schema::DEFINITIONS)
+        .chain(automatic_capacity_release_schema::DEFINITIONS)
+        .chain(session_tree_schema::DEFINITIONS)
         .chain(approval_owner_schema::NECESSARY)
     {
         if let Some(table) = required_table(definition) {
@@ -230,7 +236,10 @@ async fn validate(connection: &mut SqliteConnection, current: i64) -> Result<(),
         return Err(StorageError::UnknownSchema(current));
     }
     node_catalog_schema::validate(connection, current).await?;
+    automatic_capacity_release_schema::validate(connection, current).await?;
+    session_tree_schema::validate(connection, current).await?;
     if current == 0 {
+        session_capacity_schema::validate(connection, current).await?;
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
         )
@@ -255,6 +264,7 @@ async fn validate(connection: &mut SqliteConnection, current: i64) -> Result<(),
     validate_approval_layout(connection, current).await?;
     validate_native_release_layout(connection, current).await?;
     source_sessions_schema::validate(connection, current).await?;
+    session_capacity_schema::validate(connection, current).await?;
     let versions: Vec<i64> = sqlx::query_scalar("SELECT schema_version FROM node_meta")
         .fetch_all(&mut *connection)
         .await?;
@@ -293,6 +303,15 @@ async fn validate_empty_identity(
     }
     if current >= 11 {
         source_sessions_schema::require_empty(connection).await?;
+    }
+    if current >= 12 {
+        session_capacity_schema::require_empty(connection).await?;
+    }
+    if current >= 13 {
+        automatic_capacity_release_schema::require_empty(connection).await?;
+    }
+    if current >= 14 {
+        session_tree_schema::require_empty(connection).await?;
     }
     if current >= 8 {
         validate_approval_audit(connection)
@@ -684,6 +703,16 @@ pub enum MigrationFault {
     SourceMetadata,
     SourcePragma,
     SourceValidationAfter,
+    CapacityDdl,
+    CapacityRecovery,
+    CapacityMetadata,
+    CapacityPragma,
+    AutomaticReleaseDdl(u8),
+    AutomaticReleaseMetadata,
+    AutomaticReleasePragma,
+    SessionTreeDdl,
+    SessionTreeMetadata,
+    SessionTreePragma,
     ApprovalDdlBefore(u8),
     ApprovalDdlAfter(u8),
     ApprovalMetadata,
@@ -993,6 +1022,70 @@ async fn initialize_inner(
         sqlx::query("PRAGMA main.user_version=11")
             .execute(&mut *transaction)
             .await?;
+    }
+    if current < 12 {
+        for definition in session_capacity_schema::DEFINITIONS {
+            sqlx::query(definition).execute(&mut *transaction).await?;
+        }
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::CapacityDdl)?;
+        session_capacity_schema::recover_legacy(&mut transaction).await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::CapacityRecovery)?;
+        sqlx::query("UPDATE main.node_meta SET schema_version=12")
+            .execute(&mut *transaction)
+            .await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::CapacityMetadata)?;
+        sqlx::query("PRAGMA main.user_version=12")
+            .execute(&mut *transaction)
+            .await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::CapacityPragma)?;
+    }
+    if current < 13 {
+        for (index, definition) in automatic_capacity_release_schema::DEFINITIONS
+            .iter()
+            .enumerate()
+        {
+            sqlx::query(definition).execute(&mut *transaction).await?;
+            #[cfg(test)]
+            checkpoint(
+                fault,
+                MigrationFault::AutomaticReleaseDdl(
+                    u8::try_from(index).map_err(|_| StorageError::UnrecognizedSchema)?,
+                ),
+            )?;
+            #[cfg(not(test))]
+            let _ = index;
+        }
+        sqlx::query("UPDATE main.node_meta SET schema_version=13")
+            .execute(&mut *transaction)
+            .await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::AutomaticReleaseMetadata)?;
+        sqlx::query("PRAGMA main.user_version=13")
+            .execute(&mut *transaction)
+            .await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::AutomaticReleasePragma)?;
+    }
+    if current < 14 {
+        for definition in session_tree_schema::DEFINITIONS {
+            sqlx::query(definition).execute(&mut *transaction).await?;
+        }
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::SessionTreeDdl)?;
+        sqlx::query("UPDATE main.node_meta SET schema_version=14")
+            .execute(&mut *transaction)
+            .await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::SessionTreeMetadata)?;
+        sqlx::query("PRAGMA main.user_version=14")
+            .execute(&mut *transaction)
+            .await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::SessionTreePragma)?;
     }
     #[cfg(test)]
     checkpoint(fault, MigrationFault::Validation)?;

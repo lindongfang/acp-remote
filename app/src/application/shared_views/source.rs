@@ -1,4 +1,6 @@
 //! One actual connection's shared current/candidate views, driven only by its FIFO worker.
+#[cfg(test)]
+mod capacity_development_tests;
 use super::{
     RetainedRaw,
     indexed_journal::{IndexedJournal, JournalSnapshot, ProjectionEnvelope, ViewProjector},
@@ -597,6 +599,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
         key: &NativeSessionKey,
         read: Option<ReadEpoch>,
         rpc: Option<super::read_control::RpcScalar>,
+        restored: Option<&super::send_epoch::RestoredDisplayTarget>,
     ) -> Result<GenerationWorker<R>, ViewError> {
         if key.source() != self.core.source {
             return Err(ViewError::InvalidTarget);
@@ -663,7 +666,16 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
             segments: segments.snapshot()?,
         });
         let published = Arc::new(TargetGeneration {
-            send: self.core.send.view_for_target(descriptor.epoch, key)?,
+            send: match restored {
+                Some(restored) => restored.view(&self.core.send, descriptor.epoch)?,
+                None => match self.targets.get(key) {
+                    Some(target) => target.current.published.send.next_epoch(descriptor.epoch),
+                    None => self
+                        .core
+                        .send
+                        .original_view_for_target(descriptor.epoch, key)?,
+                },
+            },
             snapshot: RwLock::new(snapshot),
         });
         Ok(GenerationWorker {
@@ -797,38 +809,53 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
     }
     fn ensure_target(&mut self, key: &NativeSessionKey) -> Result<(), ViewError> {
         if !self.targets.contains_key(key) {
-            let current = self.generation(key, None, None)?;
-            self.targets
-                .try_reserve(1)
-                .map_err(|_| ViewError::AllocationFailure)?;
-            let index = self.catalog.append(TargetPublication {
-                key: key.clone(),
-                current: RwLock::new(Arc::clone(&current.published)),
-                candidate: RwLock::new(std::sync::Weak::new()),
-                candidate_failure: RwLock::new(None),
-            })?;
-            let published = self.catalog.snapshot()?.get(index)?;
-            self.targets.insert(
-                key.clone(),
-                TargetWorker {
-                    published,
-                    current,
-                    candidate: None,
-                    live: None,
-                    separate_live: false,
-                },
-            );
-            *self
-                .core
-                .catalog
-                .write()
-                .map_err(|_| ViewError::ReadFailure)? = Some(self.catalog.snapshot()?);
+            let current = self.generation(key, None, None, None)?;
+            self.install_target(key, current)?;
         }
+        Ok(())
+    }
+    fn install_target(
+        &mut self,
+        key: &NativeSessionKey,
+        current: GenerationWorker<R>,
+    ) -> Result<(), ViewError> {
+        self.targets
+            .try_reserve(1)
+            .map_err(|_| ViewError::AllocationFailure)?;
+        let index = self.catalog.append(TargetPublication {
+            key: key.clone(),
+            current: RwLock::new(Arc::clone(&current.published)),
+            candidate: RwLock::new(std::sync::Weak::new()),
+            candidate_failure: RwLock::new(None),
+        })?;
+        let published = self.catalog.snapshot()?.get(index)?;
+        self.targets.insert(
+            key.clone(),
+            TargetWorker {
+                published,
+                current,
+                candidate: None,
+                live: None,
+                separate_live: false,
+            },
+        );
+        *self
+            .core
+            .catalog
+            .write()
+            .map_err(|_| ViewError::ReadFailure)? = Some(self.catalog.snapshot()?);
         Ok(())
     }
     fn bind(&mut self, marker: RouteMarker) -> Result<(), ViewError> {
         if marker.key.source() != self.core.source {
             return Err(ViewError::InvalidTarget);
+        }
+        if let Some(restored) = marker.restore {
+            let result = self.restore_generation(&marker.key, &restored);
+            if result.is_err() {
+                restored.seal()?;
+            }
+            return result;
         }
         if self
             .targets
@@ -844,7 +871,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
             target.separate_live = true;
         }
         let mut candidate = if marker.read.is_some() {
-            Some(self.generation(&marker.key, marker.read, marker.rpc)?)
+            Some(self.generation(&marker.key, marker.read, marker.rpc, None)?)
         } else {
             None
         };
@@ -915,6 +942,51 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
                 Self::route_record(&self.core, target, record, &records, self.revision)?;
             }
         }
+        Ok(())
+    }
+    /// Only an explicitly admitted restore publishes this marker into the original FIFO.
+    /// Retired generations retain their sealed send flags and original journals.
+    fn restore_generation(
+        &mut self,
+        key: &NativeSessionKey,
+        restored: &super::send_epoch::RestoredDisplayTarget,
+    ) -> Result<(), ViewError> {
+        let current = self.generation(key, None, None, Some(restored))?;
+        if !self.targets.contains_key(key) {
+            return self.install_target(key, current);
+        }
+        self.retired
+            .try_reserve(2)
+            .map_err(|_| ViewError::AllocationFailure)?;
+        let target = self.targets.get_mut(key).ok_or(ViewError::InvalidTarget)?;
+        let mut published = target
+            .published
+            .current
+            .write()
+            .map_err(|_| ViewError::ReadFailure)?;
+        let mut candidate = target
+            .published
+            .candidate
+            .write()
+            .map_err(|_| ViewError::ReadFailure)?;
+        let mut failure = target
+            .published
+            .candidate_failure
+            .write()
+            .map_err(|_| ViewError::ReadFailure)?;
+        *published = Arc::clone(&current.published);
+        *candidate = std::sync::Weak::new();
+        *failure = None;
+        drop(failure);
+        drop(candidate);
+        drop(published);
+        self.retired
+            .push(std::mem::replace(&mut target.current, current));
+        if let Some(old) = target.candidate.take() {
+            self.retired.push(old);
+        }
+        target.live = None;
+        target.separate_live = false;
         Ok(())
     }
     fn belongs(record: &SourceRecord<R>, generation: &GenerationWorker<R>) -> bool {

@@ -1345,6 +1345,14 @@ where
                 .as_ref()
                 .and_then(|rpc| source.permissions.lock().ok()?.get(rpc).cloned())
                 .ok_or(DispatchError::InvalidScope)?;
+            if fact == TransportFact::Written {
+                source
+                    .capacity_activity
+                    .lock()
+                    .map_err(|_| DispatchError::RequiredStateUnavailable)?
+                    .touch(&request.session, std::time::Instant::now())
+                    .map_err(|_| DispatchError::ObservationOrder)?;
+            }
             let mut state = request
                 .state
                 .lock()

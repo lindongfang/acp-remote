@@ -165,6 +165,7 @@ async fn reply_read(h: &mut Harness, failed: bool) {
         .expect("typed RPC");
     h.send(NEW_RAW).await;
     if !failed {
+        h.end_history("control-session").await;
         h.send(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"control-session","update":{"sessionUpdate":"state_update","state":"idle"}}}"#).await;
     }
     let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();

@@ -17,6 +17,15 @@ async fn pool() -> Result<sqlx::SqlitePool, sqlx::Error> {
 }
 async fn synthetic_eight(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
     schema::initialize(pool).await?;
+    super::super::automatic_capacity_release_schema::remove_owned_fixture_for_test(pool).await;
+    sqlx::query("DROP TABLE main.node_session_capacity_releases")
+        .execute(pool)
+        .await
+        .expect("remove generated capacity associations");
+    sqlx::query("DROP TABLE main.node_session_capacity")
+        .execute(pool)
+        .await
+        .expect("remove generated capacity fixture");
     for index in (0..super::super::source_sessions_schema::DEFINITIONS.len()).rev() {
         let definition = super::super::source_sessions_schema::DEFINITIONS[index];
         if definition.starts_with("CREATE INDEX") {

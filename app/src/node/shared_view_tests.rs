@@ -548,9 +548,11 @@ async fn shared_view_actual_local_peer_credit_flush_seals_and_revocation() {
     );
     drop((writer, reader, peer));
 
-    for which in 0..3 {
+    for which in 0..4 {
         let group = OwnedDisplaySendGroup::new();
-        let view = group.view(ViewEpoch::fresh().expect("epoch"));
+        let view = group
+            .view_for_target(ViewEpoch::fresh().expect("epoch"), &key)
+            .expect("target view");
         let stream = view.open(binding.clone()).expect("stream");
         let (endpoint, mut peer) = tokio::io::duplex(128);
         let (mut writer, mut reader) = stream
@@ -583,7 +585,17 @@ async fn shared_view_actual_local_peer_credit_flush_seals_and_revocation() {
         match which {
             0 => group.seal().expect("group seal"),
             1 => view.seal().expect("view seal"),
-            _ => stream.seal().expect("stream seal"),
+            2 => stream.seal().expect("stream seal"),
+            _ => {
+                group.seal_target(&key).expect("close original target");
+                group.restore_target(&key).expect("explicit restored load");
+                let restored = group
+                    .view_for_target(ViewEpoch::fresh().expect("epoch"), &key)
+                    .expect("restored generation");
+                assert!(restored.current().expect("new generation current"));
+                assert!(!view.current().expect("original stays closed"));
+                assert!(!stream.view_current().expect("old stream stays closed"));
+            }
         }
         assert_eq!(
             writer

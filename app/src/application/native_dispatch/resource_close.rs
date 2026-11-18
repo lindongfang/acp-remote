@@ -107,10 +107,49 @@ where
             }
         }
         let (source, resource) = found.ok_or(DispatchError::InvalidResource)?;
+        let capacity = source
+            .capacity
+            .lock()
+            .map_err(|_| DispatchError::Stopped)?
+            .get(resource.pre.native())
+            .filter(|capacity| Arc::ptr_eq(&capacity.pre.authority, &resource.pre.authority))
+            .cloned();
+        let capacity = if let Some(capacity) = capacity {
+            let record = capacity
+                .record
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?
+                .clone()
+                .ok_or(DispatchError::ResourceUnconfirmed)?;
+            Some((capacity, record))
+        } else {
+            None
+        };
         let core = self.clone();
         let slot = source.clone();
         self.run_source_job(source, async move {
-            core.release_installed_target(&slot, &resource).await
+            if let Some((capacity, record)) = capacity {
+                let deadline = core.effective_close_deadline(&slot)?;
+                let _admission = loop {
+                    let guard = tokio::time::timeout_at(deadline, capacity.close.lock())
+                        .await
+                        .map_err(|_| DispatchError::ResourceUnconfirmed)?;
+                    let Some(reason) = super::capacity_automatic::retained_reason(&capacity)?
+                    else {
+                        break guard;
+                    };
+                    drop(guard);
+                    if core.automatic_release(&slot, &capacity, reason).await? {
+                        return Ok(());
+                    }
+                };
+                core.release_installed_target(&slot, &resource).await?;
+                core.join_capacity_reads(&slot, &capacity).await?;
+                core.capacity_closed(&capacity, &record).await?;
+            } else {
+                core.release_installed_target(&slot, &resource).await?;
+            }
+            Ok(())
         })
         .await
     }
@@ -118,11 +157,23 @@ where
         clippy::too_many_lines,
         reason = "The original resource close operation retains its scope, protocol response and release evidence across all stages."
     )]
-    async fn release_installed_target(
+    pub(super) async fn release_installed_target(
         self: &Arc<Self>,
         source: &Arc<SourceSlot<P, L>>,
         resource: &Arc<ResourceSlot<P>>,
     ) -> Result<(), DispatchError> {
+        let has_capacity_owner = source
+            .capacity
+            .lock()
+            .map_err(|_| DispatchError::Stopped)?
+            .get(resource.pre.native())
+            .is_some_and(|capacity| {
+                Arc::ptr_eq(&capacity.pre.authority, &resource.pre.authority)
+                    && capacity
+                        .record
+                        .lock()
+                        .map_or(true, |record| record.is_some())
+            });
         let deadline = self.effective_close_deadline(source)?;
         let _close = tokio::time::timeout_at(deadline, resource.close.lock())
             .await
@@ -293,7 +344,9 @@ where
             }
             match fact {
                 TransportFact::Zero { .. } => {
-                    return self.abandon_unloaded_resource(source, resource).await;
+                    if !has_capacity_owner {
+                        return self.abandon_unloaded_resource(source, resource).await;
+                    }
                 }
                 TransportFact::Written => {
                     let response =
@@ -307,7 +360,7 @@ where
                 }
                 TransportFact::Unknown { .. } => return Err(DispatchError::ResourceUnconfirmed),
             }
-        } else if resource.loaded.get().is_none() {
+        } else if resource.loaded.get().is_none() && !has_capacity_owner {
             return self.abandon_unloaded_resource(source, resource).await;
         }
         tokio::time::timeout_at(deadline, self.close_resource_controls(source, resource))
@@ -430,6 +483,71 @@ where
         {
             return Err(DispatchError::ResourceUnconfirmed);
         }
+        self.record_confirmed_resource_close(source, resource, &response)
+            .await?;
+        drop(run_guard);
+        self.retire_converged_run(source, resource, None).await?;
+        self.environment
+            .retire_closed_target(resource.pre.native(), &resource.target);
+        Ok(())
+    }
+    pub(super) async fn record_confirmed_resource_close(
+        &self,
+        source: &Arc<SourceSlot<P, L>>,
+        resource: &Arc<ResourceSlot<P>>,
+        response: &LifecycleResponse,
+    ) -> Result<(), DispatchError> {
+        self.record_confirmed_tree_resource_close(source, resource, response, resource.pre.native())
+            .await
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Keep the original Closed response and sequential durable convergence evidence together"
+    )]
+    pub(super) async fn record_confirmed_tree_resource_close(
+        &self,
+        source: &Arc<SourceSlot<P, L>>,
+        resource: &Arc<ResourceSlot<P>>,
+        response: &LifecycleResponse,
+        closed_root: &super::NativeSessionKey,
+    ) -> Result<(), DispatchError> {
+        if closed_root.source().0 != source.pre.metadata.source_id
+            || resource.pre.metadata.source != source.pre.metadata
+        {
+            return Err(DispatchError::InvalidSource);
+        }
+        if closed_root != resource.pre.native()
+            && !source
+                .capacity_activity
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?
+                .members(closed_root.native_id())?
+                .iter()
+                .any(|member| member.as_ref() == resource.pre.native.native_id())
+        {
+            return Err(DispatchError::SessionTreeUnverified);
+        }
+        if !matches!(&response.value, LifecycleResponseValue::Closed(session)
+            if session.as_ref() == closed_root.native_id())
+        {
+            return Err(DispatchError::ResourceUnconfirmed);
+        }
+        let releasing = {
+            let mut proof = resource
+                .releasing_record
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?;
+            proof
+                .get_or_insert_with(|| {
+                    Arc::new(ResourceStateProof {
+                        resource: resource.pre.clone(),
+                        state: ResourceLifecycle::Releasing,
+                        at: self.clock.unix_millis(),
+                    })
+                })
+                .clone()
+        };
         self.reconcile_resource_observations(source, resource)
             .await?;
         self.reconcile_resource_controls(source, resource).await?;
@@ -445,9 +563,13 @@ where
             if !facts.requirements.is_empty()
                 || !facts.failed_requirements.is_empty()
                 || !facts.control_holds.is_empty()
-                || !facts.permissions.is_empty()
             {
                 return Err(DispatchError::ResourceUnconfirmed);
+            }
+            for permission in facts.permissions.values() {
+                if !super::capacity_automatic::permission_settled(permission)? {
+                    return Err(DispatchError::ResourceUnconfirmed);
+                }
             }
         }
         // All ordinary input was sealed before close. The original close reply, not an idle flag, is evidence.
@@ -527,10 +649,6 @@ where
             .await?;
         resource.pre.authority.closed.store(true, Ordering::SeqCst);
         source.view_attachment.seal_target(resource.pre.native());
-        drop(run_guard);
-        self.retire_converged_run(source, resource, None).await?;
-        self.environment
-            .retire_closed_target(resource.pre.native(), &resource.target);
         Ok(())
     }
     async fn abandon_unloaded_resource(
@@ -606,11 +724,11 @@ where
         Ok(())
     }
 }
-struct ResourceCloseBoundary<S> {
-    scope: S,
-    rpc: RpcScalar,
-    source: Arc<SourceAuthority>,
-    resource: Arc<ResourceAuthority>,
+pub(super) struct ResourceCloseBoundary<S> {
+    pub(super) scope: S,
+    pub(super) rpc: RpcScalar,
+    pub(super) source: Arc<SourceAuthority>,
+    pub(super) resource: Arc<ResourceAuthority>,
 }
 impl<S: Clone + Eq + Send + Sync + 'static> LifecycleWriteBoundary<S> for ResourceCloseBoundary<S> {
     fn check_and_poll(

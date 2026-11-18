@@ -131,7 +131,13 @@ impl Connection {
         fence: Arc<dyn WriteFence>,
         deadline: Instant,
     ) -> Result<WriteTicket, EnqueueError> {
-        self.enqueue_inner(reservation, frame, fence, deadline, false)
+        self.enqueue_inner(
+            reservation,
+            frame,
+            fence,
+            deadline,
+            super::EnqueueMode::Ordinary,
+        )
     }
     /// # Errors
     /// Rejects a gate from another Core and returns the original reservation/frame.
@@ -150,7 +156,43 @@ impl Connection {
                 frame,
             });
         }
-        self.enqueue_inner(reservation, frame, fence, deadline, true)
+        self.enqueue_inner(
+            reservation,
+            frame,
+            fence,
+            deadline,
+            super::EnqueueMode::ObservedPrompt,
+        )
+    }
+    /// # Errors
+    /// Returns the original close inputs if the original observation gate is foreign.
+    pub(crate) fn enqueue_automatic_close(
+        &self,
+        reservation: Reservation,
+        frame: EncodedFrame,
+        fence: Arc<dyn WriteFence>,
+        deadline: Instant,
+        gate: &ObservedWriteGate,
+    ) -> Result<WriteTicket, EnqueueError> {
+        if !Arc::ptr_eq(&self.core, &gate.core)
+            || !matches!(
+                reservation.kind(),
+                super::OutboundKind::Request(super::RequestKind::Close(_))
+            )
+        {
+            return Err(EnqueueError {
+                error: AcpError::InvalidRequestScope,
+                reservation,
+                frame,
+            });
+        }
+        self.enqueue_inner(
+            reservation,
+            frame,
+            fence,
+            deadline,
+            super::EnqueueMode::AutomaticClose,
+        )
     }
 }
 impl ObservedStart {

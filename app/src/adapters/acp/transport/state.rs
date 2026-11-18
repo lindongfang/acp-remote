@@ -28,6 +28,12 @@ pub(super) struct Core {
     pub installation_notify: Notify,
     #[cfg(test)]
     pub hooks: Option<Arc<super::AcpObservationHooks>>,
+    #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+    pub capacity_close_fault:
+        Mutex<Option<Arc<super::capacity_close_write_fault::CloseWriteFault>>>,
+    #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+    pub capacity_resume_fault:
+        Mutex<Option<Arc<super::capacity_close_write_fault::ResumeEnqueueFault>>>,
 }
 pub(super) struct TaskSlot {
     pub handle: AsyncMutex<Option<JoinHandle<()>>>,
@@ -103,12 +109,16 @@ pub(super) struct Command {
     pub bytes: Vec<u8>,
     pub fence: Arc<dyn WriteFence>,
     pub deadline: Instant,
+    pub automatic_close: bool,
+    #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+    pub capacity_close_fault: Option<Arc<super::capacity_close_write_fault::CloseWriteFault>>,
 }
 pub(super) struct Pending {
     pub cell: Arc<WriteCell>,
     pub kind: RequestKind,
     pub deadline: ResponseDeadline,
     pub snapshot: bool,
+    pub replay_complete: bool,
     pub accepted: bool,
 }
 #[derive(Clone, Copy)]
@@ -248,6 +258,7 @@ impl State {
                 kind: request.kind,
                 deadline,
                 snapshot: false,
+                replay_complete: false,
                 accepted: false,
             },
         );
@@ -514,6 +525,7 @@ impl State {
             sequence: self.sequence,
             receipt_order: cut.order,
             incoming,
+            update_freshness: None,
             view_context: super::ViewReadContextKind::OutsideReadWindow,
             view_window: None,
         });

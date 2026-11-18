@@ -501,6 +501,7 @@ pub struct SourceReplyBinding<S> {
     kind: SourceRequestKind,
     sequence: u64,
     receipt: u64,
+    wire: super::ProtocolVersion,
 }
 impl<S> SourceReplyBinding<S> {
     pub(crate) const fn scope(&self) -> &S {
@@ -518,9 +519,13 @@ impl<S> SourceReplyBinding<S> {
     pub(crate) const fn receipt(&self) -> u64 {
         self.receipt
     }
+    pub(crate) const fn wire(&self) -> super::ProtocolVersion {
+        self.wire
+    }
 }
 pub enum SourceObservedResponse {
     Created(std::sync::Arc<str>),
+    UnverifiedCreated(std::sync::Arc<str>),
     Sessions,
     RemoteError(i64),
 }

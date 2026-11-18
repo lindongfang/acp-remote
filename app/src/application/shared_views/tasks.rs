@@ -1,9 +1,9 @@
 //! Registered view tasks and blocking destruction, with cancel-safe joins.
-use crate::domain::shared_view::ViewError;
+use crate::domain::{native::NativeSessionKey, shared_view::ViewError};
 use std::{
     future::Future,
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -13,6 +13,9 @@ use tokio::{
     task::JoinHandle,
     time::{Instant, timeout_at},
 };
+#[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+#[path = "capacity_registration_race_hook.rs"]
+pub mod capacity_registration_race_hook;
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub enum ViewTaskKind {
@@ -35,6 +38,18 @@ struct State {
     runtime: Handle,
     stop: watch::Sender<bool>,
     tasks: Mutex<Vec<Arc<TaskSlot>>>,
+    target_owner: OnceLock<Arc<dyn TargetTaskOwnership>>,
+    #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+    capacity_registration_gate:
+        Mutex<Option<Arc<capacity_registration_race_hook::RegistrationRaceGate>>>,
+}
+pub trait TargetTaskOwnership: Send + Sync {
+    fn adopt(
+        &self,
+        target: &NativeSessionKey,
+        generation: super::send_epoch::OwnedDisplaySendView,
+        joined: super::BoxReadFuture<'static, Result<(), ViewError>>,
+    ) -> Result<(), ViewError>;
 }
 #[derive(Clone)]
 pub struct ViewTaskSupervisor {
@@ -60,6 +75,9 @@ impl ViewTaskSupervisor {
                 runtime,
                 stop,
                 tasks: Mutex::new(Vec::new()),
+                target_owner: OnceLock::new(),
+                #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+                capacity_registration_gate: Mutex::new(None),
             }),
         }
     }
@@ -77,6 +95,40 @@ impl ViewTaskSupervisor {
         self.spawn_owned(kind, |_| work)
     }
     pub(crate) fn spawn_owned<F, M>(&self, kind: ViewTaskKind, make: M) -> Result<(), ViewError>
+    where
+        F: Future<Output = Result<(), ViewError>> + Send + 'static,
+        M: FnOnce(ViewTaskContext) -> F + Send + 'static,
+    {
+        self.spawn_registered(kind, None, make)
+    }
+    pub(crate) fn install_target_owner(
+        &self,
+        owner: Arc<dyn TargetTaskOwnership>,
+    ) -> Result<(), ViewError> {
+        self.state
+            .target_owner
+            .set(owner)
+            .map_err(|_| ViewError::AlreadyAttached)
+    }
+    pub(crate) fn spawn_target<F, M>(
+        &self,
+        kind: ViewTaskKind,
+        target: &NativeSessionKey,
+        generation: super::send_epoch::OwnedDisplaySendView,
+        make: M,
+    ) -> Result<(), ViewError>
+    where
+        F: Future<Output = Result<(), ViewError>> + Send + 'static,
+        M: FnOnce(ViewTaskContext) -> F + Send + 'static,
+    {
+        self.spawn_registered(kind, Some((target, generation)), make)
+    }
+    fn spawn_registered<F, M>(
+        &self,
+        kind: ViewTaskKind,
+        target: Option<(&NativeSessionKey, super::send_epoch::OwnedDisplaySendView)>,
+        make: M,
+    ) -> Result<(), ViewError>
     where
         F: Future<Output = Result<(), ViewError>> + Send + 'static,
         M: FnOnce(ViewTaskContext) -> F + Send + 'static,
@@ -109,15 +161,40 @@ impl ViewTaskSupervisor {
         };
         let observed = Arc::clone(&slot);
         let task = self.state.runtime.spawn(async move {
-            ready.await.map_err(|_| ViewError::NodeStopping)?;
+            if ready.await.is_err() {
+                return Ok(());
+            }
             observed.started.store(true, Ordering::Release);
             let result = make(context).await;
             observed.finished.store(true, Ordering::Release);
             result
         });
         *slot.handle.try_lock().map_err(|_| ViewError::ReadFailure)? = Some(task);
-        slots.push(slot);
+        slots.push(slot.clone());
         drop(slots);
+        #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+        let capacity_race_target = target.as_ref().map(|(target, _)| (*target).clone());
+        #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+        if let Some(target) = &capacity_race_target {
+            self.capacity_registration_cut(
+                capacity_registration_race_hook::RegistrationCut::BeforeAdopt,
+                target,
+            );
+        }
+        if let (Some(owner), Some((target, generation))) = (self.state.target_owner.get(), target) {
+            owner.adopt(
+                target,
+                generation,
+                Box::pin(async move { slot.join_original().await }),
+            )?;
+        }
+        #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+        if let Some(target) = &capacity_race_target {
+            self.capacity_registration_cut(
+                capacity_registration_race_hook::RegistrationCut::AfterAdoptBeforeStart,
+                target,
+            );
+        }
         let _ = start.send(());
         Ok(())
     }
@@ -144,25 +221,7 @@ impl ViewTaskSupervisor {
             };
             let mut timed_out = false;
             for slot in &slots {
-                let join = async {
-                    let mut handle = slot.handle.lock().await;
-                    if slot.joined.load(Ordering::Acquire) {
-                        return slot
-                            .result
-                            .lock()
-                            .map_err(|_| ViewError::ReadFailure)?
-                            .unwrap_or(Err(ViewError::ReadFailure));
-                    }
-                    let Some(task) = handle.as_mut() else {
-                        return Err(ViewError::ReadFailure);
-                    };
-                    let result = task.await.unwrap_or(Err(ViewError::ReadFailure));
-                    handle.take();
-                    drop(handle);
-                    *slot.result.lock().map_err(|_| ViewError::ReadFailure)? = Some(result);
-                    slot.joined.store(true, Ordering::Release);
-                    result
-                };
+                let join = slot.join_original();
                 let result = match deadline {
                     Some(deadline) => timeout_at(deadline, join).await.map_err(|_| ()),
                     None => Ok(join.await),
@@ -215,6 +274,25 @@ impl ViewTaskSupervisor {
                 return report;
             }
         }
+    }
+}
+impl TaskSlot {
+    async fn join_original(&self) -> Result<(), ViewError> {
+        let mut handle = self.handle.lock().await;
+        if self.joined.load(Ordering::Acquire) {
+            return self
+                .result
+                .lock()
+                .map_err(|_| ViewError::ReadFailure)?
+                .unwrap_or(Err(ViewError::ReadFailure));
+        }
+        let task = handle.as_mut().ok_or(ViewError::ReadFailure)?;
+        let result = task.await.unwrap_or(Err(ViewError::ReadFailure));
+        handle.take();
+        *self.result.lock().map_err(|_| ViewError::ReadFailure)? = Some(result);
+        self.joined.store(true, Ordering::Release);
+        drop(handle);
+        result
     }
 }
 #[cfg(all(windows, any(test, feature = "shared-view-acceptance-fixtures")))]

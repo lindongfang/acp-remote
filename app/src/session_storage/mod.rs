@@ -4,6 +4,8 @@ pub(crate) mod approval_owner;
 #[cfg(not(all(test, feature = "approval-owner-acceptance-fixtures")))]
 mod approval_owner;
 mod approval_owner_schema;
+mod automatic_capacity_release;
+mod automatic_capacity_release_schema;
 mod catalog_sql;
 #[cfg(test)]
 mod legacy;
@@ -28,6 +30,10 @@ pub mod product_commands;
 mod product_schema;
 mod registration_schema;
 mod registry_connection_owner;
+pub(crate) mod session_capacity;
+mod session_capacity_schema;
+mod session_tree;
+mod session_tree_schema;
 #[allow(
     clippy::needless_raw_string_hashes,
     reason = "Generated schema SQL literals remain untouched outside this wrapper module"

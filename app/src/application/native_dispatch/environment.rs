@@ -243,6 +243,22 @@ impl NativeOwnershipGate {
         }
         Ok(claims)
     }
+    pub(super) fn owns_live(
+        &self,
+        key: &NativeSessionKey,
+        source: &Arc<super::PreSourceProbe>,
+    ) -> Result<bool, super::DispatchError> {
+        let claims = self
+            .claims
+            .lock()
+            .map_err(|_| super::DispatchError::RequiredStateUnavailable)?;
+        Ok(claims.get(key).is_some_and(|owners| {
+            !owners.is_empty()
+                && owners
+                    .iter()
+                    .all(|owner| matches!(owner, NativeClaimOwner::Live(live) if live.same(source)))
+        }))
+    }
     pub(super) fn restore(
         &self,
         barriers: Vec<super::source_sessions::StoredNativeClaimBarrier>,

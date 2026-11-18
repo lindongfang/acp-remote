@@ -130,6 +130,24 @@ fn session(key: &NativeSessionKey) -> Result<SessionId, ViewError> {
     .map_err(|_| ViewError::InvalidTarget)?;
     SessionId::parse(raw.root()).map_err(|_| ViewError::InvalidTarget)
 }
+pub async fn admit_replay_capacity(
+    capability: &SourceReadCapability<AcpNativeAdapter>,
+) -> Result<(), ViewError> {
+    capability.require_current()?;
+    if capability.is_child_auto_delivered() {
+        return Ok(());
+    }
+    let connection = capability
+        .source()
+        .connection()
+        .map_err(ViewError::NativeFailure)?;
+    let strategy = connection.strategy().ok_or(ViewError::ProtocolFailure)?;
+    match strategy.replay(session(capability.native())?, capability.setup()) {
+        Ok(_) => capability.reserve_replay_capacity().await,
+        Err(AcpError::UnsupportedCapability) if capability.is_source_only() => Ok(()),
+        Err(error) => Err(request_error(error)),
+    }
+}
 const fn transport(progress: WriteProgress) -> ReadTransportState {
     match progress {
         WriteProgress::Reserved => ReadTransportState::Reserved,
@@ -164,6 +182,9 @@ impl NativeHistoryPort for NativeHistoryBridge {
                 .await?
                 .capability();
             capability.require_current()?;
+            if capability.is_child_auto_delivered() {
+                return Ok(ReadBindingOutcome::CurrentOnlyWithoutReplay);
+            }
             let connection = capability
                 .source()
                 .connection()
@@ -180,7 +201,10 @@ impl NativeHistoryPort for NativeHistoryBridge {
                 return Err(ViewError::InvalidConfiguration);
             }
             match strategy.replay(session(target)?, capability.setup()) {
-                Ok(_) => Ok(ReadBindingOutcome::Replay(NativeReadBinding { capability })),
+                Ok(_) => {
+                    capability.reserve_replay_capacity().await?;
+                    Ok(ReadBindingOutcome::Replay(NativeReadBinding { capability }))
+                }
                 Err(AcpError::UnsupportedCapability) if capability.is_source_only() => {
                     Ok(ReadBindingOutcome::CurrentOnlyWithoutReplay)
                 }
@@ -271,6 +295,7 @@ impl NativeHistoryPort for NativeHistoryBridge {
             let failed_operation = operation.clone();
             let job = OwnedReadTicketJob {
                 capability: Arc::clone(&reserved.capability),
+                view_generation: None,
                 work: Box::pin(async move {
                     let _ = started.await;
                     let ticket = match original.ticket.lock() {

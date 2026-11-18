@@ -8,11 +8,46 @@ use std::sync::{
 };
 pub(super) struct Group {
     pub(super) sealed: bool,
-    targets: HashMap<NativeSessionKey, Arc<AtomicBool>>,
+    targets: HashMap<NativeSessionKey, TargetFlags>,
+}
+struct TargetFlags {
+    original: Arc<AtomicBool>,
+    current: Arc<AtomicBool>,
 }
 #[derive(Clone)]
 pub struct OwnedDisplaySendGroup {
     pub(super) inner: Arc<Mutex<Group>>,
+}
+#[derive(Clone)]
+pub(crate) struct RestoredDisplayTarget {
+    group: OwnedDisplaySendGroup,
+    flag: Arc<AtomicBool>,
+}
+impl RestoredDisplayTarget {
+    pub(crate) fn seal(&self) -> Result<(), ViewError> {
+        let _group = self
+            .group
+            .inner
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?;
+        self.flag.store(true, Ordering::Release);
+        Ok(())
+    }
+    pub(crate) fn view(
+        &self,
+        group: &OwnedDisplaySendGroup,
+        epoch: ViewEpoch,
+    ) -> Result<OwnedDisplaySendView, ViewError> {
+        if !Arc::ptr_eq(&self.group.inner, &group.inner) {
+            return Err(ViewError::InvalidScope);
+        }
+        Ok(OwnedDisplaySendView {
+            group: group.clone(),
+            epoch,
+            sealed: Arc::new(AtomicBool::new(false)),
+            target: Some(self.flag.clone()),
+        })
+    }
 }
 #[derive(Clone)]
 pub struct OwnedDisplaySendView {
@@ -27,7 +62,7 @@ impl OwnedDisplaySendGroup {
             && group
                 .targets
                 .get(target)
-                .is_some_and(|target| !target.load(Ordering::Acquire))
+                .is_some_and(|target| !target.current.load(Ordering::Acquire))
     }
     #[must_use]
     pub fn new() -> Self {
@@ -56,21 +91,47 @@ impl OwnedDisplaySendGroup {
             target: None,
         }
     }
+    #[cfg(test)]
     pub(crate) fn view_for_target(
         &self,
         epoch: ViewEpoch,
         target: &NativeSessionKey,
     ) -> Result<OwnedDisplaySendView, ViewError> {
+        self.target_view(epoch, target, false)
+    }
+    pub(crate) fn original_view_for_target(
+        &self,
+        epoch: ViewEpoch,
+        target: &NativeSessionKey,
+    ) -> Result<OwnedDisplaySendView, ViewError> {
+        self.target_view(epoch, target, true)
+    }
+    fn target_view(
+        &self,
+        epoch: ViewEpoch,
+        target: &NativeSessionKey,
+        original: bool,
+    ) -> Result<OwnedDisplaySendView, ViewError> {
         let mut group = self.inner.lock().map_err(|_| ViewError::ReadFailure)?;
         let target = if let Some(target) = group.targets.get(target) {
-            Arc::clone(target)
+            Arc::clone(if original {
+                &target.original
+            } else {
+                &target.current
+            })
         } else {
             group
                 .targets
                 .try_reserve(1)
                 .map_err(|_| ViewError::AllocationFailure)?;
             let flag = Arc::new(AtomicBool::new(false));
-            group.targets.insert(target.clone(), flag.clone());
+            group.targets.insert(
+                target.clone(),
+                TargetFlags {
+                    original: flag.clone(),
+                    current: flag.clone(),
+                },
+            );
             flag
         };
         drop(group);
@@ -81,12 +142,12 @@ impl OwnedDisplaySendGroup {
             target: Some(target),
         })
     }
-    /// Denies this original source's target, including generations published later.
-    /// This display fence grants no native qualification and is never reset.
+    /// Seals the current resource generation, including projections published later.
+    /// Only a separately admitted restore can create a new flag; old flags remain sealed.
     pub(crate) fn seal_target(&self, target: &NativeSessionKey) -> Result<(), ViewError> {
         let mut group = self.inner.lock().map_err(|_| ViewError::ReadFailure)?;
         if let Some(target) = group.targets.get(target) {
-            target.store(true, Ordering::Release);
+            target.current.store(true, Ordering::Release);
         } else {
             // Closure may precede the worker's first projection for this target.
             // Retain the deny fact before a later generation can be published.
@@ -94,12 +155,42 @@ impl OwnedDisplaySendGroup {
                 group.sealed = true;
                 return Err(ViewError::AllocationFailure);
             }
-            group
-                .targets
-                .insert(target.clone(), Arc::new(AtomicBool::new(true)));
+            group.targets.insert(target.clone(), {
+                let flag = Arc::new(AtomicBool::new(true));
+                TargetFlags {
+                    original: flag.clone(),
+                    current: flag,
+                }
+            });
         }
         drop(group);
         Ok(())
+    }
+    /// Starts a new explicitly admitted resource generation; old view flags remain sealed.
+    pub(crate) fn restore_target(
+        &self,
+        target: &NativeSessionKey,
+    ) -> Result<Option<RestoredDisplayTarget>, ViewError> {
+        let mut group = self.inner.lock().map_err(|_| ViewError::ReadFailure)?;
+        if group.sealed {
+            return Err(ViewError::SourceReleased);
+        }
+        let replaced = group
+            .targets
+            .get(target)
+            .is_some_and(|old| old.current.load(Ordering::Acquire));
+        let restored = replaced.then(|| {
+            let flag = Arc::new(AtomicBool::new(false));
+            if let Some(target) = group.targets.get_mut(target) {
+                target.current = flag.clone();
+            }
+            RestoredDisplayTarget {
+                group: self.clone(),
+                flag,
+            }
+        });
+        drop(group);
+        Ok(restored)
     }
 }
 impl Default for OwnedDisplaySendGroup {
@@ -108,6 +199,14 @@ impl Default for OwnedDisplaySendGroup {
     }
 }
 impl OwnedDisplaySendView {
+    pub(crate) fn next_epoch(&self, epoch: ViewEpoch) -> Self {
+        Self {
+            group: self.group.clone(),
+            epoch,
+            sealed: Arc::new(AtomicBool::new(false)),
+            target: self.target.clone(),
+        }
+    }
     /// # Errors
     /// Rejects a poisoned short generation fence.
     pub fn seal(&self) -> Result<(), ViewError> {
@@ -132,8 +231,11 @@ impl OwnedDisplaySendView {
         Ok(self.current_in(&fence))
     }
     pub(super) fn current_in(&self, group: &Group) -> bool {
+        !self.sealed.load(Ordering::Acquire) && self.target_generation_current_in(group)
+    }
+    /// A normal replay may replace a projection while retaining the original native generation.
+    pub(super) fn target_generation_current_in(&self, group: &Group) -> bool {
         !group.sealed
-            && !self.sealed.load(Ordering::Acquire)
             && !self
                 .target
                 .as_ref()
@@ -195,5 +297,27 @@ mod tests {
                 .current()
                 .unwrap()
         );
+    }
+    #[test]
+    fn explicitly_restored_generation_never_reopens_old_views_or_a_closed_source() {
+        let group = OwnedDisplaySendGroup::new();
+        let native = target(3);
+        let old = group
+            .view_for_target(ViewEpoch::fresh().unwrap(), &native)
+            .unwrap();
+        group.seal_target(&native).unwrap();
+        group.restore_target(&native).unwrap();
+        let new = group
+            .view_for_target(ViewEpoch::fresh().unwrap(), &native)
+            .unwrap();
+        assert!(!old.current().unwrap());
+        assert!(new.current().unwrap());
+        group.seal_target(&native).unwrap();
+        assert!(!old.current().unwrap() && !new.current().unwrap());
+        group.seal().unwrap();
+        assert!(matches!(
+            group.restore_target(&native),
+            Err(ViewError::SourceReleased)
+        ));
     }
 }

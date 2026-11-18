@@ -628,6 +628,16 @@ where
             .await;
             slot.publish_change();
         }
+        if fact == TransportFact::Written
+            && let Some(permission) = operation.permission.upgrade()
+        {
+            source
+                .capacity_activity
+                .lock()
+                .map_err(|_| DispatchError::RequiredStateUnavailable)?
+                .touch(&permission.session, std::time::Instant::now())
+                .map_err(|_| DispatchError::ObservationOrder)?;
+        }
         self.confirm_approval_fact(source, operation.id.entity())?;
         Ok(())
     }

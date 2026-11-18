@@ -697,15 +697,24 @@ where
     A: CurrentViewAuthority<C>,
     C: Send + Sync + 'static,
 {
-    fn retirement<T: Send + 'static>(&self, value: T) -> Result<DeferredRetirement<T>, ViewError> {
+    fn retirement<T: Send + 'static>(
+        &self,
+        target: &NativeSessionKey,
+        value: T,
+    ) -> Result<DeferredRetirement<T>, ViewError> {
         let (send, receive) = tokio::sync::oneshot::channel();
-        self.supervisor
-            .spawn_owned(ViewTaskKind::Cleanup, move |context| async move {
+        let generation = self.views.core.target(target)?.send.clone();
+        self.supervisor.spawn_target(
+            ViewTaskKind::Cleanup,
+            target,
+            generation,
+            move |context| async move {
                 if let Ok(value) = receive.await {
                     context.retire(value).await?;
                 }
                 Ok(())
-            })?;
+            },
+        )?;
         Ok(DeferredRetirement {
             value: Some(value),
             send: Some(send),
@@ -792,11 +801,14 @@ where
             }
         }
         let publication = self.views.core.target_publication(target)?;
-        let mut retained = self.retirement((
-            None::<Arc<super::source::TargetPublication<R>>>,
-            None::<Arc<TargetGeneration<R>>>,
-            None::<Arc<TargetSnapshot<R>>>,
-        ))?;
+        let mut retained = self.retirement(
+            target,
+            (
+                None::<Arc<super::source::TargetPublication<R>>>,
+                None::<Arc<TargetGeneration<R>>>,
+                None::<Arc<TargetSnapshot<R>>>,
+            ),
+        )?;
         let stream = self
             .authority
             .with_current(client, target, || {
@@ -934,8 +946,17 @@ where
         drop(erased);
         let mut stop = self.supervisor.subscribe_stop();
         let core = Arc::clone(&self.views.core);
+        let original_generation = slot
+            .data
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?
+            .as_ref()
+            .ok_or(ViewError::ReadFailure)?
+            .generation
+            .send
+            .clone();
         self.supervisor
-            .spawn_owned(ViewTaskKind::Reader, move |context| async move {
+            .spawn_target(ViewTaskKind::Reader, target, original_generation, move |context| async move {
                 loop {
                     let changed = core.changed.notified();
                     tokio::pin!(changed);
@@ -1123,7 +1144,10 @@ where
             .views
             .core
             .target_publication(&previous.handle.target)?;
-        let mut retained = self.retirement(None::<Arc<super::source::TargetPublication<R>>>)?;
+        let mut retained = self.retirement(
+            &previous.handle.target,
+            None::<Arc<super::source::TargetPublication<R>>>,
+        )?;
         let expected = self
             .authority
             .with_current(client, &previous.handle.target, || {
@@ -1192,7 +1216,10 @@ where
             .views
             .core
             .target_publication(&previous.handle.target)?;
-        let mut retained = self.retirement(None::<Arc<super::source::TargetPublication<R>>>)?;
+        let mut retained = self.retirement(
+            &previous.handle.target,
+            None::<Arc<super::source::TargetPublication<R>>>,
+        )?;
         self.authority
             .with_current(client, &previous.handle.target, || {
                 let source_fence = self

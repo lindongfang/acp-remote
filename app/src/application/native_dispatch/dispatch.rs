@@ -181,8 +181,20 @@ where
         let core = self.clone();
         let failed = self.clone();
         self.tasks.spawn_guarded(async move{
-            let result=async{let deadline=core.deadline()?;core.repository.interrupt_previous_runtime(&StartupProof{runtime:core.runtime,exclusive:core.claim.clone()},&core.context(),&deadline).await?;core.status.compare_exchange(0,1,Ordering::SeqCst,Ordering::SeqCst).map_err(|_|DispatchError::NodeStopping)?;Ok::<(),DispatchError>(())}.await;
-            if result.is_err(){let _=core.status.compare_exchange(0,2,Ordering::SeqCst,Ordering::SeqCst);return;}
+            let result = async {
+                let deadline = core.deadline()?;
+                core.repository.interrupt_previous_runtime(
+                    &StartupProof { runtime: core.runtime, exclusive: core.claim.clone() },
+                    &core.context(), &deadline,
+                ).await?;
+                core.status.compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst)
+                    .map_err(|_| DispatchError::NodeStopping)?;
+                core.start_capacity_scan()
+            }.await;
+            if let Err(error) = result {
+                core.fail_all(error);
+                return;
+            }
             loop{let stopped=core.stop.notified();tokio::pin!(stopped);stopped.as_mut().enable();if core.running().is_err(){return;}tokio::select!{biased;()=&mut stopped=>return,wake=receiver.recv()=>{let Some(wake)=wake else{return};let result=match wake{NativeWake::Worker(key)=>core.wake_worker(key),NativeWake::Priority(key)=>core.launch_priority(key.clone()).and_then(|()|core.wake_worker(key))};if let Err(error)=result{core.fail_all(error);return;}}}}
         },move||failed.fail_all(DispatchError::RequiredStateUnavailable))?;
         Ok(())

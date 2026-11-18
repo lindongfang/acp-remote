@@ -363,6 +363,9 @@ impl SocketTransferStream {
     pub(crate) fn view_current(&self) -> Result<bool, ViewError> {
         self.inner.source.current()
     }
+    pub(super) fn target_generation_current_in(&self, group: &super::send_epoch::Group) -> bool {
+        matches!(&self.inner.source, SocketSendSource::Native { view, .. } if view.target_generation_current_in(group))
+    }
     pub(crate) fn next_stale_rebound_packet(&self) -> Result<Option<u64>, ViewError> {
         let s = lock(&self.inner.state)?;
         match s.stale_rebind {

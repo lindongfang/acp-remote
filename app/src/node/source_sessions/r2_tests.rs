@@ -1013,21 +1013,21 @@ async fn source_session_m05_per_chunk_auth_nonblocking_doc_foreign_owner_and_dis
             // Final raw/typed owner disposal enters & joins on Node-owned blocking worker.
             tokio::time::timeout(Duration::from_secs(10), async {
                 loop {
-                    let guard = events.lock().unwrap();
-                    let entered = guard
-                        .iter()
-                        .filter(|(p, _)| *p == DisposalPoint::BlockingEntered)
-                        .map(|(_, id)| id)
-                        .collect::<Vec<_>>();
-                    let joined = guard
-                        .iter()
-                        .filter(|(p, _)| *p == DisposalPoint::BlockingJoined)
-                        .map(|(_, id)| id)
-                        .collect::<Vec<_>>();
-                    if !entered.is_empty() && joined.len() >= entered.len() {
+                    let completed = {
+                        let guard = events.lock().unwrap();
+                        let entered = guard
+                            .iter()
+                            .filter(|(p, _)| *p == DisposalPoint::BlockingEntered)
+                            .count();
+                        let joined = guard
+                            .iter()
+                            .filter(|(p, _)| *p == DisposalPoint::BlockingJoined)
+                            .count();
+                        entered > 0 && joined >= entered
+                    };
+                    if completed {
                         break;
                     }
-                    drop(guard);
                     tokio::task::yield_now().await;
                 }
             })

@@ -7,6 +7,8 @@ use crate::adapters::acp::{
 use serde_json::json;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(feature = "native-dispatch-dev-fixtures")]
+include!("capacity_close_fault_tests.rs");
 
 fn deadline() -> Instant {
     Instant::now() + Duration::from_secs(5)
@@ -26,21 +28,29 @@ impl WriteFence for Attempt {
     }
 }
 type Peer = tokio::io::DuplexStream;
-async fn initialized(
-    hooks: Arc<AcpObservationHooks>,
-) -> (
+type InitializedPeer = (
     Connection,
     ObservationReceiver,
     ObservationAcknowledger,
     ObservedWriteGate,
     IoOwner,
     Peer,
-) {
+);
+async fn initialized(hooks: Arc<AcpObservationHooks>) -> InitializedPeer {
+    initialized_with_writer(hooks, |writer| writer).await
+}
+async fn initialized_with_writer<W>(
+    hooks: Arc<AcpObservationHooks>,
+    decorate: impl FnOnce(tokio::io::WriteHalf<Peer>) -> W,
+) -> InitializedPeer
+where
+    W: tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     let (local, mut peer) = tokio::io::duplex(16384);
     let (read, write) = tokio::io::split(local);
     let mut owner = None;
     let (start, mut receiver, ack, gate) =
-        Connection::prepare_observed_with_hooks(read, write, hooks, |io| {
+        Connection::prepare_observed_with_hooks(read, decorate(write), hooks, |io| {
             owner = Some(io);
             Ok(())
         })
@@ -63,7 +73,7 @@ async fn initialized(
     let mut encoded = Vec::new();
     id.write_json(&mut encoded).expect("rpc encoding");
     let id = String::from_utf8(encoded).expect("utf8");
-    peer.write_all(format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"protocolVersion\":1,\"agentCapabilities\":{{}}}}}}\n").as_bytes()).await.expect("init response");
+    peer.write_all(format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"protocolVersion\":1,\"agentCapabilities\":{{\"sessionCapabilities\":{{\"close\":{{}}}}}}}}}}\n").as_bytes()).await.expect("init response");
     let lease = receiver.next().await.expect("read").expect("init lease");
     ack.acknowledge(lease).expect("ack init");
     (
@@ -88,6 +98,154 @@ fn prompt(connection: &Connection) -> Reservation {
     connection
         .reserve_request(request, ResponseDeadline::Unbounded)
         .expect("reserve prompt")
+}
+
+fn close(connection: &Connection) -> Reservation {
+    let request = connection
+        .strategy()
+        .expect("strategy")
+        .close(
+            parse_session(&json!("synthetic-session")).expect("session"),
+            ExtensionFields::empty().expect("extra"),
+        )
+        .expect("close");
+    connection
+        .reserve_request(request, ResponseDeadline::Unbounded)
+        .expect("reserve close")
+}
+
+#[tokio::test]
+async fn automatic_close_waits_for_received_observations_before_first_byte() {
+    let hooks = Arc::new(AcpObservationHooks::default());
+    let (connection, mut receiver, ack, gate, owner, mut peer) = initialized(hooks.clone()).await;
+    let held = hooks
+        .pause_next(ObservationHookPoint::AfterReadCapturedBeforeRoute)
+        .expect("hook");
+    peer.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"synthetic/unknown\"}\n")
+        .await
+        .expect("notification");
+    held.wait_until_entered().await;
+    let before = hooks.writer_polls();
+    let notified = Arc::new(tokio::sync::Notify::new());
+    let reservation = close(&connection);
+    let frame = reservation.encode().expect("encode close");
+    let ticket = connection
+        .enqueue_automatic_close(
+            reservation,
+            frame,
+            Arc::new(Attempt(notified.clone())),
+            deadline(),
+            &gate,
+        )
+        .expect("enqueue");
+    notified.notified().await;
+    assert_eq!(
+        hooks.writer_polls(),
+        before,
+        "already received observations must precede automatic close IO"
+    );
+    held.release();
+    let lease = receiver.next().await.expect("read").expect("lease");
+    assert!(!matches!(ticket.progress(), WriteProgress::Finished(_)));
+    ack.acknowledge(lease).expect("ack applied observation");
+    assert_eq!(ticket.wait().await, WriteReport::Written);
+    assert!(owner.shutdown(deadline()).await.joined);
+}
+
+#[tokio::test]
+async fn explicit_close_still_writes_with_an_unapplied_observation() {
+    let (connection, mut receiver, ack, _, owner, mut peer) = initialized(Arc::default()).await;
+    peer.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"synthetic/unknown\"}\n")
+        .await
+        .expect("notification");
+    let lease = receiver.next().await.expect("read").expect("lease");
+    let reservation = close(&connection);
+    let frame = reservation.encode().expect("encode close");
+    let ticket = connection
+        .enqueue(reservation, frame, Arc::new(Allow), deadline())
+        .expect("explicit close");
+    assert_eq!(ticket.wait().await, WriteReport::Written);
+    ack.acknowledge(lease).expect("ack");
+    assert!(owner.shutdown(deadline()).await.joined);
+}
+
+#[tokio::test]
+async fn automatic_close_does_not_wait_for_later_observations_after_partial_write() {
+    let (connection, mut receiver, ack, gate, owner, mut peer) = initialized(Arc::default()).await;
+    let request = connection
+        .strategy()
+        .expect("strategy")
+        .close(
+            parse_session(&json!("synthetic-session")).expect("session"),
+            ExtensionFields::from_raw(raw_value(&json!({"_meta":{"padding":"x".repeat(32768)}})))
+                .expect("extra"),
+        )
+        .expect("close");
+    let reservation = connection
+        .reserve_request(request, ResponseDeadline::Unbounded)
+        .expect("reserve");
+    let frame = reservation.encode().expect("encode");
+    let notified = Arc::new(tokio::sync::Notify::new());
+    let ticket = connection
+        .enqueue_automatic_close(
+            reservation,
+            frame,
+            Arc::new(Attempt(notified.clone())),
+            deadline(),
+            &gate,
+        )
+        .expect("automatic close");
+    notified.notified().await;
+    assert!(matches!(ticket.progress(), WriteProgress::Writing { accepted, .. } if accepted > 0));
+    peer.write_all(b"{\"jsonrpc\":\"2.0\",\"method\":\"synthetic/unknown\"}\n")
+        .await
+        .expect("later notification");
+    let lease = receiver.next().await.expect("read").expect("lease");
+    let mut line = String::new();
+    tokio::time::timeout_at(deadline(), BufReader::new(&mut peer).read_line(&mut line))
+        .await
+        .expect("partial frame must finish without later ACK")
+        .expect("read close");
+    assert_eq!(ticket.wait().await, WriteReport::Written);
+    let value: serde_json::Value = serde_json::from_str(&line).expect("complete frame");
+    assert_eq!(value["method"], "session/close");
+    ack.acknowledge(lease).expect("ack later");
+    assert!(owner.shutdown(deadline()).await.joined);
+}
+
+#[tokio::test]
+async fn automatic_close_rejects_foreign_gate_and_non_close_preserving_inputs() {
+    let (connection, _receiver, _ack, gate, owner, _peer) = initialized(Arc::default()).await;
+    let (_foreign, _foreign_receiver, _foreign_ack, foreign_gate, foreign_owner, _foreign_peer) =
+        initialized(Arc::default()).await;
+    let reservation = close(&connection);
+    let frame = reservation.encode().expect("frame");
+    let (_, reservation, frame) = connection
+        .enqueue_automatic_close(
+            reservation,
+            frame,
+            Arc::new(Allow),
+            deadline(),
+            &foreign_gate,
+        )
+        .expect_err("foreign gate")
+        .into_parts();
+    let ticket = connection
+        .enqueue_automatic_close(reservation, frame, Arc::new(Allow), deadline(), &gate)
+        .expect("original close");
+    assert_eq!(ticket.wait().await, WriteReport::Written);
+    let reservation = prompt(&connection);
+    let frame = reservation.encode().expect("frame");
+    let (_, reservation, frame) = connection
+        .enqueue_automatic_close(reservation, frame, Arc::new(Allow), deadline(), &gate)
+        .expect_err("wrong operation")
+        .into_parts();
+    let ticket = connection
+        .enqueue_observed(reservation, frame, Arc::new(Allow), deadline(), &gate)
+        .expect("original prompt");
+    assert_eq!(ticket.wait().await, WriteReport::Written);
+    assert!(owner.shutdown(deadline()).await.joined);
+    assert!(foreign_owner.shutdown(deadline()).await.joined);
 }
 
 #[tokio::test]

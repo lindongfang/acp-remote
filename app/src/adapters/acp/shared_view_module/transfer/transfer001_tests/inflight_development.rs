@@ -15,6 +15,58 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 use tokio::time::timeout_at;
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn capacity_restore_keeps_original_local_observer_and_rebind_closed() {
+    let rig = Rig::start().await;
+    let outcome = AssertUnwindSafe(async {
+        let old = rig
+            .module
+            .reads
+            .open_current(&rig.client, rig.target.key())
+            .await
+            .unwrap();
+        let observer = rig.module.reads.original_observer(&old).unwrap();
+        let views = rig.module.views();
+        views.core.send.seal_target(rig.target.key()).unwrap();
+        views.core.send.restore_target(rig.target.key()).unwrap();
+        let restored = views
+            .core
+            .send
+            .view_for_target(
+                crate::domain::shared_view::ViewEpoch::fresh().unwrap(),
+                rig.target.key(),
+            )
+            .unwrap();
+        assert!(restored.current().unwrap());
+        assert_eq!(
+            rig.module.reads.original_progress(&rig.client, &old).await,
+            Err(crate::domain::shared_view::ViewError::SourceReleased)
+        );
+        assert_eq!(
+            rig.module
+                .reads
+                .try_observe_original(&rig.client, &observer)
+                .await,
+            Err(crate::domain::shared_view::ViewError::SourceReleased)
+        );
+        assert!(matches!(
+            rig.module
+                .reads
+                .rebind_inflight_same_read(&rig.client, &old)
+                .await,
+            Err(crate::domain::shared_view::ViewError::SourceReleased)
+        ));
+        let _close = rig.module.reads.release(old);
+    })
+    .catch_unwind()
+    .await;
+    rig.close().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
 async fn unbusy_progress(transfer: &ModuleViewTransfer) -> ModuleOriginalReadProgress {
     timeout_at(deadline(), async {
         loop {

@@ -46,6 +46,10 @@ pub enum NativeProtocolFailure {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum DispatchError {
+    #[error("all native session capacity is occupied")]
+    SessionCapacityFull,
+    #[error("native main session tree cannot be verified")]
+    SessionTreeUnverified,
     #[error("native protocol failed: {0}")]
     ProtocolFault(NativeProtocolFailure),
     #[error("native runtime is stopping")]

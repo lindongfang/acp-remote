@@ -742,6 +742,16 @@ async fn real_replay_response_and_live_update_preserve_each_origin_without_reset
     sent(&mut peer).await;
     let incoming = wire_update(&mut client, &mut peer, update("t", "pending")).await;
     let first = r.apply_inner(&mut w, &incoming).unwrap();
+    let marker = wire_update(
+        &mut client,
+        &mut peer,
+        json!({"sessionUpdate":"replay_complete"}),
+    )
+    .await;
+    assert!(matches!(
+        r.apply_inner(&mut w, &marker).unwrap().raw,
+        ObservationOutcome::Recorded { sequence: 2, .. }
+    ));
     let state = wire_update(
         &mut client,
         &mut peer,
@@ -785,7 +795,11 @@ async fn real_replay_response_and_live_update_preserve_each_origin_without_reset
         .collect();
     assert_eq!(
         origins,
-        vec![(1, UpdateOrigin::DuringReplay), (2, UpdateOrigin::Live)]
+        vec![
+            (1, UpdateOrigin::DuringReplay),
+            (2, UpdateOrigin::DuringReplay),
+            (3, UpdateOrigin::Live)
+        ]
     );
 }
 #[test]

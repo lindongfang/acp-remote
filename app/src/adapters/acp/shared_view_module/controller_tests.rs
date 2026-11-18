@@ -146,6 +146,8 @@ async fn shared_view_actual_other_sid_capture_gap_cannot_poison_a_different_real
         .expect("unique decoded field")
         .expect("actual B ID");
     assert_ne!(rpc_a.fragment(), rpc_b.fragment());
+    harness.end_history_processed("sibling-session").await;
+    harness.end_history_processed("control-session").await;
     let mut fault = harness
         .module
         .test_controller()
@@ -237,6 +239,7 @@ async fn actual_gap_then_fresh_window(miss_response: bool) {
         .get("id")
         .expect("unique decoded field")
         .expect("actual typed RPC");
+    harness.end_history_processed("control-session").await;
     let mut fault = if miss_response {
         None
     } else {
@@ -334,7 +337,7 @@ async fn actual_gap_then_fresh_window(miss_response: bool) {
         let current=harness.module.views().core.target(harness.target.key()).expect("new actual current");let snapshot=current.snapshot.read().expect("snapshot").clone();
         if harness.module.native_reads.status(&successor).read_mode()==ReadMode::ReplayComplete && snapshot.descriptor.read_mode()==ReadMode::ReplayComplete {
             assert_ne!(snapshot.descriptor.view_epoch(),h.view_epoch());assert_eq!(snapshot.segments.publications.len(),1);
-            assert_eq!(snapshot.projection.records.len(),1,"new H contains only this actual unique window's state raw");
+            assert_eq!(snapshot.projection.records.len(),2,"new H contains this original window's replay marker and state raw");
             break;
         }
         tokio::select!{()=wake=>{},result=changes.changed()=>{result.expect("original successor metadata");}}
@@ -565,6 +568,7 @@ async fn shared_view_real_inflight_refreshes_join_original_and_schedule_one_fres
         first_options.write_deadline(),
         "join cannot reset an in-flight absolute deadline"
     );
+    harness.end_history("control-session").await;
     harness.send(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"control-session","update":{"sessionUpdate":"state_update","state":"idle"}}}"#).await;
     let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();
     response.extend_from_slice(first_rpc.fragment().as_bytes());
@@ -605,6 +609,7 @@ async fn shared_view_real_inflight_refreshes_join_original_and_schedule_one_fres
         ReadMode::ReplayComplete,
         "accepted requests remain pinned to their first original operation"
     );
+    harness.end_history("control-session").await;
     harness.send(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"control-session","update":{"sessionUpdate":"state_update","state":"idle"}}}"#).await;
     let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();
     response.extend_from_slice(second_rpc.fragment().as_bytes());
@@ -1203,6 +1208,7 @@ async fn shared_view_real_remote_failure_keeps_old_h_failed_and_live_segments_th
     assert_eq!(receipt.last_committed_packet(), packet);
     let new=br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"control-session","update":{"sessionUpdate":"tool_call_update","toolCallId":"shared-id","status":"completed","title":"new replay only"}}}"#;
     harness.send(new).await;
+    harness.end_history("control-session").await;
     harness.send(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"control-session","update":{"sessionUpdate":"state_update","state":"idle"}}}"#).await;
     let mut complete = br#"{"jsonrpc":"2.0","id":"#.to_vec();
     complete.extend_from_slice(successor_rpc.fragment().as_bytes());
@@ -1218,7 +1224,7 @@ async fn shared_view_real_remote_failure_keeps_old_h_failed_and_live_segments_th
     let snapshot = current.snapshot.read().expect("snapshot").clone();
     assert_eq!(
         snapshot.projection.records.len(),
-        2,
+        3,
         "only this unique original replay window belongs to new complete H"
     );
     assert_eq!(snapshot.segments.publications.len(), 1);
@@ -1389,6 +1395,26 @@ impl Harness {
             .expect("actual peer write");
         self.peer.write_bytes(b"\n", deadline()).await.expect("LF");
     }
+    async fn end_history(&mut self, session: &str) {
+        let marker = format!(
+            r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"{session}","update":{{"sessionUpdate":"replay_complete"}}}}}}"#
+        );
+        self.send(marker.as_bytes()).await;
+    }
+    async fn end_history_processed(&mut self, session: &str) {
+        let mut cut = self
+            .module
+            .test_controller()
+            .observe_once(
+                ViewHookPoint::AfterWorkerCutProcessed,
+                HookSelector::Source(self.module.scope()),
+            )
+            .expect("replay boundary worker cut");
+        self.end_history(session).await;
+        cut.arrived()
+            .await
+            .expect("marker processed before arming the next raw capture fault");
+    }
     async fn complete_replay(&mut self) {
         let request = self
             .peer
@@ -1404,6 +1430,7 @@ impl Harness {
             .get("id")
             .expect("unique decoded field")
             .expect("typed rpc");
+        self.end_history("control-session").await;
         self.send(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"control-session","update":{"sessionUpdate":"state_update","state":"idle"}}}"#).await;
         let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();
         response.extend_from_slice(id.fragment().as_bytes());

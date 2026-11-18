@@ -184,6 +184,8 @@ pub enum SessionAction {
     },
     #[serde(rename = "catalog.inventory")]
     CatalogInventory {},
+    #[serde(rename = "session.capacity.inspect")]
+    SessionCapacityInspect {},
     #[serde(rename = "approval.list")]
     ApprovalList {},
     #[serde(rename = "approval.read")]
@@ -444,6 +446,10 @@ fn parse_action(
     p: &Map<String, Value>,
 ) -> Result<SessionAction, SessionProtocolError> {
     match action {
+        "session.capacity.inspect" => {
+            closed(p, &[])?;
+            Ok(SessionAction::SessionCapacityInspect {})
+        }
         "product.status" => {
             closed(p, &[])?;
             Ok(SessionAction::ProductStatus {})

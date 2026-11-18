@@ -14,6 +14,8 @@ use super::{
 use crate::application::native_dispatch::source_sessions as ss;
 use crate::application::shared_views::RetainedRaw;
 use std::sync::Weak;
+#[path = "source_sessions/root_evidence.rs"]
+mod root_evidence;
 
 pub(super) struct SourceReplyTracker {
     scope: ConnectionScope,
@@ -242,6 +244,16 @@ impl ss::NativeSourceSessionPort for AcpNativeAdapter {
         setup: &SessionSetup,
         w: n::ResponseWait,
     ) -> Result<AcpSourceSessionReservation, d::DispatchError> {
+        // Only the unextended standard new operation establishes an independent root.
+        // Retain unknown configuration verbatim; never send it under an invented relation model.
+        if !root_evidence::unextended_setup(setup.extra().as_raw())
+            || !setup
+                .mcp_servers()
+                .iter()
+                .all(root_evidence::unextended_mcp)
+        {
+            return Err(d::DispatchError::SessionTreeUnverified);
+        }
         let connection = source.connection()?;
         let strategy = connection
             .strategy()
@@ -314,7 +326,16 @@ impl ss::NativeSourceSessionPort for AcpNativeAdapter {
         let mut deferred_decode = None;
         let response = match (b.kind(), response) {
             (ss::SourceRequestKind::Create, Response::NewSession(session)) => {
-                ss::SourceObservedResponse::Created(session.shared_text())
+                let result = received
+                    .raw()
+                    .field("result")
+                    .map_err(error)?
+                    .ok_or(d::DispatchError::ProtocolRejected)?;
+                if root_evidence::unextended_created(super::version(b.wire()), result) {
+                    ss::SourceObservedResponse::Created(session.shared_text())
+                } else {
+                    ss::SourceObservedResponse::UnverifiedCreated(session.shared_text())
+                }
             }
             (ss::SourceRequestKind::Discover, Response::Sessions(_)) => {
                 ss::SourceObservedResponse::Sessions

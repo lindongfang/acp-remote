@@ -438,6 +438,16 @@ pub struct ObservationView<'a, S, R> {
     pub incoming: NativeIncoming,
 }
 pub trait NativeLifecyclePort: NativeProtocolPort + Sized {
+    /// Observes standard activity without requiring a platform execution target.
+    /// # Errors
+    /// Rejects ambiguous fields without including source content in errors.
+    fn capacity_observation(
+        &self,
+        _lease: &Self::Lease,
+        _wire: ProtocolVersion,
+    ) -> Result<Option<super::CapacityObservation>, DispatchError> {
+        Ok(None)
+    }
     type Streams: Send + 'static;
     type Source: Clone + Send + Sync + 'static;
     type Start: Send + 'static;
@@ -530,6 +540,11 @@ pub trait NativeLifecyclePort: NativeProtocolPort + Sized {
         wait: ResponseWait,
     ) -> Result<Self::CloseReservation, DispatchError>;
     /// # Errors
+    /// Returns whether this original connection supports an observation-gated native close.
+    fn automatic_close_supported(&self, _source: &Self::Source) -> Result<bool, DispatchError> {
+        Ok(false)
+    }
+    /// # Errors
     /// Returns the original close reservation and frame on rejection.
     fn enqueue_target_close(
         &self,
@@ -539,6 +554,23 @@ pub trait NativeLifecyclePort: NativeProtocolPort + Sized {
         boundary: Arc<dyn LifecycleWriteBoundary<Self::Scope>>,
         deadline: Instant,
     ) -> Result<Self::Ticket, EnqueueRejected<Self::CloseReservation, Self::Frame>>;
+    /// # Errors
+    /// Returns the original inputs unless the adapter supports an observation-gated close.
+    fn enqueue_automatic_close(
+        &self,
+        _source: &Self::Source,
+        _gate: &Self::Gate,
+        reservation: Self::CloseReservation,
+        frame: Self::Frame,
+        _boundary: Arc<dyn LifecycleWriteBoundary<Self::Scope>>,
+        _deadline: Instant,
+    ) -> Result<Self::Ticket, EnqueueRejected<Self::CloseReservation, Self::Frame>> {
+        Err(EnqueueRejected {
+            error: DispatchError::ProtocolUnavailable,
+            reservation,
+            frame,
+        })
+    }
     fn next<'a>(
         &'a self,
         source: &'a Self::Source,

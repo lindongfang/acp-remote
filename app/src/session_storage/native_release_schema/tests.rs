@@ -4,6 +4,7 @@
     reason = "Preserves existing module structure and intentional scaffolding"
 )]
 use crate::session_storage::{native_release_schema, schema};
+use crate::storage::SCHEMA_VERSION;
 use sqlx::{
     Row,
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -26,6 +27,7 @@ async fn pool() -> sqlx::SqlitePool {
 async fn exact_nine() -> sqlx::SqlitePool {
     let pool = pool().await;
     schema::initialize(&pool).await.expect("fresh migration");
+    remove_capacity_fixture(&pool).await;
     for index in (0..super::super::source_sessions_schema::DEFINITIONS.len()).rev() {
         let definition = super::super::source_sessions_schema::DEFINITIONS[index];
         if definition.starts_with("CREATE INDEX") {
@@ -81,6 +83,7 @@ async fn exact_ten_with_release_fact() -> sqlx::SqlitePool {
     schema::initialize(&pool)
         .await
         .expect("schema9 to schema11 seed");
+    remove_capacity_fixture(&pool).await;
     for index in (0..super::super::source_sessions_schema::DEFINITIONS.len()).rev() {
         let definition = super::super::source_sessions_schema::DEFINITIONS[index];
         if definition.starts_with("CREATE INDEX") {
@@ -158,7 +161,7 @@ async fn seed_preserved_security_facts(pool: &sqlx::SqlitePool) {
 /// Only the schema version is excluded: all identity and old table data remain.
 async fn preserved_facts(pool: &sqlx::SqlitePool) -> Vec<(String, Vec<Vec<String>>)> {
     let tables: Vec<String> = sqlx::query_scalar(
-        "SELECT name FROM main.sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'node_source_session_%' ORDER BY name",
+        "SELECT name FROM main.sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'node_source_session_%' AND name NOT LIKE 'node_session_capacity%' AND name NOT LIKE 'node_session_automatic_%' AND name!='node_session_parents' ORDER BY name",
     )
     .fetch_all(pool)
     .await
@@ -296,6 +299,9 @@ async fn old_layout(pool: &sqlx::SqlitePool) -> Vec<(String, Option<String>)> {
            AND name NOT LIKE 'sqlite_autoindex_node_native_release_%' \
            AND name NOT LIKE 'node_source_session_%' \
            AND name NOT LIKE 'sqlite_autoindex_node_source_session_%' \
+           AND name NOT LIKE 'node_session_capacity%' AND name NOT LIKE 'node_session_automatic_%' \
+           AND name NOT LIKE 'sqlite_autoindex_node_session_capacity%' AND name NOT LIKE 'sqlite_autoindex_node_session_automatic_%' \
+           AND name NOT IN ('node_session_parents','sqlite_autoindex_node_session_parents_1') \
          ORDER BY name",
     )
     .fetch_all(pool)
@@ -347,7 +353,7 @@ async fn schema11_upgrades_exact_nine_and_preserves_old_layout_and_data() {
     schema::initialize(&pool)
         .await
         .expect("schema9 through schema10 to schema11");
-    assert_eq!(heads(&pool).await, (11, 11));
+    assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(old_layout(&pool).await, before);
     // Schema10/11 add empty tables; every schema9 table and row is unchanged.
     let after = preserved_facts(&pool).await;
@@ -395,7 +401,7 @@ async fn schema11_upgrades_exact_nine_and_preserves_old_layout_and_data() {
     schema::initialize(&pool)
         .await
         .expect("exact schema11 reopen");
-    assert_eq!(heads(&pool).await, (11, 11));
+    assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(preserved_facts(&pool).await, after);
     pool.close().await;
 }
@@ -410,7 +416,7 @@ async fn schema11_upgrades_exact_ten_and_preserves_release_rows_and_indexes() {
     schema::initialize(&pool)
         .await
         .expect("schema10 to schema11");
-    assert_eq!(heads(&pool).await, (11, 11));
+    assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     let after: Vec<(String, Option<String>)> = sqlx::query_as("SELECT name,sql FROM main.sqlite_schema WHERE name LIKE 'node_native_release_%' OR name LIKE 'sqlite_autoindex_node_native_release_%' ORDER BY name")
         .fetch_all(&pool).await.expect("release layout after");
     assert_eq!(after, before);
@@ -420,6 +426,12 @@ async fn schema11_upgrades_exact_ten_and_preserves_release_rows_and_indexes() {
         .filter(|(name, _)| {
             !name.starts_with("node_source_session_")
                 && !name.starts_with("sqlite_autoindex_node_source_session_")
+                && !name.starts_with("node_session_capacity")
+                && !name.starts_with("node_session_automatic_")
+                && !name.starts_with("sqlite_autoindex_node_session_capacity")
+                && !name.starts_with("sqlite_autoindex_node_session_automatic_")
+                && name != "node_session_parents"
+                && name != "sqlite_autoindex_node_session_parents_1"
         })
         .collect();
     assert_eq!(old_objects_after, layout_before);
@@ -449,7 +461,11 @@ async fn release_precommit_faults_roll_back_to_exact_nine() {
         schema::initialize(&pool)
             .await
             .expect("retry schema9 to schema11");
-        assert_eq!(heads(&pool).await, (11, 11), "{fault:?}");
+        assert_eq!(
+            heads(&pool).await,
+            (SCHEMA_VERSION, SCHEMA_VERSION),
+            "{fault:?}"
+        );
         assert_eq!(old_layout(&pool).await, before, "{fault:?}");
         pool.close().await;
     }
@@ -464,7 +480,7 @@ async fn release_commit_report_loss_keeps_complete_schema11() {
         schema::initialize_for_test(&pool, schema::MigrationFault::CommitUnknown).await,
         Err(crate::error::StorageError::MigrationInterrupted)
     ));
-    assert_eq!(heads(&pool).await, (11, 11));
+    assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(old_layout(&pool).await, before);
     let facts_after = preserved_facts(&pool).await;
     for fact in &facts_before {
@@ -483,7 +499,7 @@ async fn release_commit_report_loss_keeps_complete_schema11() {
     schema::initialize(&pool)
         .await
         .expect("complete schema11 after report loss");
-    assert_eq!(heads(&pool).await, (11, 11));
+    assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(preserved_facts(&pool).await, facts_after);
     pool.close().await;
 }
@@ -552,7 +568,7 @@ async fn source_commit_report_loss_keeps_complete_schema11_and_release_fact() {
         schema::initialize_for_test(&pool, schema::MigrationFault::CommitUnknown).await,
         Err(crate::error::StorageError::MigrationInterrupted)
     ));
-    assert_eq!(heads(&pool).await, (11, 11));
+    assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(source_object_count(&pool).await, 4);
     assert_eq!(preserved_facts(&pool).await, facts_before);
     let layout = complete_layout(&pool).await;
@@ -560,7 +576,7 @@ async fn source_commit_report_loss_keeps_complete_schema11_and_release_fact() {
         .await
         .expect("schema11 report-loss reopen");
     assert_eq!(complete_layout(&pool).await, layout);
-    assert_eq!(heads(&pool).await, (11, 11));
+    assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(preserved_facts(&pool).await, facts_before);
     pool.close().await;
 }
@@ -594,7 +610,7 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&trigger).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&trigger).await, (11, 11));
+    assert_eq!(heads(&trigger).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(complete_layout(&trigger).await, before);
     trigger.close().await;
 
@@ -611,7 +627,10 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&missing_index).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&missing_index).await, (11, 11));
+    assert_eq!(
+        heads(&missing_index).await,
+        (SCHEMA_VERSION, SCHEMA_VERSION)
+    );
     assert_eq!(complete_layout(&missing_index).await, before);
     missing_index.close().await;
 
@@ -628,7 +647,7 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&extra_index).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&extra_index).await, (11, 11));
+    assert_eq!(heads(&extra_index).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(complete_layout(&extra_index).await, before);
     extra_index.close().await;
 
@@ -643,7 +662,7 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&shadow).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&shadow).await, (11, 11));
+    assert_eq!(heads(&shadow).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(complete_layout(&shadow).await, before);
     let shadow_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM temp.sqlite_schema WHERE name='node_source_session_runtime_operations'",
@@ -667,7 +686,7 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&mismatched_head).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&mismatched_head).await, (11, 10));
+    assert_eq!(heads(&mismatched_head).await, (SCHEMA_VERSION, 10));
     assert_eq!(complete_layout(&mismatched_head).await, before);
     mismatched_head.close().await;
 
@@ -684,7 +703,7 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&mismatched_pragma).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&mismatched_pragma).await, (10, 11));
+    assert_eq!(heads(&mismatched_pragma).await, (10, SCHEMA_VERSION));
     assert_eq!(complete_layout(&mismatched_pragma).await, before);
     mismatched_pragma.close().await;
 
@@ -701,7 +720,7 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&extra_column).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&extra_column).await, (11, 11));
+    assert_eq!(heads(&extra_column).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(complete_layout(&extra_column).await, before);
     extra_column.close().await;
 
@@ -736,7 +755,10 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&wrong_foreign_key).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&wrong_foreign_key).await, (11, 11));
+    assert_eq!(
+        heads(&wrong_foreign_key).await,
+        (SCHEMA_VERSION, SCHEMA_VERSION)
+    );
     assert_eq!(complete_layout(&wrong_foreign_key).await, before);
     wrong_foreign_key.close().await;
 
@@ -766,7 +788,10 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&broken_source_row).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&broken_source_row).await, (11, 11));
+    assert_eq!(
+        heads(&broken_source_row).await,
+        (SCHEMA_VERSION, SCHEMA_VERSION)
+    );
     assert_eq!(source_object_count(&broken_source_row).await, 4);
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM main.node_source_session_operations")
@@ -795,16 +820,16 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
     schema::initialize(&high_version)
         .await
         .expect("schema11 fixture");
-    sqlx::query("PRAGMA main.user_version=12")
+    sqlx::query("PRAGMA main.user_version=99")
         .execute(&high_version)
         .await
         .expect("unknown high version");
     let before = complete_layout(&high_version).await;
     assert!(matches!(
         schema::initialize(&high_version).await,
-        Err(crate::error::StorageError::UnknownSchema(12))
+        Err(crate::error::StorageError::UnknownSchema(99))
     ));
-    assert_eq!(heads(&high_version).await, (12, 11));
+    assert_eq!(heads(&high_version).await, (99, SCHEMA_VERSION));
     assert_eq!(complete_layout(&high_version).await, before);
     high_version.close().await;
 
@@ -829,7 +854,10 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&missing_table).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&missing_table).await, (11, 11));
+    assert_eq!(
+        heads(&missing_table).await,
+        (SCHEMA_VERSION, SCHEMA_VERSION)
+    );
     assert_eq!(complete_layout(&missing_table).await, before);
     missing_table.close().await;
 
@@ -846,7 +874,7 @@ async fn source_partial_and_unrecognized_layouts_are_rejected_without_repair() {
         schema::initialize(&temp_view).await,
         Err(crate::error::StorageError::UnrecognizedSchema)
     ));
-    assert_eq!(heads(&temp_view).await, (11, 11));
+    assert_eq!(heads(&temp_view).await, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(complete_layout(&temp_view).await, before);
     let temp_objects: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM temp.sqlite_schema WHERE name='node_source_session_runtime_operations'",
@@ -877,7 +905,7 @@ async fn source_schema11_allows_a_valid_empty_identity_database() {
             .fetch_one(&pool)
             .await
             .expect("schema head"),
-        11
+        SCHEMA_VERSION
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM main.node_meta")
@@ -1073,7 +1101,7 @@ async fn source_schema11_rejects_valid_source_rows_without_identity() {
         .fetch_one(&pool)
         .await
         .expect("identity and source rows before validation");
-        assert_eq!(before_heads, (11, 0));
+        assert_eq!(before_heads, (SCHEMA_VERSION, 0));
         assert_eq!(before_counts.0, 0);
         assert_eq!(before_counts.1, i64::from(keep_registration));
         assert_eq!(before_counts.2, i64::from(keep_operation));
@@ -1144,7 +1172,7 @@ async fn source_schema11_rejects_broken_parent_references_without_repair() {
         );
         let before_heads = heads(&pool).await;
         let before_layout = complete_layout(&pool).await;
-        assert_eq!(before_heads, (11, 11));
+        assert_eq!(before_heads, (SCHEMA_VERSION, SCHEMA_VERSION));
         assert_eq!(
             sqlx::query_scalar::<_, i64>(
                 "SELECT COUNT(*) FROM main.node_source_session_registrations WHERE operation_id=?",
@@ -1262,7 +1290,7 @@ async fn source_schema11_rejects_broken_parent_references_without_repair() {
     );
     let before_heads = heads(&pool).await;
     let before_layout = complete_layout(&pool).await;
-    assert_eq!(before_heads, (11, 11));
+    assert_eq!(before_heads, (SCHEMA_VERSION, SCHEMA_VERSION));
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM main.node_source_session_operations WHERE operation_id=? AND source_instance_id=? AND connection_epoch=?",
@@ -1325,7 +1353,7 @@ async fn source_schema11_rejects_main_and_temp_source_triggers_and_temp_shadows(
                 schema::initialize(&pool).await,
                 Err(crate::error::StorageError::UnrecognizedSchema)
             ));
-            assert_eq!(heads(&pool).await, (11, 11));
+            assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
             assert_eq!(complete_layout(&pool).await, before);
             pool.close().await;
         }
@@ -1360,7 +1388,7 @@ async fn source_schema11_rejects_main_and_temp_source_triggers_and_temp_shadows(
             schema::initialize(&pool).await,
             Err(crate::error::StorageError::UnrecognizedSchema)
         ));
-        assert_eq!(heads(&pool).await, (11, 11));
+        assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
         assert_eq!(complete_layout(&pool).await, before);
         let retained: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM temp.sqlite_schema WHERE name=? COLLATE NOCASE",
@@ -1442,7 +1470,7 @@ async fn source_schema11_rejects_each_registration_parent_foreign_key_shape() {
             schema::initialize(&pool).await,
             Err(crate::error::StorageError::UnrecognizedSchema)
         ));
-        assert_eq!(heads(&pool).await, (11, 11));
+        assert_eq!(heads(&pool).await, (SCHEMA_VERSION, SCHEMA_VERSION));
         assert_eq!(complete_layout(&pool).await, before);
         pool.close().await;
     }
@@ -1500,4 +1528,32 @@ async fn source_schema11_rejects_each_operation_parent_foreign_key_shape() {
         assert_eq!(complete_layout(&pool).await, before_layout);
         pool.close().await;
     }
+}
+
+async fn remove_capacity_fixture(pool: &sqlx::SqlitePool) {
+    // Exclusively the fresh in-memory database created by these tests.
+    super::super::automatic_capacity_release_schema::remove_owned_fixture_for_test(pool).await;
+    sqlx::query("DROP TABLE main.node_session_capacity_releases")
+        .execute(pool)
+        .await
+        .expect("remove generated schema12 release associations");
+    sqlx::query("DROP TABLE main.node_session_capacity")
+        .execute(pool)
+        .await
+        .expect("remove generated schema12 fixture");
+}
+
+#[tokio::test]
+async fn phase1_capacity_migration_contract() {
+    let pool = pool().await;
+    schema::initialize(&pool)
+        .await
+        .expect("actual supported migration");
+    let table: i64 = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE name='node_session_capacity' AND type='table')")
+        .fetch_one(&pool).await.expect("actual migrated layout");
+    assert_eq!(
+        table, 1,
+        "phase1 requires durable capacity responsibilities"
+    );
+    pool.close().await;
 }

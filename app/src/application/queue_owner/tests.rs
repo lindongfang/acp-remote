@@ -26,6 +26,9 @@ use tokio::{
     time::{Duration, Instant},
 };
 
+#[path = "automatic_close_tests.rs"]
+mod automatic_close_tests;
+
 fn id(n: u8) -> EntityId {
     EntityId::from_bytes([n; 16])
 }

@@ -360,8 +360,12 @@ impl<H: NativeHistoryPort> CoordinatorCore<H> {
         let core = Arc::clone(self);
         let running = Arc::clone(&job);
         let key = target.clone();
-        self.supervisor
-            .spawn_owned(ViewTaskKind::NativeRead, move |context| async move {
+        let generation = self.views.core.target(target)?.send.clone();
+        self.supervisor.spawn_target(
+            ViewTaskKind::NativeRead,
+            target,
+            generation,
+            move |context| async move {
                 let result = core.run_operation(&key, reason, &running, selected).await;
                 if let Err(error) = result {
                     running.metadata.send_modify(|metadata| {
@@ -391,7 +395,8 @@ impl<H: NativeHistoryPort> CoordinatorCore<H> {
                 }
                 context.retire(running).await?;
                 Ok(())
-            })?;
+            },
+        )?;
         jobs.insert(target.clone(), Arc::clone(&job));
         drop(jobs);
         Ok(NativeReadRequest { id, job })

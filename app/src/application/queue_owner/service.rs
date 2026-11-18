@@ -450,6 +450,19 @@ where
         self.inner.core.reap_completed(&mut tasks);
         let mut state = lock(&owner.state)?;
         self.inner.core.running()?;
+        if state.automatic_close.is_some()
+            && matches!(
+                mutation,
+                Some(
+                    ValidatedMutation::Submit(_)
+                        | ValidatedMutation::Edit { .. }
+                        | ValidatedMutation::Resume
+                        | ValidatedMutation::Prioritize { .. }
+                )
+            )
+        {
+            return Err(RegistryError::Conflict);
+        }
         let installed = match state.pending.as_ref() {
             Some(p) if p.probe.registration_id() == id => {
                 if p.probe.intent() != intent {

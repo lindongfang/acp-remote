@@ -259,7 +259,12 @@ fn profile(scenario: &str, large: bool) -> Vec<u8> {
     let child = crate::test_support::native_dispatch_dev_child(&["C1_NATIVE_CHILD"]);
     let child = child.to_string_lossy();
     assert!(std::path::Path::new(child.as_ref()).is_file());
-    format!(r#"{{"format":1,"launch":{{"executable_utf16le_base64":"{}","arguments_utf16le_base64":["{}"],"environment":[{{"name_utf16le_base64":"{}","value_utf16le_base64":"{}"}}]}},"recipes":[{{"wire":2,"mcp_servers":[],"additional_directories":[],"extra":{{"future":{{"decimal":1.2300e+09,"ordered":{{"b":2,"a":1}},"payload":"{}"}}}}}}]}}"#,utf16(&child),utf16(scenario),utf16("C1_SECRET"),utf16("CATALOG_SECRET_CANARY"),if large{"x".repeat(40*1024)}else{String::new()}).into_bytes()
+    let extra = if large {
+        format!(r#"{{"future":{{"decimal":1.2300e+09,"ordered":{{"b":2,"a":1}},"payload":"{}"}}}}"#, "x".repeat(40*1024))
+    } else {
+        "{}".into()
+    };
+    format!(r#"{{"format":1,"launch":{{"executable_utf16le_base64":"{}","arguments_utf16le_base64":["{}"],"environment":[{{"name_utf16le_base64":"{}","value_utf16le_base64":"{}"}}]}},"recipes":[{{"wire":2,"mcp_servers":[],"additional_directories":[],"extra":{extra}}}]}}"#,utf16(&child),utf16(scenario),utf16("C1_SECRET"),utf16("CATALOG_SECRET_CANARY")).into_bytes()
 }
 async fn upload(f: &Case, socket: usize, raw: &[u8]) -> (Id128, CatalogUploadStatus) {
     let owner = &f.catalog_owners[socket];
@@ -445,6 +450,40 @@ async fn catalog_c1_ordinary_native_child_real_stop_suspends_original_waiting() 
             bind(f, harness, profile, &launch).await;
             eprintln!("[CATALOG-C1-STAGE] bound");
             let services = f.node.as_ref().unwrap().session_services.as_ref().unwrap();
+            let sources = services.source_sessions.clone();
+            let operation = sources
+                .register(
+                    &f.clients[0],
+                    crate::domain::source_sessions::SourceLaunchSelection {
+                        source: target(1),
+                        harness,
+                        profile,
+                        workspace: target(9),
+                        launch_path: launch,
+                    },
+                    crate::domain::source_sessions::SourceSessionAction::Create,
+                )
+                .await
+                .unwrap();
+            let created = sources
+                .execute(&f.clients[0], operation.id)
+                .await
+                .unwrap()
+                .wait()
+                .await
+                .unwrap();
+            assert_eq!(
+                created.outcome,
+                crate::domain::source_sessions::SourceSessionOutcome::Succeeded,
+                "{created:?}"
+            );
+            let native = created.response.unwrap().native_session_id.unwrap();
+            sqlx::query("UPDATE product_targets SET native_id=? WHERE target_id=?")
+                .bind(native.as_ref())
+                .bind(target(2).encode())
+                .execute(f.pool.as_ref().unwrap())
+                .await
+                .unwrap();
             let first = input_submit(
                 f,
                 b"[{\"type\":\"text\",\"text\":\"first real controlled prompt\"}]",

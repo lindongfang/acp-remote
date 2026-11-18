@@ -18,7 +18,7 @@ use sqlx::{
 use crate::error::StorageError;
 mod native_runtime;
 
-pub const SCHEMA_VERSION: i64 = 11;
+pub const SCHEMA_VERSION: i64 = 14;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeMeta {

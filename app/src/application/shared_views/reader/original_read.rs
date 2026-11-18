@@ -72,7 +72,9 @@ where
             .inner
             .lock()
             .map_err(|_| ViewError::ReadFailure)?;
-        if !OwnedDisplaySendGroup::target_live_in(&source, &handle.target) {
+        if !handle.stream.target_generation_current_in(&source)
+            || !OwnedDisplaySendGroup::target_live_in(&source, &handle.target)
+        {
             return Err(ViewError::SourceReleased);
         }
         drop(source);
@@ -317,6 +319,7 @@ where
                     .lock()
                     .map_err(|_| ViewError::ReadFailure)?;
                 if self.views.core.probe.is_sealed()
+                    || !previous.handle.stream.target_generation_current_in(&source)
                     || !OwnedDisplaySendGroup::target_live_in(&source, &previous.handle.target)
                 {
                     return Err(ViewError::SourceReleased);

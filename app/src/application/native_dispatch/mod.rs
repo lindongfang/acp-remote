@@ -76,9 +76,26 @@ mod observation;
 mod resource_close;
 mod shutdown;
 pub use shutdown::NativeShutdownReport;
+mod capacity;
+mod capacity_activity;
+mod capacity_admission;
+mod capacity_automatic;
+mod capacity_tree;
+mod session_tree_records;
+mod source_tree;
+#[cfg(test)]
+pub(crate) use session_tree_records::session_parent_development_fixture;
+pub use session_tree_records::{SessionParentProof, SessionTreePath, SessionTreeRepository};
+mod capacity_close;
+mod capacity_observation;
+pub use capacity_observation::{
+    CapacityFreshness, CapacityObservation, CapacityState, CapacityUpdate,
+};
+mod capacity_records;
 pub(crate) mod read_access;
 pub(crate) mod read_source;
 mod resource_origin;
+pub use capacity_records::*;
 mod source;
 pub(crate) mod view_attachment;
 pub(crate) use read_access::{
@@ -429,7 +446,9 @@ impl LoadedResourceProof {
         self.at
     }
 }
-pub trait NativeResourceRepository: NativeClosureRepository + Send + Sync + 'static {
+pub trait NativeResourceRepository:
+    CapacityRepository + NativeClosureRepository + Send + Sync + 'static
+{
     fn reserve_source<'a>(
         &'a self,
         p: &'a PreSourceProbe,
@@ -489,3 +508,15 @@ pub(crate) use tasks::owned_job_registered_for_approval_test;
 mod approval_acceptance_mount;
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
 pub(crate) use approval_acceptance_mount::observe_approval_original;
+
+#[cfg(test)]
+mod origin_tree_acceptance;
+
+#[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+pub(crate) mod capacity_close_write_fault_probe;
+#[cfg(all(
+    test,
+    feature = "native-dispatch-dev-fixtures",
+    feature = "approval-owner-acceptance-fixtures"
+))]
+pub(crate) mod runtime_child_source_clock_probe;

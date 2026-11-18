@@ -180,6 +180,12 @@ const fn release_error_code(error: crate::node::NativeReleaseError) -> &'static 
         },
         NativeReleaseError::Conflict => "request_conflict",
         NativeReleaseError::Native(error) => match error {
+            crate::domain::native_dispatch::DispatchError::SessionCapacityFull => {
+                "session_capacity_full"
+            }
+            crate::domain::native_dispatch::DispatchError::SessionTreeUnverified => {
+                "session_tree_unverified"
+            }
             crate::domain::native_dispatch::DispatchError::NodeStopping
             | crate::domain::native_dispatch::DispatchError::Stopped => "node_stopping",
             crate::domain::native_dispatch::DispatchError::InvalidTarget
@@ -550,6 +556,8 @@ const fn native_view_error_code(
 ) -> &'static str {
     use crate::domain::native_dispatch::DispatchError;
     match error {
+        DispatchError::SessionCapacityFull => "session_capacity_full",
+        DispatchError::SessionTreeUnverified => "session_tree_unverified",
         DispatchError::ProtocolFault(_)
         | DispatchError::ProtocolUnavailable
         | DispatchError::ProtocolRejected => "protocol_failure",
@@ -783,6 +791,8 @@ const fn source_failure_code(
     match error {
         SourceSessionFailure::Configuration(failure) => catalog_error_code(failure.kind()),
         SourceSessionFailure::Native(dispatch) => match dispatch {
+            DispatchError::SessionCapacityFull => "session_capacity_full",
+            DispatchError::SessionTreeUnverified => "session_tree_unverified",
             DispatchError::ProtocolFault(NativeProtocolFailure::UnsupportedCapability) => {
                 "unsupported_capability"
             }
@@ -1572,6 +1582,32 @@ pub(super) fn start(
                             &product_target_record_json(&record),
                         )),
                         Err(error) => catalog_failure(&state, &actor, request, error).await,
+                    }
+                }));
+                return None;
+            }
+            SessionAction::SessionCapacityInspect {} => {
+                let Some(services) = state.session_services.get().cloned() else {
+                    return Some(CommandOutcome::Result(management_error(
+                        request,
+                        "product_not_ready",
+                    )));
+                };
+                let state = state.clone();
+                let actor = actor.clone();
+                pending.push(Box::pin(async move {
+                    match services.session_capacity(&actor).await {
+                        Ok(capacity) => CommandOutcome::Result(management_success(
+                            request,
+                            &serde_json::json!({
+                                "limit": capacity.resources.limit,
+                                "occupied": capacity.resources.occupied,
+                                "reserved": capacity.resources.reserved,
+                                "closedPending": capacity.resources.closed_pending,
+                                "automaticRecycling": capacity.automatic_recycling,
+                            }),
+                        )),
+                        Err(error) => release_failure(&state, &actor, request, error).await,
                     }
                 }));
                 return None;

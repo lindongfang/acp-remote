@@ -929,6 +929,11 @@ async fn historical6_validate_upgraded_storage(
         "main.node_native_release_operations",
         "main.node_source_session_registrations",
         "main.node_source_session_operations",
+        "main.node_session_capacity_releases",
+        "main.node_session_capacity",
+        "main.node_session_automatic_releases",
+        "main.node_session_automatic_release_members",
+        "main.node_session_parents",
     ]
     .into_iter()
     .collect();

@@ -125,6 +125,15 @@ async fn value(
         .await
         .unwrap()
 }
+async fn replay_complete(client: &mut Client, peer: &mut Peer) {
+    // Transport handshake; observation cases separately select their body frames.
+    value(
+        client,
+        peer,
+        &json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-A","update":{"sessionUpdate":"replay_complete"}}}),
+    )
+    .await;
+}
 async fn ready(version: Version) -> (Client, Peer, Strategy, Arc<AtomicUsize>) {
     let (local, remote) = tokio::io::duplex(4096);
     let (reader, writer) = tokio::io::split(local);
@@ -290,6 +299,7 @@ async fn r2_origin_sequence_ignored_and_response_does_not_reset() {
             ObservationOutcome::Ignored
         );
         if version == Version::V2 {
+            replay_complete(&mut client, &mut peer).await;
             let state=value(&mut client,&mut peer,&json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-A","update":{"sessionUpdate":"state_update","state":"idle"}}})).await;
             assert_eq!(
                 read.observe(&mut windows, &state).unwrap(),
@@ -487,6 +497,9 @@ async fn r4_capacity_failure_preserves_permission_state_other_session_pump() {
             a.observe(&mut windows, &incoming).unwrap(),
             ObservationOutcome::Ignored
         );
+        if version == Version::V2 {
+            replay_complete(&mut client, &mut peer).await;
+        }
         let state=value(&mut client,&mut peer,&json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"session-A","update":{"sessionUpdate":"state_update","state":"idle"}}})).await;
         if version == Version::V2 {
             assert!(matches!(

@@ -25,8 +25,10 @@ use tokio::{
     task::JoinHandle,
 };
 
+mod automatic_close;
 #[cfg(windows)]
 mod document_read;
+pub(crate) use automatic_close::AutomaticCloseGuard;
 mod native;
 #[cfg(windows)]
 pub(crate) use document_read::{QueueDocumentError, QueuedBodySnapshot};
@@ -309,6 +311,7 @@ struct OwnerState<T> {
     origins: HashMap<EntityId, crate::domain::native_dispatch::ContentOrigin>,
     priority_handoff: Option<PriorityHandoff>,
     selected_priority: Option<(EntityId, EntityId, u64)>,
+    automatic_close: Option<EntityId>,
 }
 impl<T> OwnerState<T> {
     fn fail_selected_priority(&mut self, failure: PriorityFailure) -> Option<EntityId> {
@@ -599,6 +602,7 @@ impl<T: Send + 'static> RuntimeCore<T> {
                 origins: HashMap::new(),
                 priority_handoff: None,
                 selected_priority: None,
+                automatic_close: None,
             }),
             changed: Notify::new(),
         });

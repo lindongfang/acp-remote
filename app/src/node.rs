@@ -436,6 +436,122 @@ mod tests {
     #[cfg(all(windows, feature = "native-dispatch-dev-fixtures"))]
     mod r3_source_wss_development {
         include!("node/session_services/r3_source_wss_tests.rs");
+        include!("node/session_services/capacity_l6_reservation_cut_acceptance.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_node_acceptance.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_profile_guard_tests.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_replay_clock.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_view_wire.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_work.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_admission.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_boundary.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_children.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_finish.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_ticket_fault.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_capability_flow.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_real_capabilities.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_web_handoff.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_web_handoff_tests.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_target_binding.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_orchestration_acceptance.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_ticket_orchestration_acceptance.rs");
+        #[cfg(all(
+            feature = "approval-owner-dev-fixtures",
+            feature = "approval-owner-acceptance-fixtures"
+        ))]
+        include!("node/session_services/capacity_l6_boundary_orchestration_acceptance.rs");
+        include!("node/session_services/runtime_child_node_acceptance.rs");
+        include!("node/session_services/runtime_child_approval_node_acceptance.rs");
+        include!("node/session_services/runtime_child_approval_failure_acceptance.rs");
+        include!("node/session_services/runtime_child_direct_node_acceptance.rs");
+        include!("node/session_services/runtime_child_direct_failure_acceptance.rs");
+        include!("node/session_services/runtime_child_direct_eof_cancel_acceptance.rs");
+        include!("node/session_services/runtime_child_admission_node_acceptance.rs");
+        include!("node/session_services/runtime_child_queue_node_acceptance.rs");
+        include!("node/session_services/runtime_child_competing_node_acceptance.rs");
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_node_acceptance.rs"
+        ));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_extended_acceptance.rs"
+        ));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_additional_acceptance.rs"
+        ));
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_restart_acceptance.rs"
+        ));
     }
 
     mod catalog_development {

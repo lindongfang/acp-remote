@@ -283,6 +283,34 @@ where
         } else {
             false
         };
+        let known_capacity = if let Some(session) = session {
+            let key =
+                super::NativeSessionKey::from_config(Some(source.pre.metadata.source_id), session)
+                    .map_err(|_| DispatchError::InvalidTarget)?;
+            let recorded = source
+                .capacity
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?
+                .get(&key)
+                .map(|capacity| {
+                    capacity
+                        .record
+                        .lock()
+                        .map(|record| record.is_some())
+                        .map_err(|_| DispatchError::Stopped)
+                })
+                .transpose()?
+                .unwrap_or(false);
+            recorded
+                || self.environment.ownership.owns_live(&key, &source.pre)?
+                || source
+                    .capacity_activity
+                    .lock()
+                    .map_err(|_| DispatchError::Stopped)?
+                    .recognizes_member(session)
+        } else {
+            false
+        };
         let permission = if let NativeIncoming::Permission { rpc, session } = &view.incoming {
             let original = self
                 .protocol
@@ -340,6 +368,12 @@ where
                 .map_err(|_| DispatchError::Stopped)?
                 .obligation = Some(Self::new_id()?);
             self.retain_approval(source, &slot)?;
+            source
+                .capacity_activity
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?
+                .touch(session, std::time::Instant::now())
+                .map_err(|_| DispatchError::ObservationOrder)?;
             Some(slot)
         } else {
             None
@@ -612,11 +646,19 @@ where
             resource.target.changed.notify_waiters();
             self.environment.wake(resource.pre.native());
         } else if !known_external_read
+            && !known_capacity
             && matches!(
                 view.incoming,
                 NativeIncoming::State { .. } | NativeIncoming::Permission { .. }
             )
         {
+            if let Some(session) = session {
+                source
+                    .capacity_activity
+                    .lock()
+                    .map_err(|_| DispatchError::Stopped)?
+                    .unrecognized(session);
+            }
             source
                 .pre
                 .authority
@@ -706,6 +748,69 @@ where
             && source.close_intent.get().is_some()
         {
             self.close_source_permission(source, &permission)?;
+        }
+        let wire = source
+            .memory
+            .lock()
+            .map_err(|_| DispatchError::Stopped)?
+            .initialized
+            .as_ref()
+            .map(|initialized| initialized.metadata.wire);
+        if let Some(wire) = wire
+            && let Some(observation) = self.protocol.capacity_observation(lease, wire)?
+        {
+            if let super::CapacityUpdate::Child { session: child, .. } = &observation.update {
+                self.accept_tree_observation(
+                    source,
+                    &observation.session,
+                    child,
+                    view.sequence,
+                    view.receipt_order,
+                )?;
+            }
+            let mut activity = source
+                .capacity_activity
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?;
+            activity
+                .observe(&observation, std::time::Instant::now())
+                .map_err(|_| DispatchError::ObservationOrder)?;
+            #[cfg(all(
+                test,
+                feature = "native-dispatch-dev-fixtures",
+                feature = "approval-owner-dev-fixtures",
+                feature = "approval-owner-acceptance-fixtures"
+            ))]
+            if matches!(
+                observation.update,
+                super::CapacityUpdate::State(_) | super::CapacityUpdate::Tool { .. }
+            ) && let Ok(raw) = source.raw.lock()
+                && let Some(raw_index) = raw.len().checked_sub(1)
+            {
+                use super::runtime_child_source_clock_probe::{
+                    L6CapacityReceipt, l6_record_capacity_receipt,
+                };
+                l6_record_capacity_receipt(
+                    Arc::as_ptr(self) as usize,
+                    &L6CapacityReceipt {
+                        source: source.pre.metadata.source_id,
+                        instance: source.pre.metadata.instance_id,
+                        session: observation.session.clone(),
+                        raw_index,
+                        sequence: view.sequence,
+                        receipt: view.receipt_order,
+                        freshness: match observation.freshness {
+                            super::CapacityFreshness::Current => "current",
+                            super::CapacityFreshness::History => "history",
+                            super::CapacityFreshness::Unconfirmed => "unconfirmed",
+                        },
+                        post: activity.l6_session_post_for_test(&observation.session),
+                    },
+                );
+            }
+            if known_capacity || known_external_read {
+                activity.recognize(&observation.session);
+            }
         }
         source
             .memory

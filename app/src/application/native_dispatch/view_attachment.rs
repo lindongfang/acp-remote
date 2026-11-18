@@ -19,6 +19,8 @@ impl ViewAttachmentClose {
 pub trait NativeSourceViewOwner: Send + Sync + 'static {
     fn seal(&self) -> Result<(), ViewError>;
     fn seal_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError>;
+    fn restore_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError>;
+    fn bind_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError>;
     fn join_stopped(&self) -> BoxFuture<'_, ViewAttachmentClose>;
 }
 pub trait NativeSourceViewFactory<P: super::NativeApprovalPort>: Send + Sync + 'static {
@@ -146,6 +148,34 @@ impl ViewAttachmentHandoff {
             let _ = owner.seal_target(target);
         }
         self.changed.notify_waiters();
+    }
+    pub(super) fn restore_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError> {
+        let owner = {
+            let state = self.state.lock().map_err(|_| ViewError::ReadFailure)?;
+            match &*state {
+                AttachmentState::Ready(owner) => Some(owner.clone()),
+                AttachmentState::Attaching(owner) => owner.clone(),
+                AttachmentState::Vacant
+                | AttachmentState::Disabled(_)
+                | AttachmentState::UnavailablePartial(_, _)
+                | AttachmentState::NotInstalled => None,
+                _ => return Err(ViewError::CaptureUnavailable),
+            }
+        };
+        if let Some(owner) = owner {
+            owner.restore_target(target)?;
+        }
+        Ok(())
+    }
+    pub(super) fn bind_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError> {
+        let owner = {
+            let state = self.state.lock().map_err(|_| ViewError::ReadFailure)?;
+            match &*state {
+                AttachmentState::Ready(owner) => owner.clone(),
+                _ => return Err(ViewError::CaptureUnavailable),
+            }
+        };
+        owner.bind_target(target)
     }
     pub(super) fn joined_or_not_installed(&self) -> bool {
         match &*self.teardown() {
@@ -309,4 +339,25 @@ pub(super) fn register_closer(
         || {},
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod capacity_restore_tests {
+    use super::*;
+
+    #[test]
+    fn poisoned_attachment_never_grants_a_restored_target() {
+        let handoff = ViewAttachmentHandoff::new(Arc::new(Notify::new()));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _state = handoff.state.lock().unwrap();
+            panic!("development-only poison");
+        }));
+        assert!(result.is_err());
+        let target = super::super::NativeSessionKey::from_config(
+            Some(crate::domain::EntityId::from_bytes([7; 16])),
+            "synthetic",
+        )
+        .unwrap();
+        assert_eq!(handoff.restore_target(&target), Err(ViewError::ReadFailure));
+    }
 }

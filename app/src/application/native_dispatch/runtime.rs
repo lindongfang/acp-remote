@@ -82,6 +82,15 @@ impl NativeRuntimeOptions {
 }
 type CapturedSelection<B> = Result<SelectedContext<B>, (DispatchError, PreparedCapture<B>)>;
 pub(super) trait QueueBridge<B: Clone + Send + Sync + 'static>: Send + Sync {
+    fn automatic_close_tree_guard(
+        &self,
+        natives: &[NativeSessionKey],
+    ) -> Result<Arc<dyn crate::application::queue_owner::AutomaticCloseGuard>, DispatchError>;
+    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+    fn automatic_close_guard(
+        &self,
+        native: &NativeSessionKey,
+    ) -> Result<Arc<dyn crate::application::queue_owner::AutomaticCloseGuard>, DispatchError>;
     fn verify_read_target(
         &self,
         read: &crate::application::queue_owner::ReadTargetProof,
@@ -115,6 +124,19 @@ struct DriverBridge<T, B> {
     retain: Arc<dyn RetainPrompt<T, Retained = B>>,
 }
 impl<T: Send + 'static, B: Clone + Send + Sync + 'static> QueueBridge<B> for DriverBridge<T, B> {
+    fn automatic_close_tree_guard(
+        &self,
+        natives: &[NativeSessionKey],
+    ) -> Result<Arc<dyn crate::application::queue_owner::AutomaticCloseGuard>, DispatchError> {
+        self.driver.automatic_close_tree_guard(natives)
+    }
+    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+    fn automatic_close_guard(
+        &self,
+        native: &NativeSessionKey,
+    ) -> Result<Arc<dyn crate::application::queue_owner::AutomaticCloseGuard>, DispatchError> {
+        self.driver.automatic_close_guard(native)
+    }
     fn verify_read_target(
         &self,
         read: &crate::application::queue_owner::ReadTargetProof,
@@ -227,6 +249,11 @@ where
     pub(super) runtime: RuntimeEpoch,
     pub(super) options: NativeRuntimeOptions,
     pub(super) sources: Mutex<Vec<Arc<SourceSlot<P, L>>>>,
+    pub(super) capacity_routes:
+        tokio::sync::Mutex<HashMap<NativeSessionKey, std::sync::Weak<SourceSlot<P, L>>>>,
+    pub(super) capacity_recycling: tokio::sync::Mutex<()>,
+    pub(super) capacity_scan_started: AtomicBool,
+    pub(super) capacity_scan: OnceLock<Arc<super::tasks::TaskSlot>>,
     pub(super) tasks: TaskRegistry,
     #[cfg(windows)]
     pub(super) source_close_tasks: TaskRegistry,
@@ -259,6 +286,10 @@ where
     pub(super) gate: OnceLock<P::Gate>,
     pub(super) memory: Mutex<SourceMemory<P::Scope>>,
     pub(super) targets: Mutex<HashMap<NativeSessionKey, Arc<ResourceSlot<P>>>>,
+    pub(super) capacity:
+        Mutex<HashMap<NativeSessionKey, Arc<super::capacity::CapacityResource<P>>>>,
+    pub(super) capacity_reservations: Arc<Mutex<Vec<EntityId>>>,
+    pub(super) capacity_activity: Mutex<super::capacity_activity::CapacityActivity>,
     pub(super) external_reads:
         Mutex<HashMap<NativeSessionKey, Arc<super::SourceReadCapability<P>>>>,
     pub(super) all_resources: Mutex<Vec<Arc<ResourceSlot<P>>>>,
@@ -294,6 +325,7 @@ where
     pub(super) pump: OnceLock<Arc<super::tasks::TaskSlot>>,
     pub(super) cleanup: OnceLock<Arc<super::tasks::TaskSlot>>,
     pub(super) observations: Mutex<Vec<Arc<super::observation::PendingObservation>>>,
+    pub(super) tree_observations: Mutex<Vec<Arc<super::source_tree::PendingTreeObservation>>>,
     pub(super) physical_closed: Mutex<Option<super::shutdown::SourcePhysicalClosure>>,
     pub(super) closure: Mutex<Option<Arc<SourceClosureProof>>>,
     pub(super) owner_closed: Mutex<Option<OwnerCloseKind>>,
@@ -457,6 +489,10 @@ where
             runtime,
             options,
             sources: Mutex::new(Vec::new()),
+            capacity_routes: tokio::sync::Mutex::new(HashMap::new()),
+            capacity_recycling: tokio::sync::Mutex::new(()),
+            capacity_scan_started: AtomicBool::new(false),
+            capacity_scan: OnceLock::new(),
             tasks: TaskRegistry::with_progress(close_progress.clone()),
             #[cfg(windows)]
             source_close_tasks: TaskRegistry::new(),

@@ -90,6 +90,8 @@ export type ManagementErrorCode =
   | "invalid_release"
   | "release_failed"
   | "release_unconfirmed"
+  | "session_capacity_full"
+  | "session_tree_unverified"
   | "protocol_failure"
   | "invalid_upload_state"
   | "upload_conflict"
@@ -739,6 +741,8 @@ function knownManagementError(value: string): ManagementErrorCode {
     case "invalid_release":
     case "release_failed":
     case "release_unconfirmed":
+    case "session_capacity_full":
+    case "session_tree_unverified":
     case "protocol_failure":
     case "invalid_upload_state":
     case "upload_conflict":

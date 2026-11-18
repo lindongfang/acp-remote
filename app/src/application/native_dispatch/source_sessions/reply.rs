@@ -55,6 +55,7 @@ struct ReplyState<R: RetainedRaw> {
     decode_failed: bool,
     receiver_ended: bool,
     ownership_failed: bool,
+    tree_unverified: bool,
     never_enqueued: bool,
     confirmed_zero: bool,
 }
@@ -64,6 +65,7 @@ pub(super) struct SourceReplyCell<P: NativeApprovalPort + NativeSourceSessionPor
     pub(super) scope: P::Scope,
     pub(super) rpc: RpcScalar,
     pub(super) kind: SourceRequestKind,
+    wire: super::super::ProtocolVersion,
     pub(super) frame_length: u64,
     tracking: P::ReplyTracking,
     environment: Arc<super::super::NativeEnvironment<P>>,
@@ -86,6 +88,7 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyCell<P> {
         scope: P::Scope,
         rpc: RpcScalar,
         kind: SourceRequestKind,
+        wire: super::super::ProtocolVersion,
         frame_length: u64,
         tracking: P::ReplyTracking,
         environment: Arc<super::super::NativeEnvironment<P>>,
@@ -103,6 +106,7 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyCell<P> {
             scope,
             rpc,
             kind,
+            wire,
             frame_length,
             tracking,
             environment,
@@ -120,6 +124,7 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyCell<P> {
                 decode_failed: false,
                 receiver_ended: false,
                 ownership_failed: false,
+                tree_unverified: false,
                 never_enqueued: false,
                 confirmed_zero: false,
             }),
@@ -214,6 +219,11 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyCell<P> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .ownership_failed
     }
+    pub(super) fn tree_unverified(&self) -> bool {
+        self.state
+            .lock()
+            .map_or(true, |state| state.tree_unverified)
+    }
     /// Only after the original receiver terminal and actual IO join can an empty reservation retire.
     pub(super) fn release_empty_after_io_join(&self) {
         let handoff = self
@@ -270,8 +280,13 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyCell<P> {
             self.queue.clone(),
             total_bytes,
         );
+        let tree_unverified = matches!(
+            &observed_response,
+            SourceObservedResponse::UnverifiedCreated(_)
+        );
         let (kind, native, code) = match observed_response {
-            SourceObservedResponse::Created(session) => {
+            SourceObservedResponse::Created(session)
+            | SourceObservedResponse::UnverifiedCreated(session) => {
                 (SourceResponseKind::Created, Some(session), None)
             }
             SourceObservedResponse::Sessions => (SourceResponseKind::Sessions, None, None),
@@ -282,7 +297,9 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyCell<P> {
         let key = native.as_ref().and_then(|sid| {
             NativeSessionKey::from_config(Some(self.source.metadata().source_id), sid).ok()
         });
-        let ownership_failed = if let Some(key) = &key {
+        let ownership_failed = if let Some(key) = &key
+            && !tree_unverified
+        {
             self.environment
                 .claim_created(&OriginalCreatedClaim {
                     source: self.source.clone(),
@@ -317,6 +334,7 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyCell<P> {
             });
             state.result = Arc::downgrade(&root);
             state.ownership_failed = ownership_failed;
+            state.tree_unverified = tree_unverified;
             state.decode_pending = false;
         }
         self.publisher.publish(root);
@@ -364,6 +382,7 @@ impl<P: NativeApprovalPort + NativeSourceSessionPort> SourceReplyOperation<P::Sc
             kind: self.kind,
             sequence,
             receipt,
+            wire: self.wire,
         };
         let handoff = {
             let mut state = self

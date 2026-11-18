@@ -26,6 +26,7 @@ mod source_sessions;
 #[cfg(windows)]
 pub(crate) use source_sessions::AcpSourceResult;
 mod approval_reply;
+mod capacity_observation;
 pub use approval_reply::AcpPermissionReplyReservation;
 
 const fn error(e: AcpError) -> d::DispatchError {
@@ -794,6 +795,13 @@ fn setup_equal(a: &SessionSetup, b: &SessionSetup) -> Result<bool, d::DispatchEr
 }
 
 impl n::NativeLifecyclePort for AcpNativeAdapter {
+    fn capacity_observation(
+        &self,
+        lease: &Self::Lease,
+        wire: d::ProtocolVersion,
+    ) -> Result<Option<n::CapacityObservation>, d::DispatchError> {
+        capacity_observation::project(lease.received(), version(wire))
+    }
     type Streams = AcpStreams;
     type Source = AcpSource;
     type Start = AcpStart;
@@ -967,6 +975,20 @@ impl n::NativeLifecyclePort for AcpNativeAdapter {
         boundary: Arc<dyn n::LifecycleWriteBoundary<ConnectionScope>>,
         deadline: Instant,
     ) -> Result<WriteTicket, n::EnqueueRejected<Self::LoadReservation, EncodedFrame>> {
+        #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+        if let Ok(connection) = source.connection()
+            && super::capacity_close_write_fault::claim_resume_enqueue_fault(
+                &connection,
+                &reservation.actual,
+            )
+        {
+            // 测试专用单次故障：原封不动交还预留与帧，不触碰传输流及同源其他树。
+            return Err(n::EnqueueRejected {
+                error: d::DispatchError::EnqueueRejected,
+                reservation,
+                frame,
+            });
+        }
         enqueue_lifecycle(source, reservation, frame, boundary, deadline)
     }
     fn reserve_target_close(
@@ -992,6 +1014,22 @@ impl n::NativeLifecyclePort for AcpNativeAdapter {
             &s.0.scope,
         )
     }
+    fn automatic_close_supported(&self, source: &AcpSource) -> Result<bool, d::DispatchError> {
+        if source
+            .0
+            .terminal
+            .lock()
+            .map_err(|_| d::DispatchError::Stopped)?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        let connection = source.connection()?;
+        let strategy = connection
+            .strategy()
+            .ok_or(d::DispatchError::ProtocolUnavailable)?;
+        Ok(strategy.negotiated().capabilities.close)
+    }
     fn enqueue_target_close(
         &self,
         source: &AcpSource,
@@ -1001,6 +1039,46 @@ impl n::NativeLifecyclePort for AcpNativeAdapter {
         deadline: Instant,
     ) -> Result<WriteTicket, n::EnqueueRejected<Self::CloseReservation, EncodedFrame>> {
         enqueue_lifecycle(source, reservation, frame, boundary, deadline)
+    }
+    fn enqueue_automatic_close(
+        &self,
+        source: &AcpSource,
+        gate: &ObservedWriteGate,
+        reservation: Self::CloseReservation,
+        frame: EncodedFrame,
+        boundary: Arc<dyn n::LifecycleWriteBoundary<ConnectionScope>>,
+        deadline: Instant,
+    ) -> Result<WriteTicket, n::EnqueueRejected<Self::CloseReservation, EncodedFrame>> {
+        let connection = match source.connection() {
+            Ok(connection) => connection,
+            Err(error) => {
+                return Err(n::EnqueueRejected {
+                    error,
+                    reservation,
+                    frame,
+                });
+            }
+        };
+        let fence = Arc::new(LifecycleFence {
+            scope: reservation.actual.scope(),
+            rpc: reservation.rpc.clone(),
+            kind: n::LifecycleKind::Close,
+            boundary,
+        });
+        connection
+            .enqueue_automatic_close(reservation.actual, frame, fence, deadline, gate)
+            .map_err(|rejected| {
+                let (failure, actual, frame) = rejected.into_parts();
+                n::EnqueueRejected {
+                    error: error(failure),
+                    reservation: AcpLifecycleReservation {
+                        actual,
+                        rpc: reservation.rpc,
+                        marker: PhantomData,
+                    },
+                    frame,
+                }
+            })
     }
     fn next<'a>(
         &'a self,

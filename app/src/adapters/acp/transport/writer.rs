@@ -56,10 +56,11 @@ impl<W: AsyncWrite + Unpin> PollIo for Proxy<'_, W> {
             return out;
         }
         if s.observed
-            && matches!(
+            && (matches!(
                 cell.identity.kind(),
                 OutboundKind::Request(RequestKind::Prompt(_))
-            )
+            ) || (self.command.automatic_close
+                && matches!(self.step, WriteStep::Chunk { offset: 0, .. })))
             && (s.acknowledged != s.sequence || s.held.as_ref().is_some_and(|h| h.remaining != 0))
         {
             let out = Poll::Pending;
@@ -74,7 +75,7 @@ impl<W: AsyncWrite + Unpin> PollIo for Proxy<'_, W> {
         }
         let out = match self.step {
             WriteStep::Chunk { offset, total } => {
-                match Pin::new(&mut *self.writer).poll_write(cx, &self.command.bytes[offset..]) {
+                match poll_write(self.writer, self.command, cx, offset, total) {
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(Err(_)) => Poll::Ready(Err(AcpError::Io)),
                     Poll::Ready(Ok(n)) => {
@@ -82,6 +83,10 @@ impl<W: AsyncWrite + Unpin> PollIo for Proxy<'_, W> {
                             Poll::Ready(Err(AcpError::Io))
                         } else {
                             let accepted = offset + n;
+                            #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+                            if let Some(fault) = &self.command.capacity_close_fault {
+                                fault.accepted(accepted);
+                            }
                             cell.lock().progress = if accepted == total {
                                 WriteProgress::Flushing { total }
                             } else {
@@ -96,8 +101,7 @@ impl<W: AsyncWrite + Unpin> PollIo for Proxy<'_, W> {
                     }
                 }
             }
-            WriteStep::Flush { .. } => Pin::new(&mut *self.writer)
-                .poll_flush(cx)
+            WriteStep::Flush { .. } => poll_flush(self.writer, self.command, cx)
                 .map(|r| r.map(|()| IoProgress::Flushed).map_err(|_| AcpError::Io)),
         };
         cell.lock().in_poll = false;
@@ -127,6 +131,46 @@ impl<W: AsyncWrite + Unpin> PollIo for Proxy<'_, W> {
 enum StepResult {
     Done,
     Park,
+}
+fn poll_write<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    command: &Command,
+    cx: &mut Context<'_>,
+    offset: usize,
+    total: usize,
+) -> Poll<Result<usize, AcpError>> {
+    #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+    let total = if let Some(fault) = &command.capacity_close_fault {
+        match fault.write_end(offset, total) {
+            Ok(end) => end,
+            Err(error) => return Poll::Ready(Err(error)),
+        }
+    } else {
+        total
+    };
+    Pin::new(writer)
+        .poll_write(cx, &command.bytes[offset..total])
+        .map(|result| result.map_err(|_| AcpError::Io))
+}
+
+fn poll_flush<W: AsyncWrite + Unpin>(
+    writer: &mut W,
+    command: &Command,
+    cx: &mut Context<'_>,
+) -> Poll<Result<(), AcpError>> {
+    #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+    if command
+        .capacity_close_fault
+        .as_ref()
+        .is_some_and(|fault| fault.fail_flush())
+    {
+        return Poll::Ready(Err(AcpError::Io));
+    }
+    #[cfg(not(all(test, feature = "native-dispatch-dev-fixtures")))]
+    let _ = command;
+    Pin::new(writer)
+        .poll_flush(cx)
+        .map(|result| result.map_err(|_| AcpError::Io))
 }
 fn failure(
     core: &Core,
@@ -230,9 +274,20 @@ async fn write<W: AsyncWrite + Unpin>(
                 actual: false,
                 outcome: None,
             };
-            let fence = command
-                .fence
-                .check_and_poll(&command.cell.identity, step, cx, &mut io);
+            #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+            let reject_test_fault = command
+                .capacity_close_fault
+                .as_ref()
+                .is_some_and(|fault| fault.reject_before_poll(step));
+            #[cfg(not(all(test, feature = "native-dispatch-dev-fixtures")))]
+            let reject_test_fault = false;
+            let fence = if reject_test_fault {
+                Err(super::FenceRejection::RequiredStateUnavailable)
+            } else {
+                command
+                    .fence
+                    .check_and_poll(&command.cell.identity, step, cx, &mut io)
+            };
             let invalid = io.calls > 1
                 || (fence.is_ok() && io.calls != 1)
                 || (fence.is_err() && io.calls != 0);

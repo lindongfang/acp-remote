@@ -181,6 +181,19 @@ async fn approval_schema8_upgrades_exact_seven_without_rewriting_old_definitions
         "sqlite_autoindex_node_source_session_registrations_2",
         "sqlite_autoindex_node_source_session_operations_1",
         "sqlite_autoindex_node_source_session_operations_2",
+        "node_session_capacity",
+        "node_session_capacity_native",
+        "node_session_capacity_instance",
+        "sqlite_autoindex_node_session_capacity_1",
+        "node_session_capacity_releases",
+        "sqlite_autoindex_node_session_capacity_releases_1",
+        "node_session_automatic_releases",
+        "node_session_automatic_release_members",
+        "node_session_automatic_release_member_lookup",
+        "sqlite_autoindex_node_session_automatic_releases_1",
+        "sqlite_autoindex_node_session_automatic_release_members_1",
+        "node_session_parents",
+        "sqlite_autoindex_node_session_parents_1",
     ];
     let retained_old: Vec<_> = after
         .iter()

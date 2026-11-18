@@ -90,6 +90,13 @@ impl AcpViewCapture {
     ) -> Result<(u64, u64), ViewError> {
         self.producer.bind_read_route(key, None, None)
     }
+    pub(crate) fn restore_external_route(
+        &mut self,
+        key: crate::domain::native::NativeSessionKey,
+        restored: crate::application::shared_views::send_epoch::RestoredDisplayTarget,
+    ) -> Result<(u64, u64), ViewError> {
+        self.producer.restore_route(key, restored)
+    }
     pub(crate) fn fail_module_read(
         &mut self,
         key: &crate::domain::native::NativeSessionKey,

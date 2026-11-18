@@ -72,6 +72,10 @@ impl<S: Clone + Eq + Send + Sync> ReadWriteBoundary<S> for OriginalReadBoundary<
 pub trait NativeReadResourceAccess<P: crate::application::native_dispatch::NativeApprovalPort>:
     Send + Sync
 {
+    fn current_capability(
+        &self,
+        target: &NativeSessionKey,
+    ) -> Result<Arc<SourceReadCapability<P>>, ViewError>;
     fn acquire_existing<'a>(
         &'a self,
         target: &'a NativeSessionKey,
@@ -82,9 +86,29 @@ pub struct OwnedReadTicketJob<P: crate::application::native_dispatch::NativeAppr
     pub(crate) capability: Arc<SourceReadCapability<P>>,
     pub(crate) work: BoxFuture<'static, ()>,
     pub(crate) on_failure: Box<dyn FnOnce() + Send>,
+    pub(crate) view_generation:
+        Option<crate::application::shared_views::send_epoch::OwnedDisplaySendView>,
 }
 pub struct ReadTicketTaskReceipt {
-    _slot: Weak<TaskSlot>,
+    slot: Weak<TaskSlot>,
+}
+impl ReadTicketTaskReceipt {
+    pub(crate) fn mark_failed(&self) {
+        if let Some(slot) = self.slot.upgrade() {
+            slot.mark_failed();
+        }
+    }
+}
+impl<P: crate::application::native_dispatch::NativeApprovalPort> OwnedReadTicketJob<P> {
+    fn require_current(&self) -> Result<(), ViewError> {
+        self.capability.require_current()?;
+        if let Some(generation) = &self.view_generation
+            && !generation.current()?
+        {
+            return Err(ViewError::SourceReleased);
+        }
+        Ok(())
+    }
 }
 pub struct ReadTicketAdoptionError<P: crate::application::native_dispatch::NativeApprovalPort> {
     pub(crate) error: ViewError,
@@ -130,43 +154,47 @@ where
         + NativeControlRepository
         + crate::application::native_dispatch::NativeApprovalRepository,
 {
+    fn current_capability(
+        &self,
+        target: &NativeSessionKey,
+    ) -> Result<Arc<SourceReadCapability<P>>, ViewError> {
+        let core = self.core.upgrade().ok_or(ViewError::NodeStopping)?;
+        core.running().map_err(|_| ViewError::NodeStopping)?;
+        let source = self.source.upgrade().ok_or(ViewError::CaptureUnavailable)?;
+        if target.source().0 != source.pre.metadata.source_id {
+            return Err(ViewError::InvalidScope);
+        }
+        let capability = if let Some(capability) = source
+            .targets
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?
+            .get(target)
+            .and_then(|resource| resource.read_capability.get())
+            .filter(|capability| capability.require_current().is_ok())
+            .cloned()
+        {
+            capability
+        } else {
+            source
+                .external_reads
+                .lock()
+                .map_err(|_| ViewError::ReadFailure)?
+                .get(target)
+                .cloned()
+                .ok_or(ViewError::InvalidTarget)?
+        };
+        if capability.scope != self.scope || !Arc::ptr_eq(&capability.pre_source, &source.pre) {
+            return Err(ViewError::InvalidScope);
+        }
+        capability.require_current()?;
+        Ok(capability)
+    }
     fn acquire_existing<'a>(
         &'a self,
         target: &'a NativeSessionKey,
         _reason: ReadReason,
     ) -> BoxFuture<'a, Result<NativeReplayBinding<P>, ViewError>> {
-        // No upgraded core/source or lock guard enters the returned future.
-        let capability = (|| {
-            let core = self.core.upgrade().ok_or(ViewError::NodeStopping)?;
-            core.running().map_err(|_| ViewError::NodeStopping)?;
-            let source = self.source.upgrade().ok_or(ViewError::CaptureUnavailable)?;
-            if target.source().0 != source.pre.metadata.source_id {
-                return Err(ViewError::InvalidScope);
-            }
-            let capability = if let Some(capability) = source
-                .targets
-                .lock()
-                .map_err(|_| ViewError::ReadFailure)?
-                .get(target)
-                .and_then(|resource| resource.read_capability.get())
-                .cloned()
-            {
-                capability
-            } else {
-                source
-                    .external_reads
-                    .lock()
-                    .map_err(|_| ViewError::ReadFailure)?
-                    .get(target)
-                    .cloned()
-                    .ok_or(ViewError::InvalidTarget)?
-            };
-            if capability.scope != self.scope || !Arc::ptr_eq(&capability.pre_source, &source.pre) {
-                return Err(ViewError::InvalidScope);
-            }
-            capability.require_current()?;
-            Ok(capability)
-        })();
+        let capability = self.current_capability(target);
         Box::pin(async move { wait_read_binding(capability?).await })
     }
 }
@@ -226,13 +254,14 @@ where
                 job,
             });
         }
-        if let Err(error) = job.capability.require_current() {
+        if let Err(error) = job.require_current() {
             return Err(ReadTicketAdoptionError { error, job });
         }
         let OwnedReadTicketJob {
             capability,
             work,
             on_failure,
+            view_generation,
         } = job;
         let original_capability = Arc::clone(&capability);
         let work: BoxFuture<'static, ()> = Box::pin(async move {
@@ -241,16 +270,44 @@ where
             // independently of the caller and the attachment's weak inventory links.
             drop(original_capability);
         });
-        match source.jobs.spawn_guarded_recover(work, on_failure) {
-            Ok(slot) => Ok(ReadTicketTaskReceipt {
-                _slot: Arc::downgrade(&slot),
-            }),
-            Err((_, work, on_failure)) => Err(ReadTicketAdoptionError {
-                error: ViewError::QueueRejected,
+        // Keep target-specific task ownership under the same source gate as release.
+        let Ok(mut reads) = capability.capacity.reads.lock() else {
+            return Err(ReadTicketAdoptionError {
+                error: ViewError::ReadFailure,
                 job: OwnedReadTicketJob {
                     capability,
                     work,
                     on_failure,
+                    view_generation,
+                },
+            });
+        };
+        if reads.try_reserve(1).is_err() {
+            return Err(ReadTicketAdoptionError {
+                error: ViewError::QueueRejected,
+                job: OwnedReadTicketJob {
+                    capability: capability.clone(),
+                    work,
+                    on_failure,
+                    view_generation,
+                },
+            });
+        }
+        match source.jobs.spawn_guarded_recover(work, on_failure) {
+            Ok(slot) => {
+                reads.push(Arc::downgrade(&slot));
+                drop(reads);
+                Ok(ReadTicketTaskReceipt {
+                    slot: Arc::downgrade(&slot),
+                })
+            }
+            Err((_, work, on_failure)) => Err(ReadTicketAdoptionError {
+                error: ViewError::QueueRejected,
+                job: OwnedReadTicketJob {
+                    capability: capability.clone(),
+                    work,
+                    on_failure,
+                    view_generation,
                 },
             }),
         }

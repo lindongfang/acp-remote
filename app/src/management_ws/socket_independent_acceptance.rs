@@ -52,6 +52,8 @@ use tokio_tungstenite::{
 };
 type Peer = WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>;
 type Reads = ViewReadService<u64, Raw, SocketViewAuthority, SocketViewClient>;
+#[path = "socket_independent_acceptance/capacity_restore_development.rs"]
+mod capacity_restore_development;
 const OBSERVE: Duration = Duration::from_secs(5);
 static AREA: AtomicUsize = AtomicUsize::new(1);
 fn pass(vector: &str) {

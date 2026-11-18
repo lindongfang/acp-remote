@@ -3633,6 +3633,45 @@ async fn configure_native_view_target(f: &Case) {
             && *bound_source == source
             && *bound_profile == profile
     ));
+    let sources = node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .source_sessions
+        .clone();
+    let operation = sources
+        .register(
+            &f.clients[0],
+            crate::domain::source_sessions::SourceLaunchSelection {
+                source,
+                harness,
+                profile,
+                workspace: target(9),
+                launch_path: canonical,
+            },
+            crate::domain::source_sessions::SourceSessionAction::Create,
+        )
+        .await
+        .unwrap();
+    let created = sources
+        .execute(&f.clients[0], operation.id)
+        .await
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    assert_eq!(
+        created.outcome,
+        crate::domain::source_sessions::SourceSessionOutcome::Succeeded,
+        "{created:?}"
+    );
+    let native = created.response.unwrap().native_session_id.unwrap();
+    sqlx::query("UPDATE product_targets SET native_id=? WHERE target_id=?")
+        .bind(native.as_ref())
+        .bind(target(2).encode())
+        .execute(pool)
+        .await
+        .unwrap();
 }
 
 struct NativeViewFixtureRelease(std::path::PathBuf);

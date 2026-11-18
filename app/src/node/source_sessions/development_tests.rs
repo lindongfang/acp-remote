@@ -312,7 +312,7 @@ async fn source_case(
     };
     let result = AssertUnwindSafe(async {
         fixture.start(scenario).await;
-        run(&mut fixture).await
+        run(&mut fixture).await;
     })
     .catch_unwind()
     .await;
@@ -807,7 +807,7 @@ async fn source_sql_fault_case(
     };
     let result = AssertUnwindSafe(async {
         f.case.start("normal").await;
-        run(&mut f).await
+        run(&mut f).await;
     })
     .catch_unwind()
     .await;

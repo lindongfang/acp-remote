@@ -121,8 +121,26 @@ fn read_request(client: &Client, replay: bool, target: &str) -> Request {
 fn state(target: &str, state: &str) -> Value {
     json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":target,"update":{"sessionUpdate":"state_update","state":state,"stopReason":"end_turn"}}})
 }
-async fn finish(client: &mut Client, peer: &mut Peer, rpc: &RpcId, target: &str) -> Incoming {
+async fn replay_complete(client: &mut Client, peer: &mut Peer, target: &str) {
+    receive(
+        client,
+        peer,
+        json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":target,"update":{"sessionUpdate":"replay_complete"}}}),
+    )
+    .await
+    .unwrap();
+}
+async fn finish(
+    client: &mut Client,
+    peer: &mut Peer,
+    rpc: &RpcId,
+    target: &str,
+    replay: bool,
+) -> Incoming {
     if client.strategy().unwrap().version() == Version::V2 {
+        if replay {
+            replay_complete(client, peer, target).await;
+        }
         receive(client, peer, state(target, "idle")).await.unwrap();
     }
     receive(
@@ -485,7 +503,7 @@ async fn cl033_052_replay_and_no_replay_resume_use_their_own_standard_wire_and_c
                     .then(|| json!({"type":"start"}))
                     .as_ref()
             );
-            let event = finish(&mut client, &mut peer, &rpc, "native-opaque").await;
+            let event = finish(&mut client, &mut peer, &rpc, "native-opaque", replay).await;
             assert_eq!(
                 matches!(
                     event,
@@ -525,7 +543,7 @@ async fn cl051_052_one_read_window_per_session_has_zero_write_conflicts_and_erro
                     .await
                     .unwrap();
                 wire(&mut peer).await;
-                finish(&mut client, &mut peer, &b, "B").await;
+                finish(&mut client, &mut peer, &b, "B", true).await;
                 assert_eq!(client.pending_count(), 1);
                 client.cancel(&session("A"), deadline()).await.unwrap();
                 assert_eq!(wire(&mut peer).await["method"], "session/cancel");
@@ -544,7 +562,7 @@ async fn cl051_052_one_read_window_per_session_has_zero_write_conflicts_and_erro
                     .await
                     .unwrap();
                 wire(&mut peer).await;
-                finish(&mut client, &mut peer, &explicit, "A").await;
+                finish(&mut client, &mut peer, &explicit, "A", second).await;
             }
         }
     }
@@ -621,7 +639,7 @@ async fn cl034_051_replay_origin_is_only_a_window_and_permissions_remain_indepen
             );
             no_wire(&mut peer).await;
         }
-        finish(&mut client, &mut peer, &rpc, "A").await;
+        finish(&mut client, &mut peer, &rpc, "A", true).await;
         assert!(matches!(
             receive(&mut client, &mut peer, update("A")).await.unwrap(),
             Incoming::Update {
@@ -674,6 +692,9 @@ async fn cl033_052_v2_requires_a_same_window_snapshot_and_preserves_unknown_stat
                 .unwrap();
             wire(&mut peer).await;
             receive(&mut client, &mut peer, update("A")).await.unwrap();
+            if replay {
+                replay_complete(&mut client, &mut peer, "A").await;
+            }
             for _ in 0..2 {
                 let Incoming::Update {
                     event: SessionEvent::State { state, .. },

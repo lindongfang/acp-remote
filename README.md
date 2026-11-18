@@ -12,6 +12,7 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 `deliver-codex-session-loop` 已于 2026-11-16 归档，实际验证范围以[归档计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md)为准；归档本身不代表任意 Harness 已验收。Pi 接入规划与范围调整见[能力地图](docs/REBUILD_CAPABILITY_MAP.md)。
 
+`deliver-session-capacity` 已完成[批准的第一阶段](openspec/changes/deliver-session-capacity/phase1.md)实现及独立验收、检视：默认50名额、全加载入口准入、原所有者复用、显式释放必要协调和 Web 容量查询；未知主树归属拒绝实际加载，未确认资源继续占额。当前继续实现自动回收与父子共享读取：节点依据已知活动发起关闭，Harness 负责执行；原资源确认关闭、读取任务退出且必要管理提交后才返额。正常启动路径已接入自动扫描，内部回归及独立验收进度见[执行计划](openspec/changes/deliver-session-capacity/plan.md)，实现边界见[节点说明](docs/implementation/session-capacity.md)与[Web 说明](docs/implementation/session-capacity-web.md)。完整独立验收及真实长时间验收仍未完成，整个 change 尚未完成或归档。
 
 ### 归档前阶段记录
 

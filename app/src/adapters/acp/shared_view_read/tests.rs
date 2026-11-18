@@ -197,6 +197,21 @@ async fn replay_before_flush_error(version: Version) {
             .expect("non-response cannot complete")
     );
     if version == Version::V2 {
+        pw.write_all(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-replay","update":{"sessionUpdate":"replay_complete"}}}"#).await.expect("actual V2 replay boundary before current snapshot");
+        pw.write_all(b"\n").await.expect("LF");
+        let marker = timeout_at(deadline(), rx.next())
+            .await
+            .expect("marker wait")
+            .expect("marker read")
+            .expect("actual marker");
+        capture
+            .capture_received(&marker)
+            .expect("same source retains marker raw");
+        assert!(
+            !facts
+                .observe_received(&marker)
+                .expect("marker is not RPC completion")
+        );
         pw.write_all(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"native-replay","update":{"sessionUpdate":"state_update","state":"idle"}}}"#).await.expect("actual mandatory V2 state snapshot");
         pw.write_all(b"\n").await.expect("LF");
         let snapshot = timeout_at(deadline(), rx.next())

@@ -24,6 +24,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 mod replay;
+pub use replay::admit_replay_capacity;
 pub type AcpReadService = crate::application::shared_views::reader::ViewReadService<
     ConnectionScope,
     RetainedAcpRaw,
@@ -130,6 +131,12 @@ impl NativeSourceViewFactory<AcpNativeAdapter> for AcpNativeViewFactory {
             tokio::runtime::Handle::try_current().map_err(|_| ViewError::ReadFailure)?,
         )?;
         let owner = Arc::new(owner);
+        owner
+            .supervisor
+            .install_target_owner(Arc::new(NativeViewTaskOwnership {
+                resources: attached.resources.clone(),
+                registrar: attached.registrar.clone(),
+            }))?;
         *attached.owner.lock().map_err(|_| ViewError::ReadFailure)? = Some(owner.clone());
         attached
             .capture
@@ -181,6 +188,41 @@ impl NativeSourceViewFactory<AcpNativeAdapter> for AcpNativeViewFactory {
         worker.start(&owner)?;
         attached.source.install_views(&attached)?;
         guard.publish()
+    }
+}
+struct NativeViewTaskOwnership {
+    resources: Arc<dyn NativeReadResourceAccess<AcpNativeAdapter>>,
+    registrar: Arc<dyn NativeReadTaskRegistrar<AcpNativeAdapter>>,
+}
+impl crate::application::shared_views::tasks::TargetTaskOwnership for NativeViewTaskOwnership {
+    fn adopt(
+        &self,
+        target: &NativeSessionKey,
+        generation: crate::application::shared_views::send_epoch::OwnedDisplaySendView,
+        joined: crate::application::shared_views::BoxReadFuture<'static, Result<(), ViewError>>,
+    ) -> Result<(), ViewError> {
+        use crate::application::native_dispatch::read_access::{
+            OwnedReadTicketJob, ReadTicketTaskReceipt,
+        };
+        let capability = self.resources.current_capability(target)?;
+        let (started, receipt) = tokio::sync::oneshot::channel::<ReadTicketTaskReceipt>();
+        let job = OwnedReadTicketJob {
+            capability,
+            view_generation: Some(generation),
+            work: Box::pin(async move {
+                if let Ok(receipt) = receipt.await
+                    && joined.await.is_err()
+                {
+                    receipt.mark_failed();
+                }
+            }),
+            on_failure: Box::new(|| {}),
+        };
+        let receipt = self
+            .registrar
+            .adopt(job)
+            .map_err(|rejected| rejected.error)?;
+        started.send(receipt).map_err(|_| ViewError::ReadFailure)
     }
 }
 impl AcpSourceViews {
@@ -246,6 +288,39 @@ impl AcpSourceViews {
         self.capture_replay_received(received)
     }
     #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+    pub(crate) fn test_controller(
+        &self,
+    ) -> Result<
+        crate::application::shared_views::controller::ViewTestController<ConnectionScope>,
+        ViewError,
+    > {
+        let owner = self.owner.lock().map_err(|_| ViewError::ReadFailure)?;
+        owner
+            .as_ref()
+            .map(|owner| owner.test_controller())
+            .ok_or(ViewError::CaptureUnavailable)
+    }
+    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
+    pub(crate) fn spawn_target_task_for_test(
+        &self,
+        target: &NativeSessionKey,
+        work: crate::application::shared_views::BoxReadFuture<'static, Result<(), ViewError>>,
+    ) -> Result<(), ViewError> {
+        let owner = self
+            .owner
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?
+            .clone()
+            .ok_or(ViewError::SourceReleased)?;
+        let generation = owner.handle().core.target(target)?.send.clone();
+        owner.supervisor.spawn_target(
+            crate::application::shared_views::tasks::ViewTaskKind::Reader,
+            target,
+            generation,
+            move |_| work,
+        )
+    }
+    #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
     pub(crate) fn read_control(
         &self,
     ) -> Result<Arc<dyn crate::application::shared_views::read_control::NativeReadControl>, ViewError>
@@ -278,6 +353,25 @@ impl AcpSourceViews {
     }
 }
 impl NativeSourceViewOwner for AcpSourceViews {
+    fn bind_target(&self, target: &NativeSessionKey) -> Result<(), ViewError> {
+        self.restore_target(target)?;
+        self.ensure_external_target(target.clone())
+    }
+    fn restore_target(&self, target: &NativeSessionKey) -> Result<(), ViewError> {
+        let views = self.views()?;
+        if let Some(restored) = views.core.send.restore_target(target)? {
+            let result = self
+                .capture
+                .lock()
+                .map_err(|_| ViewError::ReadFailure)
+                .and_then(|mut capture| capture.restore_external_route(target.clone(), restored));
+            if let Err(error) = result {
+                views.core.send.seal_target(target)?;
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
     fn seal_target(&self, target: &NativeSessionKey) -> Result<(), ViewError> {
         let views = self.views()?;
         let result = views.core.send.seal_target(target);
@@ -319,3 +413,11 @@ impl NativeSourceViewOwner for AcpSourceViews {
         })
     }
 }
+
+#[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+#[path = "runtime_child_task_kind_probe.rs"]
+mod runtime_child_task_kind_probe;
+
+#[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+#[path = "capacity_registration_race_probe.rs"]
+mod capacity_registration_race_probe;

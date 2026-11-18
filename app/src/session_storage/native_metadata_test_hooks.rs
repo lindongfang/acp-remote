@@ -1,4 +1,4 @@
-//! Test-only pauses on the real metadata path, before it owns a connection or starts BEGIN.
+//! Test-only pauses outside the real metadata path's connection ownership.
 use crate::{domain::native_dispatch::DispatchError, test_support::AsyncBarrier};
 use std::{
     collections::HashMap,
@@ -12,6 +12,10 @@ pub enum NativeMetadataPoint {
     DispatchReserveBeforeBegin,
     SourceClosedBeforeBegin,
     SourceStateBeforeBegin,
+    CapacityReleaseOwnedAfterCommit,
+    CapacityReservedAfterCommit,
+    AutomaticReleaseFinishedAfterCommit,
+    AutomaticReleaseBeforeBegin,
 }
 #[derive(Default)]
 pub struct NativeMetadataHooks {

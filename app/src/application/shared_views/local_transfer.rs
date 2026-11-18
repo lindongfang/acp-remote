@@ -259,6 +259,9 @@ impl LocalViewStream {
     pub(crate) fn view_current(&self) -> Result<bool, ViewError> {
         self.inner.view.current()
     }
+    pub(super) fn target_generation_current_in(&self, group: &Group) -> bool {
+        self.inner.view.target_generation_current_in(group)
+    }
     #[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
     pub(crate) fn install_hooks(&self, hooks: Arc<dyn LocalIoHooks>) -> Result<(), ViewError> {
         let mut current = lock(&self.inner.hooks)?;

@@ -675,6 +675,12 @@ where
         if fact == TransportFact::Written
             && let Some(permission) = operation.permission.upgrade()
         {
+            source
+                .capacity_activity
+                .lock()
+                .map_err(|_| ApprovalRejection::NecessaryStorageUnavailable)?
+                .touch(&permission.session, std::time::Instant::now())
+                .map_err(|_| ApprovalRejection::NecessaryStorageUnavailable)?;
             permission
                 .state
                 .lock()

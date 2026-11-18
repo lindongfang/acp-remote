@@ -25,6 +25,10 @@ use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
 use std::{path::PathBuf, time::Duration};
 use tokio::time::{Instant, timeout};
 
+#[path = "child_read_development_tests.rs"]
+mod child_read_tests;
+use child_read_tests::child_read_scenario;
+
 #[tokio::test]
 async fn a2_native_default_resume_saves_sql_without_a_caller_audit() {
     let (storage, area, scope) = a2_native_empty_storage().await;
@@ -350,6 +354,15 @@ impl TrustedNativeConfiguration for Configuration {
         &self,
         d: &NativeDefinition,
     ) -> Result<EffectiveNativeConfiguration, DispatchError> {
+        let identity = if d.target == id(5)
+            && d.arguments
+                .iter()
+                .any(|argument| argument.to_string_lossy().starts_with("child-auto-read"))
+        {
+            id(60)
+        } else {
+            id(6)
+        };
         let mut setups = Vec::new();
         for (wire, version) in [
             (ProtocolVersion::V1, Version::V1),
@@ -360,7 +373,7 @@ impl TrustedNativeConfiguration for Configuration {
                 SetupSnapshot {
                     wire: version,
                     source: ConfigSourceStamp {
-                        reference: Arc::from(id(6).encode()),
+                        reference: Arc::from(identity.encode()),
                         revision: 1,
                     },
                     cwd: Known::Known(Arc::from(
@@ -374,7 +387,7 @@ impl TrustedNativeConfiguration for Configuration {
             ));
         }
         Ok(EffectiveNativeConfiguration {
-            identity: id(6),
+            identity,
             revision: 1,
             environment: vec![],
             setups,
@@ -413,6 +426,18 @@ async fn native_factory_real_child_load_prompt_terminal_close() {
 #[tokio::test]
 async fn native_bridge_first_open_without_input_then_dispatch_uses_same_real_resource() {
     run_factory_scenario("read-first").await;
+}
+#[tokio::test]
+async fn child_auto_read_resumes_unopened_root_once_and_keeps_child_content_current_only() {
+    run_factory_scenario("child-auto-read").await;
+}
+#[tokio::test]
+async fn child_auto_read_root_failure_never_loads_children() {
+    run_factory_scenario("child-auto-read-failure").await;
+}
+#[tokio::test]
+async fn child_auto_read_view_join_failure_keeps_capacity_unconfirmed() {
+    run_factory_scenario("child-auto-read-join-failure").await;
 }
 #[tokio::test]
 async fn native_bridge_resource_release_denies_display_only_for_original_target() {
@@ -715,6 +740,25 @@ async fn run_factory_with_launcher<L>(
     .await
     .unwrap();
     assert_eq!(native.status(), NativeRuntimeStatus::Running);
+    if scenario.starts_with("child-auto-read") {
+        child_read_scenario(&storage, &service, &native, &area, scenario).await;
+        let report = native
+            .shutdown(Instant::now() + Duration::from_secs(8))
+            .await;
+        if scenario.ends_with("join-failure") {
+            assert!(report.joined, "{report:?}");
+        } else {
+            assert!(report.joined && report.metadata_confirmed, "{report:?}");
+        }
+        drop(service);
+        drop(native);
+        timeout(Duration::from_secs(8), storage.close())
+            .await
+            .unwrap();
+        storage_scope.stop_and_observe().await;
+        area.remove_owned_tree().unwrap();
+        return;
+    }
     if bridge_target_release {
         native
             .install_view_factory(Arc::new(
@@ -2512,6 +2556,7 @@ async fn run_factory_with_launcher<L>(
             assert!(!facts.interval_live);
             assert!(facts.requirements.is_empty());
             assert!(facts.failed_requirements.is_empty());
+            drop(facts);
         }
         let settled_before: i64 = sqlx::query_scalar(
             "SELECT count(*) FROM node_native_dispatches \
@@ -3451,6 +3496,10 @@ async fn native_cause_real_ready_wins_later_loaded_sql_failure_and_then_release(
 }
 
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "Preserve source deadline and native close observations in one fixture lifecycle"
+)]
 async fn native_effective_close_deadline_respects_earlier_source_close_deadline() {
     let child = crate::test_support::native_dispatch_dev_child(&["NATIVE_DISPATCH_DEV_CHILD"]);
     assert!(child.is_file());

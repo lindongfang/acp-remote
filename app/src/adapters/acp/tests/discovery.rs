@@ -49,8 +49,18 @@ async fn finish_read(
     id: &RpcId,
     session: &str,
     version: Version,
+    replay: bool,
 ) {
     if version == Version::V2 {
+        if replay {
+            feed(
+                peer,
+                json!({"jsonrpc":"2.0","method":"session/update","params":{
+                "sessionId":session,"update":{"sessionUpdate":"replay_complete"}}}),
+            )
+            .await;
+            client.next(deadline()).await.unwrap();
+        }
         state(peer, session, "idle").await;
         client.next(deadline()).await.unwrap();
     }
@@ -269,7 +279,7 @@ async fn standard_replay_uses_native_id_and_version_specific_method_without_subs
                 .then(|| json!({"type":"start"}))
                 .as_ref()
         );
-        finish_read(&mut client, &mut peer, &id, "opaque-native", version).await;
+        finish_read(&mut client, &mut peer, &id, "opaque-native", version, true).await;
         no_write(&mut peer).await;
     }
 }
@@ -294,7 +304,7 @@ async fn resume_and_replay_share_one_window_per_session_without_blocking_other_s
                 let other = client.request(other, deadline()).await.unwrap();
                 sent(&mut peer).await;
                 assert_eq!(client.pending_count(), 2);
-                finish_read(&mut client, &mut peer, &other, "B", version).await;
+                finish_read(&mut client, &mut peer, &other, "B", version, true).await;
                 assert_eq!(client.pending_count(), 1);
                 client.cancel(&sid("A"), deadline()).await.unwrap();
                 sent(&mut peer).await;
@@ -303,7 +313,7 @@ async fn resume_and_replay_share_one_window_per_session_without_blocking_other_s
                     client.request(conflict, deadline()).await.unwrap_err(),
                     AcpError::SessionReadBusy
                 );
-                finish_read(&mut client, &mut peer, &first, "A", version).await;
+                finish_read(&mut client, &mut peer, &first, "A", version, first_replay).await;
                 let explicit = reading(&client, second_replay, "A");
                 client.request(explicit, deadline()).await.unwrap();
                 sent(&mut peer).await;
@@ -357,7 +367,7 @@ async fn replay_window_keeps_permissions_independent_and_does_not_label_other_se
             sent(&mut peer).await["result"]["outcome"]["outcome"],
             "cancelled"
         );
-        finish_read(&mut client, &mut peer, &id, "A", version).await;
+        finish_read(&mut client, &mut peer, &id, "A", version, true).await;
         feed(&mut peer,json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"A","update":{"sessionUpdate":"future"}}})).await;
         assert!(matches!(
             client.next(deadline()).await.unwrap(),

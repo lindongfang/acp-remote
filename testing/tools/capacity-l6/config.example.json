@@ -1,0 +1,15 @@
+{
+  "format": 1,
+  "runRoot": "D:\\Project\\acp-remote\\.tmp\\capacity-request-tester\\l6-explicit-new-run",
+  "launchProfile": "D:\\OwnedL6\\launch-profile.json",
+  "dedicatedHome": "D:\\OwnedL6\\authenticated-home",
+  "dedicatedCodexHome": "D:\\OwnedL6\\authenticated-codex",
+  "allowModelRequests": false,
+  "defaultLimit": 50,
+  "idleSeconds": 1800,
+  "scenarioFiles": {},
+  "webControl": {
+    "enabled": false,
+    "timeoutSeconds": 900
+  }
+}

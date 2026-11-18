@@ -143,6 +143,10 @@ impl TaskSlot {
     pub(super) fn failed(&self) -> bool {
         self.failed.load(Ordering::SeqCst)
     }
+    pub(super) fn mark_failed(&self) {
+        self.failed.store(true, Ordering::Release);
+        self.changed.notify_waiters();
+    }
 }
 pub(super) struct TaskRegistry {
     slots: Mutex<Vec<Arc<TaskSlot>>>,

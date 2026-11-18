@@ -16,6 +16,7 @@ pub mod native_dispatch;
 pub mod product_commands;
 pub mod request_registry;
 pub mod requests;
+pub mod session_capacity;
 pub mod shared_projection;
 pub mod shared_view;
 pub(crate) mod shared_view_log;

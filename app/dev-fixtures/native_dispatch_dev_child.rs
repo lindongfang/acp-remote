@@ -25,6 +25,7 @@ fn main() {
     let mut late_prompt = None;
     let mut prompts = 0;
     let mut read_first_replays = 0;
+    let mut verified_root: Option<String> = None;
     let mut unsupported_written = false;
     let v2 = scenario.starts_with("stop-v2-")
         || scenario.starts_with("early-stop-v2-")
@@ -32,7 +33,9 @@ fn main() {
         || scenario == "replay-live"
         || scenario == "unknown-shutdown-v2"
         || scenario == "source-create-replay-state"
-        || scenario == "external-reads-quarantine";
+        || scenario == "source-create-replay-state-verified"
+        || scenario == "external-reads-quarantine"
+        || scenario.starts_with("child-auto-read");
     for line in io::stdin().lock().lines() {
         let value: Value = serde_json::from_str(&line.unwrap()).unwrap();
         match value["method"].as_str() {
@@ -66,6 +69,7 @@ fn main() {
                         | "wrong-reply-stays-unknown"
                         | "list-4097"
                         | "list-4098-partial-fail"
+                        | "read-first-held"
                 ) {
                     json!({"protocolVersion":1,"agentInfo":{"name":"native-dispatch-dev","version":"synthetic"},"agentCapabilities":{"loadSession":true,"sessionCapabilities":{"list":{},"newSession":{},"resume":{},"close":{}}}})
                 } else if scenario == "no-list-with-new" {
@@ -80,6 +84,43 @@ fn main() {
                 emit(&json!({"jsonrpc":"2.0","id":value["id"],"result":result}));
             }
             Some("session/load" | "session/resume") => {
+                bump_source_method(value["method"].as_str().unwrap());
+                if scenario.starts_with("child-auto-read") {
+                    let mut log = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("child-read-requests")
+                        .unwrap();
+                    writeln!(log, "{}", value["params"]["sessionId"].as_str().unwrap()).unwrap();
+                    std::fs::write("child-root-resume-held", b"held").unwrap();
+                    while !std::path::Path::new("release-child-root-resume").is_file() {
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    if scenario == "child-auto-read-failure" {
+                        emit(
+                            &json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32603,"message":"root resume rejected"}}),
+                        );
+                    } else {
+                        for child in ["synthetic-child-A", "synthetic-child-B"] {
+                            emit(
+                                &json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":child,"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":format!("automatically delivered {child}")}}}}),
+                            );
+                        }
+                        emit(
+                            &json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":value["params"]["sessionId"],"update":{"sessionUpdate":"replay_complete"}}}),
+                        );
+                        state(&value["params"]["sessionId"], "idle", None);
+                        if scenario.starts_with("child-auto-read-rt") {
+                            for child in ["synthetic-child-A", "synthetic-child-B"] {
+                                state(&json!(child), "idle", None);
+                            }
+                        }
+                        emit(
+                            &json!({"jsonrpc":"2.0","id":value["id"],"result":{"sessionId":value["params"]["sessionId"]}}),
+                        );
+                    }
+                    continue;
+                }
                 if scenario == "r2-v01-discover"
                     && value["params"]["sessionId"] == "source-native-existing"
                 {
@@ -127,12 +168,30 @@ fn main() {
                     );
                     std::fs::write("replay-sent", b"synthetic").unwrap();
                 } else {
-                    if scenario == "source-create-replay-state" {
+                    if scenario == "source-create-replay-state"
+                        || scenario == "source-create-replay-state-verified"
+                    {
+                        let replay_text = if scenario == "source-create-replay-state-verified" {
+                            "capacity fixture replay"
+                        } else {
+                            "created source replay text"
+                        };
                         emit(
-                            &json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":value["params"]["sessionId"],"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"created source replay text"}}}}),
+                            &json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":value["params"]["sessionId"],"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":replay_text}}}}),
                         );
+                        if scenario == "source-create-replay-state-verified" {
+                            emit_verified_child_bodies();
+                        }
                         state(&value["params"]["sessionId"], "running", None);
+                        if v2 && value["params"].get("replayFrom").is_some() {
+                            emit(
+                                &json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":value["params"]["sessionId"],"update":{"sessionUpdate":"replay_complete"}}}),
+                            );
+                        }
                         state(&value["params"]["sessionId"], "idle", Some("cancelled"));
+                        if std::path::Path::new("capacity-race-before-close-child").is_file() {
+                            emit_race_child(&value["params"]["sessionId"]);
+                        }
                     } else if scenario == "external-reads-quarantine" {
                         match value["params"]["sessionId"].as_str() {
                             Some("external-session-state") => {
@@ -157,6 +216,7 @@ fn main() {
                 }
             }
             Some("session/list") => {
+                bump_source_method("session/list");
                 diagnostic("list-seen", &serde_json::to_vec(&value).unwrap());
                 let request_path = std::path::Path::new("source-list-request.jsonl");
                 let mut prior = std::fs::read(request_path).unwrap_or_default();
@@ -174,6 +234,11 @@ fn main() {
                     emit(
                         &json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32602,"message":"SOURCE_REPLY_CANARY","data":{"retained":true}}}),
                     );
+                } else if scenario == "source-create-replay-state-verified" {
+                    if let Some(parent) = verified_root.as_deref() {
+                        emit_verified_children(parent);
+                    }
+                    emit(&json!({"jsonrpc":"2.0","id":value["id"],"result":{"sessions":[]}}));
                 } else if scenario == "r2-v01-discover"
                     && value["params"]["cursor"] == "opaque-next-cursor"
                 {
@@ -218,10 +283,18 @@ fn main() {
                 diagnostic("list-replied", b"yes");
             }
             Some("session/new")
+                if scenario == "read-first-held" || scenario.starts_with("stop-v2-") =>
+            {
+                emit(
+                    &json!({"jsonrpc":"2.0","id":value["id"],"result":{"sessionId":"synthetic-native-A"}}),
+                );
+            }
+            Some("session/new")
                 if matches!(
                     scenario.as_str(),
                     "r2-v01-discover"
                         | "source-create-replay-state"
+                        | "source-create-replay-state-verified"
                         | "external-reads-quarantine"
                         | "normal"
                         | "exit-create"
@@ -262,16 +335,50 @@ fn main() {
                     }
                 }
                 let id = serde_json::to_string(&value["id"]).unwrap();
-                let raw = format!(
-                    r#"{{"jsonrpc":"2.0","id":{id},"result":{{"sessionId":"source-native-created","_future":{{"kept":true,"num":1.2300e+09}}}}}}"#
-                );
+                let created_native = if scenario == "source-create-replay-state-verified" {
+                    format!("source-native-created-{count}")
+                } else {
+                    "source-native-created".to_owned()
+                };
+                let raw = if scenario == "source-create-replay-state-verified" {
+                    format!(
+                        r#"{{"jsonrpc":"2.0","id":{id},"result":{{"sessionId":"{created_native}"}}}}"#
+                    )
+                } else {
+                    format!(
+                        r#"{{"jsonrpc":"2.0","id":{id},"result":{{"sessionId":"source-native-created","_future":{{"kept":true,"num":1.2300e+09}}}}}}"#
+                    )
+                };
                 let mut stdout = io::stdout().lock();
                 stdout.write_all(raw.as_bytes()).unwrap();
                 stdout.write_all(b"\n").unwrap();
                 stdout.flush().unwrap();
                 diagnostic("create-replied", b"yes");
+                if scenario == "source-create-replay-state-verified" {
+                    let idle_flag = std::path::Path::new("runtime-next-created-idle");
+                    if idle_flag.is_file() {
+                        std::fs::remove_file(idle_flag).unwrap();
+                        state(&json!(created_native), "idle", None);
+                        let deferred_native = created_native.clone();
+                        std::thread::spawn(move || {
+                            let deadline =
+                                std::time::Instant::now() + std::time::Duration::from_secs(180);
+                            while std::time::Instant::now() < deadline {
+                                if std::path::Path::new("l6-deferred-current-ready").is_file() {
+                                    state(&json!(deferred_native), "running", None);
+                                    break;
+                                }
+                                std::thread::sleep(std::time::Duration::from_millis(2));
+                            }
+                        });
+                    } else if std::path::Path::new("capacity-protect-created-roots").is_file() {
+                        state(&json!(created_native), "running", None);
+                    }
+                    verified_root = Some(created_native);
+                }
             }
             Some("session/prompt") => {
+                bump_source_method("session/prompt");
                 if scenario.starts_with("control-") {
                     assert!(
                         unsupported_written,
@@ -445,7 +552,37 @@ fn main() {
                     }
                 }
             }
-            Some("session/close") => emit(&json!({"jsonrpc":"2.0","id":value["id"],"result":{}})),
+            Some("session/close") => {
+                if std::path::Path::new("capacity-race-after-close-child").is_file() {
+                    emit_race_child(&value["params"]["sessionId"]);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+                    while !std::path::Path::new("capacity-race-release-closed").is_file() {
+                        assert!(
+                            std::time::Instant::now() < deadline,
+                            "owned Closed barrier expired"
+                        );
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                }
+                if std::path::Path::new("runtime-auto-count-close").is_file() {
+                    let n = std::fs::read_to_string("rt-auto-close-count")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0)
+                        + 1;
+                    std::fs::write("rt-auto-close-count", n.to_string()).unwrap();
+                }
+                if scenario.starts_with("child-auto-read-rt") {
+                    assert_eq!(value["params"]["sessionId"], "synthetic-native-A");
+                    let n = std::fs::read_to_string("rt-child-close-count")
+                        .ok()
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(0)
+                        + 1;
+                    std::fs::write("rt-child-close-count", n.to_string()).unwrap();
+                }
+                emit(&json!({"jsonrpc":"2.0","id":value["id"],"result":{}}));
+            }
             None if value["id"] == "synthetic-unsupported" => {
                 assert!(!unsupported_written);
                 assert_eq!(value["error"]["code"], -32601);
@@ -459,6 +596,46 @@ fn main() {
             _ => panic!("unexpected synthetic native dev method"),
         }
     }
+}
+fn emit_race_child(parent: &Value) {
+    emit(&json!({"jsonrpc":"2.0","method":"session/update","params":{
+        "sessionId":parent,"update":{"sessionUpdate":"subagent_update",
+        "sessionId":"capacity-race-late-child","state":{"state":"running","background":[]}}}}));
+    state(&json!("capacity-race-late-child"), "running", None);
+    std::fs::write("capacity-race-child-emitted", b"standard-notification").unwrap();
+}
+fn emit_verified_children(parent: &str) {
+    for child in ["rt-direct-child-A", "rt-direct-child-B"] {
+        emit(&json!({"jsonrpc":"2.0","method":"session/update","params":{
+            "sessionId":parent,"update":{"sessionUpdate":"subagent_update",
+            "sessionId":child,"state":{"state":"idle","background":[]}}}}));
+        state(&json!(child), "idle", None);
+    }
+}
+fn emit_verified_child_bodies() {
+    for (child, text) in [
+        ("rt-direct-child-A", "RT actual alpha child A"),
+        ("rt-direct-child-B", "RT actual beta child B"),
+    ] {
+        emit(&json!({"jsonrpc":"2.0","method":"session/update","params":{
+            "sessionId":child,"update":{"sessionUpdate":"agent_message_chunk",
+            "content":{"type":"text","text":text}}}}));
+    }
+}
+fn bump_source_method(method: &str) {
+    let filename = match method {
+        "session/load" => "source-load-count",
+        "session/resume" => "source-resume-count",
+        "session/prompt" => "source-prompt-count",
+        "session/list" => "source-list-count",
+        _ => return,
+    };
+    let count = std::fs::read_to_string(filename)
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+        .unwrap_or(0)
+        + 1;
+    std::fs::write(filename, count.to_string()).unwrap();
 }
 fn state(session: &Value, value: &str, reason: Option<&str>) {
     let mut update = json!({"sessionUpdate":"state_update","state":value});

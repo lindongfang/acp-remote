@@ -138,7 +138,9 @@ impl R3WssCase {
         assert!(std::path::Path::new(child.as_ref()).is_file());
         let wire = if matches!(
             scenario,
-            "source-create-replay-state" | "external-reads-quarantine"
+            "source-create-replay-state"
+                | "source-create-replay-state-verified"
+                | "external-reads-quarantine"
         ) {
             2
         } else {
@@ -259,19 +261,30 @@ impl R3WssCase {
     }
 
     async fn close(&mut self) -> bool {
+        self.close_with_cleanup_budget(Duration::from_secs(15))
+            .await
+    }
+
+    async fn close_with_cleanup_budget(&mut self, cleanup_budget: Duration) -> bool {
         for peer in &mut self.peers {
             let _ = peer.socket.close(None).await;
         }
         self.peers.clear();
         let closed = if let Some(node) = self.node.take() {
-            node.shutdown(None).await.is_ok()
+            node.shutdown_with_deadline(None, cleanup_budget)
+                .await
+                .is_ok()
         } else {
             true
         };
-        let joined = if let Some(owner) = &self.owner {
-            owner.join_actual().await.is_ok()
+        let joined = if closed {
+            if let Some(owner) = &self.owner {
+                owner.join_actual().await.is_ok()
+            } else {
+                true
+            }
         } else {
-            true
+            false
         };
         closed && joined
     }
@@ -1461,4 +1474,67 @@ async fn r3_wss_external_read_quarantine_boundaries() {
         })
     })
     .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn r3_wss_close_returns_false_without_hanging_when_shutdown_fails() {
+    let mut fixture = R3WssCase {
+        area: TestArea::new(),
+        owner: None,
+        node: None,
+        peers: Vec::new(),
+        selection: None,
+    };
+    fixture.start("source-create-replay-state-verified", false).await;
+    let registered = fixture
+        .call(
+            0,
+            1,
+            "source.session.register",
+            serde_json::json!({
+                "selection": fixture.selection_json(),
+                "operation": { "kind": "create" }
+            }),
+        )
+        .await;
+    let operation = registered["result"]["sourceOperationId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let created = fixture
+        .call(
+            0,
+            2,
+            "source.session.execute",
+            serde_json::json!({ "sourceOperationId": operation }),
+        )
+        .await;
+    assert_eq!(created["ok"], true, "{created}");
+    let node = fixture.node.as_ref().unwrap();
+    let storage = node.storage.as_ref().unwrap();
+    let pool = storage.pool_for_test().clone();
+    let registry = storage.request_registry();
+    let database = fixture.area.data_dir().join("node.sqlite3");
+    let native = node.session_services.as_ref().unwrap().native.clone();
+    sqlx::query(
+        "CREATE TRIGGER r3_close_unconfirmed_source BEFORE UPDATE OF lifecycle \
+         ON node_native_source_instances WHEN NEW.lifecycle='closed' \
+         BEGIN SELECT RAISE(ABORT,'owned r3 close metadata fault'); END",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    let closed = timeout(Duration::from_secs(20), fixture.close())
+        .await
+        .expect("R3WssCase::close must return false without hanging on retained driver");
+    assert!(!closed, "unconfirmed source metadata must report close=false");
+    sqlx::query("DROP TRIGGER r3_close_unconfirmed_source")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let recovered = native
+        .shutdown(tokio::time::Instant::now() + Duration::from_secs(10))
+        .await;
+    assert!(recovered.joined && recovered.metadata_confirmed);
+    close_timed_out_test_storage(pool, registry, database).await;
 }

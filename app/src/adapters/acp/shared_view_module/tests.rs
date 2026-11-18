@@ -291,6 +291,8 @@ async fn shared_view_module_real_create_early_sid_backfill_authenticated_fixed_h
         .await
         .expect("true replay history");
     peer.write_bytes(b"\n", deadline()).await.expect("LF");
+    peer.write_bytes(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"new-native","update":{"sessionUpdate":"replay_complete"}}}
+"#, deadline()).await.expect("original replay history ends before current state");
     peer.write_bytes(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"new-native","update":{"sessionUpdate":"state_update","state":"idle"}}}"#,deadline()).await.expect("mandatory real state snapshot");
     peer.write_bytes(b"\n", deadline()).await.expect("LF");
     let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();
@@ -380,6 +382,8 @@ async fn shared_view_module_real_create_early_sid_backfill_authenticated_fixed_h
         .await
         .expect("same real large history");
     peer.write_bytes(b"\n", deadline()).await.expect("LF");
+    peer.write_bytes(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"new-native","update":{"sessionUpdate":"replay_complete"}}}
+"#, deadline()).await.expect("original replay history ends before current state");
     peer.write_bytes(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"new-native","update":{"sessionUpdate":"state_update","state":"idle"}}}"#,deadline()).await.expect("state snapshot");
     peer.write_bytes(b"\n", deadline()).await.expect("LF");
     let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();
@@ -459,16 +463,30 @@ async fn shared_view_module_real_create_early_sid_backfill_authenticated_fixed_h
         .credit(last)
         .await
         .expect("last actual raw chunk credit");
+    let marker = transfer
+        .next_record()
+        .await
+        .expect("original replay boundary raw");
+    assert_eq!(marker.address().kind(), RecordKind::OriginalRaw);
+    assert!(
+        std::str::from_utf8(marker.bytes())
+            .expect("marker JSON")
+            .contains("replay_complete")
+    );
+    transfer
+        .credit(last + 1)
+        .await
+        .expect("replay marker credit");
     let state = transfer
         .next_record()
         .await
         .expect("next actual original state record");
     assert_eq!(state.address().kind(), RecordKind::OriginalRaw);
     transfer
-        .credit(last + 1)
+        .credit(last + 2)
         .await
         .expect("state record credit");
-    let mut final_packet = last + 1;
+    let mut final_packet = last + 2;
     let mut projection_headers = 0;
     let mut evidence_records = 0;
     loop {
@@ -509,8 +527,8 @@ async fn shared_view_module_real_create_early_sid_backfill_authenticated_fixed_h
         }
     }
     assert_eq!(
-        projection_headers, 2,
-        "message/state keep their actual anchors"
+        projection_headers, 3,
+        "message/replay marker/state keep their actual anchors"
     );
     assert_eq!(
         evidence_records, 1,

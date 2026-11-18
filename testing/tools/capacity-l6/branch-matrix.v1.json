@@ -1,0 +1,54 @@
+{
+  "format": 1,
+  "basis": "openspec/changes/deliver-session-capacity/tests.md",
+  "cases": {
+    "cp011": [
+      "real_fifty_and_three_ingress_last_slot",
+      "long_silent_task_protected_1800",
+      "only_child_work_protected_1800",
+      "approval_and_cancel_work_protection_1800",
+      "unprotected_restarts_actual_1800",
+      "cache_and_replay_distinct_actual_clocks",
+      "pressure_before_send_received_work_recheck",
+      "failed_unknown_close_keeps_slot",
+      "no_candidate_explicit_refusal",
+      "shared_tree_untouched_and_restore_input",
+      "same_node_real_harness_web",
+      "complete_owned_job_cleanup"
+    ],
+    "cp023": [
+      "received_trusted_real_children_unopened_root",
+      "direct_children_exact_distinct_bodies",
+      "one_original_tree_owner_and_slot",
+      "real_fifty_no_candidate_then_confirmed_close",
+      "child_failure_cancel_preserves_original_owner",
+      "deleted_root_or_invalid_relationship_refusal",
+      "tree_final_resource_join_and_shared_tree_isolation",
+      "same_node_real_harness_web",
+      "complete_owned_job_cleanup"
+    ],
+    "cp026": [
+      "cache_only_actual_1800_no_keepalive",
+      "actual_replay_received_near_timeout",
+      "after_last_receive_1799_then_1800_and_scan",
+      "fifty_recent_replay_only_candidate",
+      "read_join_close_confirmed_necessary_finish_then_admit",
+      "shared_tree_isolation_and_history_limits",
+      "same_node_real_harness_web",
+      "complete_owned_job_cleanup"
+    ],
+    "cp032": [
+      "real_known_work_vs_unprovided_coverage",
+      "missing_fields_do_not_clear_known_work",
+      "foreground_or_connection_invalid_protects",
+      "fifty_candidate_and_refusal",
+      "received_before_send_recheck",
+      "real_written_closed_and_system_original_nonempty_set",
+      "node_zero_partial_unknown_ticket_boundaries",
+      "closed_necessary_finish_fault_keeps_fifty",
+      "same_original_repair_once_and_restart_owner_isolation",
+      "same_node_real_harness_web",
+      "complete_owned_job_cleanup"
+    ]
+  }
+}

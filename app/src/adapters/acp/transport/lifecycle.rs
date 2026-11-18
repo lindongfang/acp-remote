@@ -64,6 +64,10 @@ where
         installation_notify: Notify::new(),
         #[cfg(test)]
         hooks,
+        #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+        capacity_close_fault: Mutex::new(None),
+        #[cfg(all(test, feature = "native-dispatch-dev-fixtures"))]
+        capacity_resume_fault: Mutex::new(None),
     });
     core.lock().observed = observed;
     tasks(&core)

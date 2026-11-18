@@ -95,6 +95,9 @@ impl ReadTransferStream {
     pub(crate) fn view_current(&self) -> Result<bool, ViewError> {
         dispatch!(self, view_current)
     }
+    pub(super) fn target_generation_current_in(&self, group: &super::send_epoch::Group) -> bool {
+        dispatch!(self, target_generation_current_in, group)
+    }
     #[cfg(any(test, feature = "shared-view-acceptance-fixtures"))]
     pub(crate) fn install_hooks(
         &self,

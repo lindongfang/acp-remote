@@ -115,6 +115,12 @@ impl SqliteNativeReleaseOperations {
                 if current.phase != NativeReleaseStoredPhase::Registered {
                     return Ok(current);
                 }
+                super::session_capacity::bind_capacity_release(
+                    connection,
+                    current.operation,
+                    current.target,
+                )
+                .await?;
                 let updated_at_ms = read_registered_at(connection, operation).await?.max(at_ms);
                 let changed = sqlx::query(
                     "UPDATE node_native_release_operations SET phase='releasing',updated_at_ms=? \
@@ -158,6 +164,9 @@ impl SqliteNativeReleaseOperations {
                     || current.phase == NativeReleaseStoredPhase::Failed
                         && current.error_code.as_deref() == expected
                 {
+                    if current.phase == NativeReleaseStoredPhase::Released {
+                        super::session_capacity::release_capacity_for_operation(connection, current.operation, current.target).await?;
+                    }
                     return Ok(current);
                 }
                 if current.phase != NativeReleaseStoredPhase::Releasing {
@@ -185,6 +194,9 @@ impl SqliteNativeReleaseOperations {
                 .map_err(|_| RegistryError::StorageUnavailable)?;
                 if changed.rows_affected() != 1 {
                     return Err(RegistryError::Conflict);
+                }
+                if expected.is_none() {
+                    super::session_capacity::release_capacity_for_operation(connection, current.operation, current.target).await?;
                 }
                 read_owned(connection, actor, operation).await
             })

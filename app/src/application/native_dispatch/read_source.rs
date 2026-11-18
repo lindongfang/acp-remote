@@ -29,22 +29,61 @@ pub enum ReadTargetKind {
 }
 
 /// A current route on the original resource, independent of reliable Loaded metadata.
-pub struct SourceReadCapability<P: crate::application::native_dispatch::NativeApprovalPort> {
+pub enum SourceReadCapability<P: crate::application::native_dispatch::NativeApprovalPort> {
+    RootResource(RootReadCapability<P>),
+    ChildAutoDelivered(ChildReadCapability<P>),
+}
+pub struct ChildReadCapability<P: crate::application::native_dispatch::NativeApprovalPort> {
+    view_subject: super::NativeSessionKey,
+    owner_resource: Arc<SourceReadCapability<P>>,
+}
+pub struct RootReadCapability<P: crate::application::native_dispatch::NativeApprovalPort> {
     pub(super) kind: ReadTargetKind,
     pub(super) source: P::Source,
     pub(super) pre_source: Arc<PreSourceProbe>,
     pub(super) pre_resource: Option<Arc<PreResourceProbe>>,
+    pub(super) capacity: Arc<super::capacity::CapacityResource<P>>,
+    pub(super) capacity_admission: Arc<dyn super::capacity::ReadCapacityAdmission>,
     pub(super) native: super::NativeSessionKey,
     pub(super) scope: P::Scope,
     pub(super) binding: EntityId,
     pub(super) wire: ProtocolVersion,
     pub(super) setup: Arc<P::BoundSetup>,
-    pub(super) resume: Option<Arc<LifecycleOperation<P>>>,
+    pub(super) resume: OnceLock<Arc<LifecycleOperation<P>>>,
+    pub(super) activation_lock: tokio::sync::Mutex<()>,
     pub(super) changed: Arc<Notify>,
     pub(super) view_handoff: std::sync::Weak<super::view_attachment::ViewAttachmentHandoff>,
 }
+impl<P: crate::application::native_dispatch::NativeApprovalPort> std::ops::Deref
+    for SourceReadCapability<P>
+{
+    type Target = RootReadCapability<P>;
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::RootResource(root) => root,
+            Self::ChildAutoDelivered(child) => &child.owner_resource,
+        }
+    }
+}
 impl<P: crate::application::native_dispatch::NativeApprovalPort> SourceReadCapability<P> {
-    pub(crate) const fn is_source_only(&self) -> bool {
+    pub(crate) const fn is_child_auto_delivered(&self) -> bool {
+        matches!(self, Self::ChildAutoDelivered(_))
+    }
+    pub(crate) async fn reserve_replay_capacity(&self) -> Result<(), ViewError> {
+        self.require_current()?;
+        if self.is_child_auto_delivered() {
+            return Err(ViewError::InvalidTarget);
+        }
+        self.capacity_admission.reserve().await?;
+        let resource = self.pre_resource.as_ref().ok_or(ViewError::InvalidTarget)?;
+        super::capacity::restore_display(&self.pre_source, resource, || {
+            if let Some(view) = self.view_handoff.upgrade() {
+                view.restore_target(&self.native)?;
+            }
+            Ok(())
+        })
+    }
+    pub(crate) fn is_source_only(&self) -> bool {
         matches!(self.kind, ReadTargetKind::SourceOnly)
     }
     pub(crate) fn view_failure(&self) -> Option<ViewError> {
@@ -52,19 +91,22 @@ impl<P: crate::application::native_dispatch::NativeApprovalPort> SourceReadCapab
             .upgrade()
             .and_then(|handoff| handoff.unavailable_reason())
     }
-    pub(crate) const fn source(&self) -> &P::Source {
+    pub(crate) fn source(&self) -> &P::Source {
         &self.source
     }
-    pub(crate) const fn scope(&self) -> &P::Scope {
+    pub(crate) fn scope(&self) -> &P::Scope {
         &self.scope
     }
     pub(crate) const fn native(&self) -> &super::NativeSessionKey {
-        &self.native
+        match self {
+            Self::RootResource(root) => &root.native,
+            Self::ChildAutoDelivered(child) => &child.view_subject,
+        }
     }
     pub(crate) fn setup(&self) -> &P::BoundSetup {
         &self.setup
     }
-    pub(crate) const fn configuration_binding(&self) -> (EntityId, ProtocolVersion) {
+    pub(crate) fn configuration_binding(&self) -> (EntityId, ProtocolVersion) {
         (self.binding, self.wire)
     }
     pub(crate) fn write_boundary(
@@ -93,7 +135,7 @@ impl<P: crate::application::native_dispatch::NativeApprovalPort> SourceReadCapab
     }
     fn activation(&self) -> Result<ReadActivationSnapshot, ViewError> {
         self.require_current()?;
-        let Some(resume) = self.resume.as_ref() else {
+        let Some(resume) = self.resume.get() else {
             return Ok(ReadActivationSnapshot::Ready);
         };
         let response = resume.response.lock().map_err(|_| ViewError::ReadFailure)?;
@@ -226,11 +268,7 @@ pub(super) async fn wait_read_binding<
 >(
     capability: Arc<SourceReadCapability<P>>,
 ) -> Result<NativeReplayBinding<P>, ViewError> {
-    if capability.is_source_only() {
-        capability.require_current()?;
-        return Ok(NativeReplayBinding { capability });
-    }
-    let Some(resume) = capability.resume.as_ref() else {
+    let Some(resume) = capability.resume.get() else {
         capability.require_current()?;
         return Ok(NativeReplayBinding { capability });
     };
@@ -303,7 +341,7 @@ where
                 let result = core
                     .ensure_read_resource(proof, Arc::clone(&completed))
                     .await;
-                completed.finish(result.map(|_| ()));
+                completed.finish(result);
             },
             move || failed.finish(Err(DispatchError::RequiredStateUnavailable)),
         )?;
@@ -333,3 +371,5 @@ where
 
 #[cfg(test)]
 pub(super) mod cause_tests;
+
+mod child;

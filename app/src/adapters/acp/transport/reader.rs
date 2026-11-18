@@ -6,8 +6,8 @@
 use super::{
     super::model::{field, object, text},
     AcpError, Arc, AsyncRead, Incoming, Instant, RawMessage, RequestKind, Response,
-    ResponseDeadline, RpcId, SessionEvent, SessionId, Strategy, UnsupportedRequest, UpdateOrigin,
-    Version, raw,
+    ResponseDeadline, RpcId, SessionEvent, SessionId, Strategy, UnsupportedRequest,
+    UpdateFreshness, UpdateOrigin, Version, raw,
     state::{Core, ReceiptCut},
 };
 use sha2::{Digest, Sha256};
@@ -186,6 +186,14 @@ fn route(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), AcpE
             let session = event.session();
             let mut s = core.lock();
             let (view_context, view_window) = receipt_context(&s, cut, session, &core.scope);
+            let freshness = update_freshness(
+                &mut s,
+                cut,
+                &event,
+                strategy.version(),
+                view_context,
+                view_window.as_ref(),
+            );
             let window = cut.windows.iter().find(|(target, key, _)| {
                 target == session && s.pending.values().any(|p| p.cell.key == *key && p.accepted)
             });
@@ -193,6 +201,7 @@ fn route(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), AcpE
                 (*origin, Some(*key))
             });
             if matches!(event, SessionEvent::State { .. })
+                && freshness == UpdateFreshness::Current
                 && let Some(key) = key
             {
                 for p in s.pending.values_mut() {
@@ -209,6 +218,7 @@ fn route(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), AcpE
             if let Some(received) = s.events.back_mut() {
                 received.view_context = view_context;
                 received.view_window = view_window;
+                received.update_freshness = Some(freshness);
             }
             return Ok(());
         }
@@ -219,6 +229,73 @@ fn route(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), AcpE
         );
     }
     response(core, cut, raw)
+}
+fn update_freshness(
+    state: &mut super::state::State,
+    cut: &ReceiptCut,
+    event: &SessionEvent,
+    wire: Version,
+    context: super::ViewReadContextKind,
+    window: Option<&super::ReceivedReadWindow>,
+) -> UpdateFreshness {
+    let session = event.session();
+    match context {
+        super::ViewReadContextKind::AmbiguousReceiptWindow => UpdateFreshness::Unconfirmed,
+        super::ViewReadContextKind::OutsideReadWindow => {
+            // A replacement accepted after this receipt cannot acquire the old frame.
+            // With no replacement, frames after the original response are live again.
+            if state.pending.values().any(|pending| {
+                pending.accepted
+                    && matches!(&pending.kind, RequestKind::Resume(s) | RequestKind::Replay(s) if s == session)
+            })
+            {
+                UpdateFreshness::Unconfirmed
+            } else {
+                UpdateFreshness::Current
+            }
+        }
+        super::ViewReadContextKind::UniqueReceiptWindow => {
+            let Some(window) = window else {
+                return UpdateFreshness::Unconfirmed;
+            };
+            let Some(pending) = state.pending.get_mut(window.rpc()) else {
+                return UpdateFreshness::Unconfirmed;
+            };
+            if pending.cell.key != window.cell_key()
+                || !pending.accepted
+                || !cut
+                    .eligible
+                    .iter()
+                    .any(|(rpc, key)| rpc == window.rpc() && *key == pending.cell.key)
+            {
+                return UpdateFreshness::Unconfirmed;
+            }
+            match &pending.kind {
+                RequestKind::Resume(target) if target == session => {
+                    if wire == Version::V2 {
+                        UpdateFreshness::Current
+                    } else {
+                        UpdateFreshness::History
+                    }
+                }
+                RequestKind::Replay(target) if target == session => {
+                    if wire != Version::V2 {
+                        return UpdateFreshness::History;
+                    }
+                    if matches!(event, SessionEvent::Other { kind, .. } if kind.as_ref() == "replay_complete")
+                    {
+                        pending.replay_complete = true;
+                        UpdateFreshness::History
+                    } else if pending.replay_complete {
+                        UpdateFreshness::Current
+                    } else {
+                        UpdateFreshness::History
+                    }
+                }
+                _ => UpdateFreshness::Unconfirmed,
+            }
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum CellSelection {
@@ -386,6 +463,9 @@ fn receipt_context(
 
     (view_context, view_window)
 }
+
+#[cfg(test)]
+mod freshness_development_tests;
 
 #[cfg(test)]
 mod view_context_selection_tests {

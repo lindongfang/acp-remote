@@ -783,7 +783,10 @@ mod tests {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let lengths = stdout
                 .lines()
-                .find_map(|line| line.strip_prefix("IDENTITY_WRITE_BYTES="))
+                .find_map(|line| {
+                    line.split_once("IDENTITY_WRITE_BYTES=")
+                        .map(|(_, lengths)| lengths)
+                })
                 .expect("explicit write stage metadata");
             let (written, total) = lengths.split_once('/').expect("length metadata");
             let written: u64 = written.parse().expect("written length");
