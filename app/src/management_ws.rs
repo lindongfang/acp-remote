@@ -2604,6 +2604,44 @@ async fn run_view_pump(
                 }
             } => next,
         };
+        #[cfg(feature = "approval-owner-acceptance-fixtures")]
+        {
+            use std::io::Write;
+            let desc = match &next {
+                Ok(PrepareNext::Chunk(chunk)) => {
+                    format!(
+                        "pump_next: Chunk(p={}, r={}, k={:?})
+",
+                        chunk.packet_sequence(),
+                        chunk.address().record_id(),
+                        chunk.address().kind()
+                    )
+                }
+                Ok(PrepareNext::SnapshotFinished) => "pump_next: SnapshotFinished
+"
+                .to_string(),
+                Ok(PrepareNext::AwaitCredit) => "pump_next: AwaitCredit
+"
+                .to_string(),
+                Ok(PrepareNext::AwaitData) => "pump_next: AwaitData
+"
+                .to_string(),
+                Ok(PrepareNext::Closed) => "pump_next: Closed
+"
+                .to_string(),
+                Err(e) => format!(
+                    "pump_next: Err({e:?})
+"
+                ),
+            };
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open("D:\\Project\\acp-remote\\.tmp\\cp026_server_pump.log")
+            {
+                let _ = f.write_all(desc.as_bytes());
+            }
+        }
         match next {
             Ok(PrepareNext::Chunk(chunk)) => match chunk.into_socket() {
                 Ok(chunk) => pending_chunk = Some(chunk),
@@ -2613,6 +2651,20 @@ async fn run_view_pump(
                 snapshot_done = true;
             }
             Ok(PrepareNext::AwaitCredit) => {
+                #[cfg(feature = "approval-owner-acceptance-fixtures")]
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("D:\\Project\\acp-remote\\.tmp\\cp026_server_pump.log")
+                    {
+                        let _ = f.write_all(
+                            b"pump_next: AwaitCredit entering wait
+",
+                        );
+                    }
+                }
                 let ready = stream.ready_notified();
                 tokio::pin!(ready);
                 ready.as_mut().enable();
@@ -2663,10 +2715,37 @@ async fn run_view_pump(
                         )
                         .await;
                     }
-                    () = ready => {}
+                    () = ready => {
+                        #[cfg(feature = "approval-owner-acceptance-fixtures")]
+                        {
+                            use std::io::Write;
+                            if let Ok(mut f) = std::fs::OpenOptions::new()
+                                .create(true)
+                                .append(true)
+                                .open("D:\\Project\\acp-remote\\.tmp\\cp026_server_pump.log")
+                            {
+                                let _ = f.write_all(b"pump_next: AwaitCredit ready received
+                ");
+                            }
+                        }
+                    }
                 }
             }
             Ok(PrepareNext::AwaitData) => {
+                #[cfg(feature = "approval-owner-acceptance-fixtures")]
+                {
+                    use std::io::Write;
+                    if let Ok(mut f) = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open("D:\\Project\\acp-remote\\.tmp\\cp026_server_pump.log")
+                    {
+                        let _ = f.write_all(
+                            b"pump_next: AwaitData entering select
+",
+                        );
+                    }
+                }
                 tokio::select! {
                     biased;
                     _ = stop.changed() => {

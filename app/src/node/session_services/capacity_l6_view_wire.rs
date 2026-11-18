@@ -115,7 +115,9 @@ async fn capacity_l6_drain_view(
     let packets = std::sync::atomic::AtomicU64::new(0);
     let last_raw_kind = std::sync::atomic::AtomicU8::new(0);
     let records_count = std::sync::atomic::AtomicUsize::new(0);
-    let timed = timeout(Duration::from_secs(90), async {
+    let trace_log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let trace_log_inner = trace_log.clone();
+    let timed = timeout(Duration::from_secs(15), async {
         let mut assembly = CapacityL6RecordAssembly::new(stream);
         let mut records = Vec::new();
         loop {
@@ -152,6 +154,16 @@ async fn capacity_l6_drain_view(
                         } else {
                             false
                         };
+                        let desc = match kind {
+                            RecordKind::OriginalRaw => format!("P{}R{}Raw({})", header.packet(), header.record(), body.len()),
+                            RecordKind::ItemProjection => format!("P{}R{}Item({})", header.packet(), header.record(), body.len()),
+                            RecordKind::Status => {
+                                let s: serde_json::Value = serde_json::from_slice(&body).unwrap_or_default();
+                                format!("P{}R{}Status({}-{})", header.packet(), header.record(), s["type"].as_str().unwrap_or("?"), s["phase"].as_str().unwrap_or("?"))
+                            }
+                            RecordKind::SnapshotEnd => format!("P{}R{}End", header.packet(), header.record()),
+                        };
+                        trace_log_inner.lock().unwrap().push(desc);
                         records.push((kind, body));
                         records_count.store(records.len(), std::sync::atomic::Ordering::Relaxed);
                         if rebound || kind == RecordKind::SnapshotEnd {
@@ -160,6 +172,7 @@ async fn capacity_l6_drain_view(
                     }
                 }
                 Some(Ok(Message::Text(text))) => {
+                    trace_log_inner.lock().unwrap().push(format!("Text({})", text.len()));
                     let event: serde_json::Value = serde_json::from_str(text.as_str())
                         .map_err(|_| "view_invalid_management_event")?;
                     if event.get("requestId").is_some() {
@@ -178,7 +191,15 @@ async fn capacity_l6_drain_view(
             let p = packets.load(std::sync::atomic::Ordering::Relaxed);
             let k = last_raw_kind.load(std::sync::atomic::Ordering::Relaxed);
             let r = records_count.load(std::sync::atomic::Ordering::Relaxed);
-            let msg = format!("view_snapshot_deadline_elapsed_p{p}_k{k}_r{r}");
+            let trace = trace_log.lock().unwrap();
+            let _ = std::fs::write("D:\\Project\\acp-remote\\.tmp\\cp026_client_trace.log", trace.join("
+"));
+            let sample = if trace.len() > 8 {
+                format!("f4[{}],l4[{}]", trace[..4].join(";"), trace[trace.len() - 4..].join(";"))
+            } else {
+                trace.join(";")
+            };
+            let msg = format!("view_snapshot_deadline_elapsed_p{p}_k{k}_r{r}_{sample}");
             Err(Box::leak(msg.into_boxed_str()))
         }
     }
