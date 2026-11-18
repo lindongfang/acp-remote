@@ -12,7 +12,7 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 `deliver-codex-session-loop` 已于 2026-11-16 归档，实际验证范围以[归档计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md)为准；归档本身不代表任意 Harness 已验收。Pi 接入规划与范围调整见[能力地图](docs/REBUILD_CAPABILITY_MAP.md)。
 
-`deliver-session-capacity` 已完成[批准的第一阶段](openspec/changes/deliver-session-capacity/phase1.md)实现及独立验收、检视：默认50名额、全加载入口准入、原所有者复用、显式释放必要协调和 Web 容量查询；未知主树归属拒绝实际加载，未确认资源继续占额。当前继续实现自动回收与父子共享读取：节点依据已知活动发起关闭，Harness 负责执行；原资源确认关闭、读取任务退出且必要管理提交后才返额。正常启动路径已接入自动扫描，内部回归及独立验收进度见[执行计划](openspec/changes/deliver-session-capacity/plan.md)，实现边界见[节点说明](docs/implementation/session-capacity.md)与[Web 说明](docs/implementation/session-capacity-web.md)。完整独立验收及真实长时间验收仍未完成，整个 change 尚未完成或归档。
+`deliver-session-capacity` 已于 2026-11-19 完成 20/20 任务并归档，实际双层 L6 闭环与最终交付范围见[归档计划](openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md)，实现边界见[节点说明](docs/implementation/session-capacity.md)与[Web 说明](docs/implementation/session-capacity-web.md)；长期规格与验收套件已分别同步至 `openspec/specs/session-resource-policy/spec.md`、`openspec/specs/harness-management/spec.md` 与 `testing/suites/session-resource-policy/tests.md`。
 
 ### 归档前阶段记录
 
@@ -20,7 +20,7 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 主工程现已合入 SQLite schema9、拥有明确关闭责任的 Node/原生运行组件、共享视图及原始 JSON 保真处理。组件回归和主工程编译、Web 检查已分别执行；普通 Node 启动已装配同一配置、队列、原生运行、审批、视图和正文准备服务；独立工厂验收仍在进行，WSS/Web 完整会话操作及真实 Harness 验收尚未完成。节点内的上传分块、连接绑定、正文准备、共享队列交接、排队正文分块回读及配置文档上传/登记/应用/查询组件已合入；配置读取会核对凭据所属的原节点，拒绝另一节点的凭据。上传、配置管理、队列和正文回读的认证网络路由及页面操作仍待接线。全项目格式检查已通过，严格 lint 仍有待清理项，固定版本与具体结果以[执行计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md)为准。
 
-重建的能力归属、交付闭环与 change 依赖见 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)。当前有 7 个未归档 change，包含 Pi 的接入规划；节点接入和通用闭环的归档证据各自限定范围，其他能力按各自 change 交付。文档检视、上游依赖与真实验收结果分别记录，不能将节点接入验收外推为其他能力已经通过。
+重建的能力归属、交付闭环与 change 依赖见 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)。当前有 6 个未归档远期规划 change（均标记 `x-deferred: true`），包含 Pi 的接入规划；节点接入、通用闭环与会话容量的归档证据各自限定范围，其他能力按各自 change 交付。文档检视、上游依赖与真实验收结果分别记录，不能将节点接入验收外推为其他能力已经通过。
 
 新版共享队列、节点请求登记、SQLite schema5及拥有后台任务的队列服务已实现，168项阶段独立验收包含原39项队列测试和追加的物理关闭回归。公共ACP运行时现已接入原始JSON解析，保留未知结构和大数，并提供持续读取、单写入者及可取消和等待关闭的IO所有者；120项阶段独立验收覆盖公开协议路径和自有测试子进程。这些阶段组件与后续原生派发、共享视图已进入普通 Node 装配；网络入口与 Web 共享操作仍待接线，当前配对管理页尚不能操作该队列。详细范围及主工程集成检查见[执行计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md)，阶段测试不代表完整Harness/Web闭环已交付。
 

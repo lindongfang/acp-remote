@@ -39,7 +39,7 @@
 | openspec/specs/harness-management/spec.md | 能力准入与证据状态分开 | 实际行为与声明不符 | CL-039 |
 | openspec/specs/harness-management/spec.md | 能力准入与证据状态分开 | 禁止有副作用的自动探测 | CL-048 |
 | openspec/specs/harness-management/spec.md | 历史与激活能力独立验证 | 只有恢复能力 | CL-047、CL-106 |
-| openspec/specs/harness-management/spec.md | 会话工作观测与回收能力分别呈现 | 接入可交互但不能自动回收 | CL-069 |
+| openspec/specs/harness-management/spec.md | 会话工作观测与回收能力分别呈现 | 接入可交互但不能自动回收 | CL-069、CP-027、CP-029、CP-032 |
 | openspec/specs/harness-management/spec.md | 默认继承节点环境 | 默认继承并显式覆盖 | CL-055、CL-057 |
 | openspec/specs/harness-management/spec.md | 实例由节点拥有 | 页面断开 | CL-006 |
 | openspec/specs/harness-management/spec.md | 实例由节点拥有 | 共享实例释放 | CL-007 |

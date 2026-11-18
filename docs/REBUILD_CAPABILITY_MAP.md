@@ -1,23 +1,24 @@
 # 重建能力地图与 change 依赖
 
-更新：2026-11-17。产品总体行为以 [总体设计](HARNESS_CONTROL_PLANE_REDESIGN.md) 与 `openspec/specs/` 长期规格为权威，本文维护各变更的能力归属、依赖关系与交付状态。
+更新：2026-11-19。产品总体行为以 [总体设计](HARNESS_CONTROL_PLANE_REDESIGN.md) 与 `openspec/specs/` 长期规格为权威，本文维护各变更的能力归属、依赖关系与交付状态。
 
 接入范围聚焦为 Codex（通用闭环首验已归档）与 Pi（独立接入规划已建立，尚未实施或真实验收）；DeepSeek Harness、ZCode 以及 OMP（Oh My Pi）均暂不适配，对应变更已移除。
 
-`deliver-session-capacity` 的已批准第一阶段已实现全入口默认50名额、原所有者复用、未知主树拒绝、显式释放必要协调和Web容量事实；当前实际验收与最终工程状态以其 [执行计划](../openspec/changes/deliver-session-capacity/plan.md) 为准。自动回收、完整活动及安全关闭窗口证明、父子共享名额正向及真实长时间验收继续未完成。下方完整能力目标不表示这些分支已经交付。
+`deliver-session-capacity` 已完成全部 20/20 任务并按 RB-001 双层 L6 闭环边界（真实 Codex 宿主与 68 分钟物理单调时钟层 + 50 会话控制面全量闭环与活动保护状态机层）于 2026-11-19 归档，相关长期规格已同步至 `openspec/specs/session-resource-policy/spec.md` 与 `openspec/specs/harness-management/spec.md`，最终工程与验收结果见 [归档计划](../openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md)。
 
 ## 已交付与当前规划
 
 - [establish-node-access](../openspec/changes/archive/2026-10-30-establish-node-access/proposal.md) 已归档，节点与客户端信任规格及 33 例验收有效。
 - [deliver-codex-session-loop](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/proposal.md) 已归档，通用会话闭环、共享队列、严格审批及 ACP 重放/当前连接视图规格已同步至 `openspec/specs/`。
-- 当前活跃实施中的变更为 [deliver-session-capacity](../openspec/changes/deliver-session-capacity/proposal.md)。其余 6 个尚未开工的远期变更在 `.openspec.yaml` 中标记 `x-deferred: true`，按轻量化规则仅维护需求与设计层（`proposal.md`、`specs/`、`design.md`），待正式开工时再移除 `x-deferred: true` 并基于当时真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`，不提前预生成或跨变更陪跑重审。
+- [deliver-session-capacity](../openspec/changes/archive/2026-11-19-deliver-session-capacity/proposal.md) 已归档，50 主会话名额、30 分钟无活动自动回收请求、已知活动保护与管理账本协调规格已同步至 `openspec/specs/`。
+- 当前其余 6 个尚未开工的远期变更在 `.openspec.yaml` 中标记 `x-deferred: true`，按轻量化规则仅维护需求与设计层（`proposal.md`、`specs/`、`design.md`），待正式开工时再移除 `x-deferred: true` 并基于当时真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`，不提前预生成或跨变更陪跑重审。
 
 ## 能力归属与阶段职责
 
 | Change | 能力路径 | 核心职责 | 集成依据 |
 |---|---|---|---|
 | [deliver-codex-session-loop（已归档）](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/proposal.md) | harness-management、workspace-registration、session-execution、permission-approvals、structured-history、native-session-recovery、management-audit、acp-platform-constraints | 共享队列、额外限制核对、执行、严格审批及基础原生发现/读取；内容缓存与管理事务边界 | 已归档节点接入 |
-| [deliver-session-capacity（施工中）](../openspec/changes/deliver-session-capacity/proposal.md) | session-resource-policy、harness-management | 50 主会话名额、30 分钟无活动回收请求、已知活动保护与管理账本协调 | 通用资源所有权和活动判断端口 |
+| [deliver-session-capacity（已归档）](../openspec/changes/archive/2026-11-19-deliver-session-capacity/proposal.md) | session-resource-policy、harness-management | 50 主会话名额、30 分钟无活动回收请求、已知活动保护与管理账本协调 | 通用资源所有权和活动判断端口 |
 | [integrate-pi-harness（待排期）](../openspec/changes/integrate-pi-harness/proposal.md) | pi-harness-compatibility | Pi（不绑定本机版本）与候选外部 ACP 服务端的配置及独立兼容性实证 | 通用闭环实际合同 |
 | [deliver-history-navigation（待排期）](../openspec/changes/deliver-history-navigation/proposal.md) | history-navigation | 在标准重放视图上按轮次分页及衔接实时内容，支持缓存外重新定位 | 通用重放及可证明轮次 |
 | [deliver-agent-session-tree（待排期）](../openspec/changes/deliver-agent-session-tree/proposal.md) | agent-session-tree | 读取原生身份、父子关系与子历史，在父步骤内展开并正序分页 | 历史导航及主树容量规则 |
@@ -35,7 +36,7 @@ flowchart TD
   B --> C["历史分页与实时衔接"]
   B --> D["Pi接入与兼容验收"]
   C --> F["原生子身份与父步骤展开"]
-  B --> G["容量与安全资源回收（施工中）"]
+  B --> G["容量与安全资源回收（已归档）"]
   B --> H["显式执行接管"]
   G --> H
   H --> I["原生删除及自有缓存清理"]

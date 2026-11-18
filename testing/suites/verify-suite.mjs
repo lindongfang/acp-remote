@@ -31,7 +31,7 @@ const EXTENSION_META_KEY_RE = /^x-\S+$/;
 const IGNORED_LINK_PREFIX_RE =
   /^(?:testing\/runs|openspec\/testing\/runs|\.tmp|reports|test-evidence|\.worktrees|\.target-wt|target|app\/target|node_modules|dist)(?:\/|$)/;
 // In-flight legacy change nearing closeout; exempt from newly introduced Living Document / extra-file / 6-col review / link checks until archived.
-const LEGACY_HYGIENE_EXEMPT_CHANGES = new Set(['deliver-session-capacity']);
+const LEGACY_HYGIENE_EXEMPT_CHANGES = new Set();
 const PROPOSAL_SECTIONS = [
   'Why',
   'Success Criteria',

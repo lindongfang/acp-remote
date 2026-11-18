@@ -44,7 +44,7 @@
 
 ## Impact
 
-- 依赖：[deliver-native-session-import](../deliver-native-session-import/proposal.md)、[deliver-session-capacity](../deliver-session-capacity/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：[deliver-native-session-import](../deliver-native-session-import/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
 - 影响范围：原生删除协议适配、管理事务与审计清理、自有缓存/上传回收及 Web 删除确认交互；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

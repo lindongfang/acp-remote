@@ -43,7 +43,7 @@
 
 ## Impact
 
-- 依赖：基础原生身份/加载端口及 [deliver-session-capacity](../deliver-session-capacity/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：基础原生身份/加载端口及 [deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
 - 影响范围：执行所有权登记、原生恢复协调、容量预留接线与 Web 接管交互；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

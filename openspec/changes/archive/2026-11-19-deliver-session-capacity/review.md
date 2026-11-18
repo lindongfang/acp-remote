@@ -6,7 +6,7 @@
 
 已验证 OpenSpec strict 11/11、`git diff --check` exit 0。全部产品用例 not-run，未运行构建、真实 Harness 或数据迁移；不签整个架构、完整旧材料重基准或实施准备通过，现有产品实现继续暂停。
 
-共同29文件结论追加前快照及3份 tests 摘要见[共同受审查快照](../deliver-codex-session-loop/review.md)顶部，聚合为 `749c7707fd1c8bf312fd7d9502186ec6694c173a5e34772a95d3312ed1678082`。追加本报告不把快照摘要冒充报告追加后的文件摘要。
+共同29文件结论追加前快照及3份 tests 摘要见[共同受审查快照](../2026-11-16-deliver-codex-session-loop/review.md)顶部，聚合为 `749c7707fd1c8bf312fd7d9502186ec6694c173a5e34772a95d3312ed1678082`。追加本报告不把快照摘要冒充报告追加后的文件摘要。
 
 ---
 
@@ -24,7 +24,7 @@
 
 已核对通用重放准入、全量流式处理与有界可丢弃分页视图、读取代际及完成事实、失败和子能力限制、能力变化后的旧事实与资源责任；不增加厂商读取器或无重放降级。25 条新增定义（19 L5、6 L6）及39行 Requirement/Scenario 关联经独立逐项核对，其余3份 tests 范围一致。OpenSpec 全量 strict 11/11、`git diff --check` exit 0。全部产品用例 not-run，未执行构建或真实 Harness；原生身份、Run/后台活动、交付账本、双向 I/O 及完整旧资料重基准仍未完成，不恢复实现。
 
-本轮65文件报告追加前固定摘要与9份 tests 摘要见[共同受审查快照](../deliver-codex-session-loop/review.md)顶部；聚合为 `f9d01a364731b7495470132551fbd690c86245ee2bc9eb8174abc03cd742ad04`。本段与 plan 中的转录不改写此前快照、历史结论或当前规格/用例。
+本轮65文件报告追加前固定摘要与9份 tests 摘要见[共同受审查快照](../2026-11-16-deliver-codex-session-loop/review.md)顶部；聚合为 `f9d01a364731b7495470132551fbd690c86245ee2bc9eb8174abc03cd742ad04`。本段与 plan 中的转录不改写此前快照、历史结论或当前规格/用例。
 
 ---
 

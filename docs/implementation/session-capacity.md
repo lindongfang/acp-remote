@@ -1,6 +1,6 @@
 # 会话容量实现
 
-容量账本与显式释放的已验收基线见 [第一阶段合同](../../openspec/changes/deliver-session-capacity/phase1.md)。本次继续按 [RB-001 运行时合同](../../openspec/changes/deliver-session-capacity/automatic-release-runtime.md) 实现自动关闭请求及父子读取；完整独立验收和真实 Harness 长时间验收尚未完成，不能据内部测试归档整个 change。
+容量账本与显式释放的已验收基线见 [第一阶段合同](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/phase1.md)。本次继续按 [RB-001 运行时合同](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/automatic-release-runtime.md) 实现自动关闭请求及父子读取；完整独立验收和真实 Harness 长时间验收尚未完成，不能据内部测试归档整个 change。
 
 ## 实现
 
@@ -10,7 +10,7 @@
 
 执行加载和 SourceOnly 标准重放复用同一账本。只初始化辅助 source 或进行不加载的查询不占额。实际重放在产生 `session/load`（v1）或 `session/resume`（v2）之前预留。相同来源和原生 ID 优先路由回原 owner，即使调用入口使用另一启动配置；不能接管尚未协调的旧 owner。
 
-只有原始无未解释扩展的标准 new 成功能够建立第一阶段独立主会话依据。请求配置包含未知扩展时在写入前拒绝；原始成功响应包含未知字段、非空元数据或未知变体时，保留原始响应、原生身份、确认和预留责任，但不建立主树证明，并返回 `session_tree_unverified`。检查按原连接的协议版本识别标准模式、配置及命令结构，也检查 MCP 配置的嵌套扩展；不从界面名称或描述猜测父子关系。允许字段的上游依据及下载快照摘要见 [协议证据](../../testing/runs/deliver-session-capacity/2026-11-16-schema-evidence.json)。
+只有原始无未解释扩展的标准 new 成功能够建立第一阶段独立主会话依据。请求配置包含未知扩展时在写入前拒绝；原始成功响应包含未知字段、非空元数据或未知变体时，保留原始响应、原生身份、确认和预留责任，但不建立主树证明，并返回 `session_tree_unverified`。检查按原连接的协议版本识别标准模式、配置及命令结构，也检查 MCP 配置的嵌套扩展；不从界面名称或描述猜测父子关系。允许字段的上游依据及下载快照摘要见 协议证据（`testing/runs/deliver-session-capacity/2026-11-16-schema-evidence.json`）。
 
 外部会话没有可靠主树关系时，实际加载返回 `session_tree_unverified`，不加载的查询仍按自身能力提供。不会修改未知配置字段、猜测父子关系或为子目标单独增加名额。旧资源迁移只保留容量责任，不补造主树证明。
 
@@ -34,15 +34,15 @@
 
 ## 策略与验证边界
 
-实现遵循 [RB-001 运行时合同](../../openspec/changes/deliver-session-capacity/automatic-release-runtime.md)：节点依据已知活动选择候选并发起普通关闭，Harness 负责执行。未上报后台/子范围不单独禁止请求，也不代表完整空闲；已知执行、工具、审批及子工作仍保护。历史状态与当前快照分别处理，实际收到重放只刷新计时。前台未知、归属不明、必要管理未协调或没有关闭能力时保护。请求发送与确认释放分开，未确认不返额。
+实现遵循 [RB-001 运行时合同](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/automatic-release-runtime.md)：节点依据已知活动选择候选并发起普通关闭，Harness 负责执行。未上报后台/子范围不单独禁止请求，也不代表完整空闲；已知执行、工具、审批及子工作仍保护。历史状态与当前快照分别处理，实际收到重放只刷新计时。前台未知、归属不明、必要管理未协调或没有关闭能力时保护。请求发送与确认释放分开，未确认不返额。
 
 正常启动完成旧运行责任协调、进入 Running 后，节点登记自有周期扫描任务；启动失败使运行进入未确认状态并停止健康处理。扫描与容量压力请求共用原关闭操作，退出沿节点 stop 和任务 join 收敛。压力请求在首字节前重新核对原候选的活动和完整排序；若原目标已失去资格，本次撤回并保额，不改关另一棵树。SQL 等待期间唯一候选收到重放不构成永久豁免。
 
-可信子会话读取复用原主资源所有者及名额，直接打开两个子会话时只恢复主会话。子正文沿原连接自动投递，保持当前连接模式，不因主会话完成历史重放而宣称子历史完整。原读取任务真实加入主资源的关闭责任，最后一个任务尚未 join 或 join 失败时不能返额。详细边界见 [父子读取合同](../../openspec/changes/deliver-session-capacity/tree-read-runtime.md)。
+可信子会话读取复用原主资源所有者及名额，直接打开两个子会话时只恢复主会话。子正文沿原连接自动投递，保持当前连接模式，不因主会话完成历史重放而宣称子历史完整。原读取任务真实加入主资源的关闭责任，最后一个任务尚未 join 或 join 失败时不能返额。详细边界见 [父子读取合同](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/tree-read-runtime.md)。
 
-开发 SQLite、单调策略和原生模拟对端各有不同证据范围。真实节点阶段验收使用独立 tester 的 [入口及说明](../../testing/runs/deliver-session-capacity/tester/2026-11-16-phase1/driver-handoff.md)。模拟 ACP 对端没有模型任务，不证明真实 Harness 的实际关闭效果或完整 L6；逐项结果以实际报告及 [执行计划](../../openspec/changes/deliver-session-capacity/plan.md) 为准。启动接线后的独立验收与真实 50 树、实际 30 分钟验收仍须另行完成。
+开发 SQLite、单调策略和原生模拟对端各有不同证据范围。真实节点阶段验收使用独立 tester 的 入口及说明（`testing/runs/deliver-session-capacity/tester/2026-11-16-phase1/driver-handoff.md`）。模拟 ACP 对端没有模型任务，不证明真实 Harness 的实际关闭效果或完整 L6；逐项结果以实际报告及 [执行计划](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md) 为准。启动接线后的独立验收与真实 50 树、实际 30 分钟验收仍须另行完成。
 
-本轮节点验证按下表关联 [CP 用例](../../openspec/changes/deliver-session-capacity/tests.md)。表格只说明对应的断言和代码入口；完成状态须结合固定版本下的原始结果与独立逐项矩阵，不以测试总数代替覆盖判定。
+本轮节点验证按下表关联 [CP 用例](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/tests.md)。表格只说明对应的断言和代码入口；完成状态须结合固定版本下的原始结果与独立逐项矩阵，不以测试总数代替覆盖判定。
 
 | CP 范围 | 本地节点验证入口与断言 | 证据边界 |
 | --- | --- | --- |
@@ -53,9 +53,9 @@
 | CP-010、023、030、032 | 系统关闭存储测试、原树合同测试、RT013–018：原关闭结果、必要提交故障、最后读取任务、迟到 child、登记/关闭交错、同操作协调和只返一次 | Closed、必要提交与原任务 join 是独立事实。CP-023/032 的真实父子身份、真实规模及 Harness 结果另需 L6，不由本地故障注入代签。 |
 | CP-027、029 | 当前/历史来源投影、能力判断和扫描登记测试：实际关闭能力、前台未知、失效连接、未上报范围及 Running/Stopped 状态 | `automaticRecycling` 不是某树的可回收资格或关闭成功证明；当前 Web 只展示节点事实。 |
 
-本轮受控验收代码使用 [request-runtime 目录](../../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/README.md)，保留第一阶段原代码及证据。审批失败、正文隔离和 shutdown 的合入重验见 [v6结果](../../testing/runs/deliver-session-capacity/2026-11-16-request-boundary/project-checks-v6/results.json)；浏览器与节点原操作/票据对应关系见 [实际浏览器记录](../../testing/runs/deliver-session-capacity/2026-11-16-request-boundary/browser-live-v3/delivery.md)。尚未完成的精确分支和真实验收入口以当前执行计划为准。
+本轮受控验收代码使用 request-runtime 目录（`testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/README.md`），保留第一阶段原代码及证据。审批失败、正文隔离和 shutdown 的合入重验见 v6结果（`testing/runs/deliver-session-capacity/2026-11-16-request-boundary/project-checks-v6/results.json`）；浏览器与节点原操作/票据对应关系见 实际浏览器记录（`testing/runs/deliver-session-capacity/2026-11-16-request-boundary/browser-live-v3/delivery.md`）。尚未完成的精确分支和真实验收入口以当前执行计划为准。
 
-后续 [v7合入重验](../../testing/runs/deliver-session-capacity/2026-11-16-request-boundary/project-checks-v7/results.json) 覆盖27项运行时、6项竞态及33项既有节点回归，均实际通过。竞态使用真实注册器与ACP对端：关闭发送前收到新child会撤回原请求，发送后的晚child立即封存旧展示；任务登记与根关闭/source shutdown分别验证两种先后顺序。已有预留的同树复用与两个尚未预留的并发争额分别验收，后者可能明确返回容量满。[v8补充验证](../../testing/runs/deliver-session-capacity/2026-11-16-request-boundary/project-checks-v8/results.json) 另覆盖读取EOF后的必要source关闭故障，以及请求者断线取消；前者必须由原source完成必要协调才返额，后者保持原生资源和名额。两例独立验收与主合入重验均通过，仍不代签真实Harness。
+后续 v7合入重验（`testing/runs/deliver-session-capacity/2026-11-16-request-boundary/project-checks-v7/results.json`） 覆盖27项运行时、6项竞态及33项既有节点回归，均实际通过。竞态使用真实注册器与ACP对端：关闭发送前收到新child会撤回原请求，发送后的晚child立即封存旧展示；任务登记与根关闭/source shutdown分别验证两种先后顺序。已有预留的同树复用与两个尚未预留的并发争额分别验收，后者可能明确返回容量满。v8补充验证（`testing/runs/deliver-session-capacity/2026-11-16-request-boundary/project-checks-v8/results.json`） 另覆盖读取EOF后的必要source关闭故障，以及请求者断线取消；前者必须由原source完成必要协调才返额，后者保持原生资源和名额。两例独立验收与主合入重验均通过，仍不代签真实Harness。
 
 真实Harness验收启动器与专属输入要求见 [L6运行说明](../../testing/tools/capacity-l6/README.md)。配置校验和测试枚举只证明入口准备；四项真实场景的必需分支、实际50树/1800秒及清理均须有对应运行证据，缺认证、能力或实现分支分别记为受阻，不能记成通过。
 

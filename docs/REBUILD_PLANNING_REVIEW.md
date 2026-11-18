@@ -19,7 +19,7 @@
 | deliver-codex-session-loop | 31 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/review.md) | `A4E6F3064E1232C472CD936AA5A19DAB98AC1482A67CA354C9569546C52A9D39` |
 | deliver-history-navigation | 13 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-history-navigation/review.md` | `D6581689B840B603394A4C507E797D59D3AF6FFD1C65E691EF041ECAA6F5D84C` |
 | deliver-native-session-import | 10 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-native-session-import/review.md` | `87E17564D65A1D6023C9F284E60D3F8FAB7B2559F8410D43AE7B94D003D3C159` |
-| deliver-session-capacity | 12 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/deliver-session-capacity/review.md) | `9A9A437B41BB2872350367274906B3B560E87E77EB507B18494EA18F650A9C66` |
+| deliver-session-capacity | 12 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/archive/2026-11-19-deliver-session-capacity/review.md) | `9A9A437B41BB2872350367274906B3B560E87E77EB507B18494EA18F650A9C66` |
 | deliver-session-data-lifecycle | 11 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/deliver-session-data-lifecycle/review.md` | `77A126199DE91D54AB3602C93DD055DDEC3996F34F9CD709BC8407B3D24D68B1` |
 | establish-node-access | 34 | 方案/用例/计划/任务设计检视通过 | [review.md](../openspec/changes/archive/2026-10-30-establish-node-access/review.md) | `D0B21DB495BC7A82919C92648BA06A1301F082DE4B9C85E372ABB7F4C4A6E37C` |
 | integrate-deepseek-harness | 11 | 方案/用例/计划/任务设计检视通过 | `openspec/changes/integrate-deepseek-harness/review.md` | `AF1187DDEF63756DB3849F958B09A7D3BC0E377462` |

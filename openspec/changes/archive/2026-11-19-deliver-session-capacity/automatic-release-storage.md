@@ -1,6 +1,6 @@
 # RB-001 自动关闭必要管理存储合同
 
-日期：2026-11-16。状态：单 native 内部包已获独立规划门并实现合入，开发验证与交付检视范围见 [内部复核](../../../testing/runs/deliver-session-capacity/reviewer/2026-11-16-rb-internal-v1-review.md)。这不代表完整树运行时、生产启用或整个 change 已验收。
+日期：2026-11-16。状态：单 native 内部包已获独立规划门并实现合入，开发验证与交付检视范围见 内部复核（`testing/runs/deliver-session-capacity/reviewer/2026-11-16-rb-internal-v1-review.md`）。这不代表完整树运行时、生产启用或整个 change 已验收。
 
 本包按主执行者分配只负责容量记录接口、SQLite 必要系统操作、schema13 及开发回归。运行时资格、已知活动、实际关闭、协议、Web、共享模块接线由主执行者负责。不修改上游、适配器安装包、本机配置或用户库，不借用户 actor，不伪造平台 target，无新依赖。
 

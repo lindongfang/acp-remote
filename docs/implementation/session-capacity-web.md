@@ -1,6 +1,6 @@
 # 会话容量管理入口
 
-行为依据为 [容量规格](../../openspec/changes/deliver-session-capacity/specs/session-resource-policy/spec.md) 和 RB-001 请求/执行职责边界，节点实现见 [容量实现说明](session-capacity.md)。下方阶段浏览器记录保留其当时范围。
+行为依据为 [容量规格](../../openspec/specs/session-resource-policy/spec.md) 和 RB-001 请求/执行职责边界，节点实现见 [容量实现说明](session-capacity.md)。下方阶段浏览器记录保留其当时范围。
 
 认证后的管理连接通过 `session.capacity.inspect` 查询必要容量事实，payload 必须为空；客户端不能指定或修改上限。该入口沿现有认证和撤销校验，不返回会话正文、密钥、配置内容或启动参数。
 
@@ -14,7 +14,7 @@
 
 Web 协议、客户端和展示测试在 `clients/web/tests/session-capacity.test.ts`；真实认证 WSS、容量及关闭故障证据由独立驱动记录。Web 类型、测试和构建通过只证明前端及开发交互，不代表自动回收或真实 Harness 验收。
 
-本轮页面验收按下表关联 [CP 用例](../../openspec/changes/deliver-session-capacity/tests.md)，内部策略由节点证据证明，页面不另建会话生命周期或资格诊断状态。表格说明验证职责，实际通过情况以 [执行计划](../../openspec/changes/deliver-session-capacity/plan.md) 和固定版本报告为准。
+本轮页面验收按下表关联 [CP 用例](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/tests.md)，内部策略由节点证据证明，页面不另建会话生命周期或资格诊断状态。表格说明验证职责，实际通过情况以 [执行计划](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md) 和固定版本报告为准。
 
 | 用例范围 | 页面可观察事实 | 节点证据及边界 |
 | --- | --- | --- |
@@ -25,6 +25,6 @@ Web 协议、客户端和展示测试在 `clients/web/tests/session-capacity.tes
 
 本轮 RB-001 的实际浏览器链路已验证：正常运行的节点展示自动请求职责；主会话重放及两个子目标的实际正文可读，子目标之间不串台并显示 `current_only` 与历史不完整提示。压力请求后，主资源实际 Closed 但原 Cleanup 任务未 join（等待退出结束），页面刷新仍为50/50；原任务退出并由正常扫描协调同一操作和票据后变为49/50，重新打开同一主会话的新读取流后回到50/50。撤销本设备后实际显示“原配对已失效”，管理表单消失。节点退出确认任务和必要管理结果均已收敛、Windows Job 活动进程为0、监听端口关闭。
 
-该链路使用专属真实节点、TLS/WSS、SQLite 和受控 ACP 对端，属于本地集成验证；不证明真实厂商 Harness、实际30分钟或真实子会话能力。压力调用返回 `read_failed`，不能作为 `session_capacity_full` 页面错误的本轮证据。操作使用实际页面 DOM 事件，截图尝试超时，结果只按 DOM 断言记录，不声称完成截图或视觉检查。固定证据及独立复核见 [执行计划](../../openspec/changes/deliver-session-capacity/plan.md)。
+该链路使用专属真实节点、TLS/WSS、SQLite 和受控 ACP 对端，属于本地集成验证；不证明真实厂商 Harness、实际30分钟或真实子会话能力。压力调用返回 `read_failed`，不能作为 `session_capacity_full` 页面错误的本轮证据。操作使用实际页面 DOM 事件，截图尝试超时，结果只按 DOM 断言记录，不声称完成截图或视觉检查。固定证据及独立复核见 [执行计划](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md)。
 
-2026-11-16 已在真实浏览器通过同源 TLS/WSS、节点、SQLite 与受控 ACP 对端完成 49→50、满额新建拒绝、显式释放至49、再次新建至50，以及使用浏览器保存的身份重连后刷新50。脱敏断言及截图见 [浏览器记录](../../testing/runs/deliver-session-capacity/2026-11-16-phase1-browser.json)和[页面截图](../../testing/runs/deliver-session-capacity/2026-11-16-phase1-browser.png)。该运行只在测试标签页临时接受本次 localhost 证书，结束时恢复并关闭标签页；未修改系统信任。节点最终确认任务和管理结果关闭，Windows Job 后代为0，专属临时目录移除。该记录不覆盖另一 actor 的权限拒绝；后者由独立节点 WSS 用例验证。
+2026-11-16 已在真实浏览器通过同源 TLS/WSS、节点、SQLite 与受控 ACP 对端完成 49→50、满额新建拒绝、显式释放至49、再次新建至50，以及使用浏览器保存的身份重连后刷新50。脱敏断言及截图见 浏览器记录（`testing/runs/deliver-session-capacity/2026-11-16-phase1-browser.json`）和页面截图（`testing/runs/deliver-session-capacity/2026-11-16-phase1-browser.png`）。该运行只在测试标签页临时接受本次 localhost 证书，结束时恢复并关闭标签页；未修改系统信任。节点最终确认任务和管理结果关闭，Windows Job 后代为0，专属临时目录移除。该记录不覆盖另一 actor 的权限拒绝；后者由独立节点 WSS 用例验证。
