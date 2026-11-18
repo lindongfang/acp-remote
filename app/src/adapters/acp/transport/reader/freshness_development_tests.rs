@@ -144,10 +144,14 @@ async fn freshness_replay_history_then_complete_requires_a_new_current_snapshot(
 async fn assert_missing_current(marker: bool) {
     let mut fixture = Fixture::new(Version::V2).await;
     let id = fixture.read_request("s", true).await;
-    let mut frames = vec![update("s", "state_update")];
-    if marker {
-        frames.push(update("s", "replay_complete"));
-    }
+    let mut tool = update("s", "tool_call_update");
+    tool["params"]["update"]["toolCallId"] = json!("tool");
+    tool["params"]["update"]["status"] = json!("in_progress");
+    let mut frames = if marker {
+        vec![update("s", "state_update"), update("s", "replay_complete")]
+    } else {
+        vec![tool]
+    };
     frames.push(json!({"jsonrpc":"2.0","id":id.json(),"result":{}}));
     fixture.feed(&frames).await;
     for _ in 0..=usize::from(marker) {

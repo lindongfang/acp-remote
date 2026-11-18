@@ -133,20 +133,9 @@ where
         .queue_revision
         .lock()
         .map_err(|_| DispatchError::Stopped)?;
-    if previous
-        .as_ref()
-        .is_some_and(|(members, previous)| *previous != revision || *members != tree.members)
-    {
-        activity
-            .touch(capacity.pre.native.native_id(), now)
-            .map_err(|_| DispatchError::ObservationOrder)?;
-    }
     *previous = Some((tree.members.clone(), revision));
     drop(previous);
     if !tree.matches(&activity, capacity.pre.native.native_id())? {
-        activity
-            .touch(capacity.pre.native.native_id(), now)
-            .map_err(|_| DispatchError::ObservationOrder)?;
         return action(None);
     }
     let _gate = source

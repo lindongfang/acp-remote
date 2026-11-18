@@ -201,7 +201,6 @@ fn route(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), AcpE
                 (*origin, Some(*key))
             });
             if matches!(event, SessionEvent::State { .. })
-                && freshness == UpdateFreshness::Current
                 && let Some(key) = key
             {
                 for p in s.pending.values_mut() {
@@ -285,6 +284,7 @@ fn update_freshness(
                     if matches!(event, SessionEvent::Other { kind, .. } if kind.as_ref() == "replay_complete")
                     {
                         pending.replay_complete = true;
+                        pending.snapshot = false;
                         UpdateFreshness::History
                     } else if pending.replay_complete {
                         UpdateFreshness::Current
