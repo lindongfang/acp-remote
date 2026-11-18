@@ -1,3 +1,6 @@
+2026-11-18 CP-012 独立安全及交互差分检视（[CP-012差分报告](../../../testing/runs/deliver-session-capacity/reviewer/2026-11-18-cp012-differential-review.md)）：
+独立审阅确认本次 ACP V2 快照与时钟修复代码无安全绕过、无新增外部依赖、敏感信息脱敏与资源清理彻底（Job槽位完全归零，端口关闭）；单元与静态检查全绿。5.1与5.2完成签署；4.2因外部Codex配额限额保持OPEN。当前整体任务推进至19/20。
+
 2026-11-18 L6 单调时钟与重放死锁修复评估（[CP026修复评估](../../../testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp026-remediation-v1/ASSESSMENT.md)）：
 针对 ACP V2 重放快照死锁与自动回收候选扫描空闲时钟污染两大核心问题完成生产代码精确修复（reader.rs 移除无 marker 快照当前性过度限制，capacity_automatic.rs 移除候选比对中误调 activity.touch() 的时钟污染）。在隔离数据根下执行了完整的 68 分钟真实单调时钟物理测试 capacity_l6_cp026_real_replay_clock_and_pressure，真实物理事实表明：29 分钟近超时真实重放成功刷新活动时钟（actual_replay_received_near_timeout passed），未重放缓存会话在 1830071ms 准时超时释放（cache_only_actual_1800_no_keepalive passed），重放会话在 1799 秒存活并在 1828811ms 准时超时（after_last_receive_1799_then_1800_and_scan passed），专属 Windows Job 进程树与端口 100% 干净关闭并脱敏敏感信息（complete_owned_job_cleanup passed）。任务项 4.3 达成完成判据并已勾选；4.2 因上游 Codex/OpenAI 外部账户限额（至 2026-12-10 11:44）阻断外部真实 50 模型根请求，严格保持未勾选；5.1/5.2 保持未勾选。当前整体任务推进至 17/20。
 

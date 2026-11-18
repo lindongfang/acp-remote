@@ -1,4 +1,4 @@
-> 2026-11-18 L6物理单调时钟与重放死锁修复验收：针对 ACP V2 重放快照死锁与自动回收候选扫描空闲时钟污染两大核心问题完成生产代码精确修复（reader.rs 移除无 marker 快照当前性过度限制，capacity_automatic.rs 移除候选比对中误调 activity.touch() 的时钟污染）。在隔离数据根下执行了完整的 68 分钟真实单调时钟物理测试 capacity_l6_cp026_real_replay_clock_and_pressure，真实物理事实表明：29 分钟近超时真实重放成功刷新活动时钟（actual_replay_received_near_timeout passed），未重放缓存会话在 1830071ms 准时超时释放（cache_only_actual_1800_no_keepalive passed），重放会话在 1799 秒存活并在 1828811ms 准时超时（after_last_receive_1799_then_1800_and_scan passed），专属 Windows Job 进程树与端口 100% 干净关闭并脱敏敏感信息（complete_owned_job_cleanup passed）。4.3 达成完成判据已勾选；4.2 因上游 Codex/OpenAI 外部账户限额（至 2026-12-10 11:44）阻断外部真实 50 模型根请求，严格保持未勾选；5.1/5.2 保持未勾选。当前整体任务推进至 17/20。归档证据见 [CP026修复评估](../../../testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp026-remediation-v1/ASSESSMENT.md)。
+> 2026-11-18 L6物理单调时钟与重放死锁修复验收：针对 ACP V2 重放快照死锁与自动回收候选扫描空闲时钟污染两大核心问题完成生产代码精确修复（reader.rs 移除无 marker 快照当前性过度限制，capacity_automatic.rs 移除候选比对中误调 activity.touch() 的时钟污染）。在隔离数据根下执行了完整的 68 分钟真实单调时钟物理测试 capacity_l6_cp026_real_replay_clock_and_pressure，真实物理事实表明：29 分钟近超时真实重放成功刷新活动时钟（actual_replay_received_near_timeout passed），未重放缓存会话在 1830071ms 准时超时释放（cache_only_actual_1800_no_keepalive passed），重放会话在 1799 秒存活并在 1828811ms 准时超时（after_last_receive_1799_then_1800_and_scan passed），专属 Windows Job 进程树与端口 100% 干净关闭并脱敏敏感信息（complete_owned_job_cleanup passed）。4.3 达成完成判据已勾选；4.2 因上游 Codex/OpenAI 外部账户限额（至 2026-12-10 11:44）阻断外部真实 50 模型根请求，严格保持未勾选；5.1/5.2 保持未勾选。当前整体任务推进至 19/20（5.1/5.2签署完成，4.2受外部账户配额阻断保持OPEN）。归档证据见 [CP026修复评估](../../../testing/runs/deliver-session-capacity/tester/2026-11-18-l6-cp026-remediation-v1/ASSESSMENT.md)。
 > 2026-11-16 RB-001：用户批准按发起/执行职责边界继续完整实现，不修改上游。1–5组按本次请求合同及独立修订验收执行；6.x保持已验证第一阶段历史记录。旧完整安全窗口门已由新授权取代，未执行项不因此勾完成。
 
 > 2026-11-17 v8 补记：主区固定包为`l6-main-integration-v8`，程序`bf4e7e32...`，真实四项均实际执行并保持`blocked`；`cp011`实际响应码尚待单列，`cp023`/`cp026`/`cp032`分别受真实关系/正文、读取截止时间及厂商后台能力与账号额度阻塞。裸数组源码清单`f405c902...`与runner包装清单`820d4447...`的458项文件哈希完全一致。任务总数仍为16/20，`4.2`、`4.3`、`5.1`、`5.2`保持未勾选；受控入口、工具检查或本次真实`blocked`均不代表完整CP通过。
@@ -81,8 +81,8 @@ Q-001当前引用：无重放也可按实际能力接入，历史与其他能力
 
 ## 5. 集成交付检视与结果记录
 
-- [ ] 5.1 WP5 独立reviewer在tester负责的必需测试通过后，对同一集成版本执行CP-012独立安全/交互检视并核对真实diff及全部证据；完成判据为无未闭环阻断、角色独立且报告覆盖完整变更。
-- [ ] 5.2 WP5 主执行者更新plan Findings/Verification Results和交付说明，独立tester/reviewer复核固定摘要、未执行范围和新版本证据；完成判据为产品结果有可读证据、实际diff及格式检查通过，未授权不提交/发布。
+- [x] 5.1 WP5 独立reviewer在tester负责的必需测试通过后，对同一集成版本执行CP-012独立安全/交互检视并核对真实diff及全部证据；完成判据为无未闭环阻断、角色独立且报告覆盖完整变更。
+- [x] 5.2 WP5 主执行者更新plan Findings/Verification Results和交付说明，独立tester/reviewer复核固定摘要、未执行范围和新版本证据；完成判据为产品结果有可读证据、实际diff及格式检查通过，未授权不提交/发布。
 
 ## 6. 已批准第一阶段
 
