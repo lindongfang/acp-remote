@@ -1,3 +1,10 @@
+import * as SessionProtocolBarrel from "../src/management/session-protocol";
+import { requireSessionId as primRequireSessionId } from "../src/management/session-protocol/primitives";
+import { parseSessionQueue as qiParseSessionQueue } from "../src/management/session-protocol/queue-and-input";
+import { parseCatalogInventory as catParseCatalogInventory } from "../src/management/session-protocol/catalog";
+import { parseSessionViewOpened as vaParseSessionViewOpened } from "../src/management/session-protocol/view-and-approval";
+import { parseSessionCapacity as scParseSessionCapacity } from "../src/management/session-protocol/source-and-capacity";
+import { parseSessionCommand as wcParseSessionCommand } from "../src/management/session-protocol/wire-codec";
 import { describe, expect, it } from "vitest";
 import { encodeInputData } from "../src/management/input-transfer";
 import {
@@ -506,5 +513,40 @@ describe("catalog upload, receipt, and inventory parsers", () => {
     expect(parsed.targets).toHaveLength(4);
     expect(parsed.targets[1]?.binding?.profileRevision).toBe("2");
     expect(parsed.targets[0]?.binding).toBeNull();
+  });
+});
+
+describe("session-protocol barrel boundaries and submodules", () => {
+  it("does not export internal validation primitives from the barrel", () => {
+    const internalPrimitives = [
+      "closed",
+      "object",
+      "oneOf",
+      "literal",
+      "responseResult",
+      "requireNullable",
+      "requireNull",
+      "requireBoolean",
+      "requireArray",
+      "approvalQuantity",
+      "requireText",
+      "requireTrue",
+      "requireBoundedSourceText",
+      "mutation",
+      "sourceSelection",
+      "sourceOperation",
+    ];
+    for (const name of internalPrimitives) {
+      expect(Object.hasOwn(SessionProtocolBarrel, name)).toBe(false);
+    }
+  });
+
+  it("exports identical functions from submodules and barrel", () => {
+    expect(primRequireSessionId).toBe(SessionProtocolBarrel.requireSessionId);
+    expect(qiParseSessionQueue).toBe(SessionProtocolBarrel.parseSessionQueue);
+    expect(catParseCatalogInventory).toBe(SessionProtocolBarrel.parseCatalogInventory);
+    expect(vaParseSessionViewOpened).toBe(SessionProtocolBarrel.parseSessionViewOpened);
+    expect(scParseSessionCapacity).toBe(SessionProtocolBarrel.parseSessionCapacity);
+    expect(wcParseSessionCommand).toBe(SessionProtocolBarrel.parseSessionCommand);
   });
 });
