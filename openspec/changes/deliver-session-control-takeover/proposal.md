@@ -17,7 +17,7 @@
 
 ### 硬约束与非目标
 
-- 以 [总体设计](../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md) 与 `openspec/specs/` 长期规格为依据；保持设备信任层（`client-trust`）、单会话客户端控制权接管（`session-control-takeover`）与外部原生会话纳管（`native-session-import`）三者职责独立。
+- 以 [总体设计](../../../docs/architecture/overview.md) 与 `openspec/specs/` 长期规格为依据；保持设备信任层（`client-trust`）、单会话客户端控制权接管（`session-control-takeover`）与外部原生会话纳管（`native-session-import`）三者职责独立。
 - 会话控制权接管仅作用于主会话（根执行树）内的会话写操作，不阻塞设备列表查询、设备撤销、全局容量面板查看或创建新会话等节点级管理动作。
 - 控制权接管状态属于会话活跃运行期内存事实，不跨会话资源释放或节点重启持久保留；不因控制权顶号切换而中止在途执行或清空节点已受理队列。
 - 首期限定 Windows 节点与同源 Web，当前处于需求与设计定义阶段（`.openspec.yaml` 标记 `x-deferred: true`），正式启动本变更时基于真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`。
@@ -48,7 +48,7 @@
 
 ## Impact
 
-- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)，并与 [deliver-native-session-import](../deliver-native-session-import/proposal.md) 保持术语与层次解耦；跨变更关系见 [能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)，并与 [deliver-native-session-import](../deliver-native-session-import/proposal.md) 保持术语与层次解耦；跨变更关系见 [能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：节点主会话运行期控制权协调器、WSS 会话命令与审批入口验权、控制权状态推送及 Web 会话页只读/接管状态栏与操作控件门禁；具体写范围在正式开工阶段 `plan.md` 定义。
 
 ## Exploration

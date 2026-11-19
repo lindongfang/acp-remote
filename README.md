@@ -2,7 +2,7 @@
 
 ACP Remote 是面向个人使用的 Harness 管理平台，围绕用户控制的单节点统一管理会话、执行、权限审批、历史与审计。
 
-Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP（Agent Client Protocol）是平台与这些程序交互的协议。当前目标接入范围聚焦 Codex 与 Pi（OMP 等其他宿主暂不适配），总体架构与产品方向见 [Harness Control Plane 设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md)，能力排期与依赖见 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)。
+Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP（Agent Client Protocol）是平台与这些程序交互的协议。当前目标接入范围聚焦 Codex 与 Pi（OMP 等其他宿主暂不适配），总体架构与产品方向见 [Harness Control Plane 总体架构](docs/architecture/overview.md)，能力排期与依赖见 [能力地图](docs/architecture/capability-map.md)。
 
 ## 当前状态
 
@@ -10,13 +10,13 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 ### 已交付能力
 
-- **节点接入与客户端信任（`establish-node-access`，2026-10-30 归档）**：覆盖本机命名管道、DPAPI 身份保护、SQLite 存储、直接 TLS / Tailscale 接入、配对 HTTP、WSS 管理连接、可信设备列表与撤销。已完成 33 例验收及独立检视，详见 [归档计划](openspec/changes/archive/2026-10-30-establish-node-access/plan.md)、[Windows 节点访问说明](docs/WINDOWS_NODE_ACCESS.md) 与本地记录 `testing/runs/establish-node-access/`。
+- **节点接入与客户端信任（`establish-node-access`，2026-10-30 归档）**：覆盖本机命名管道、DPAPI 身份保护、SQLite 存储、直接 TLS / Tailscale 接入、配对 HTTP、WSS 管理连接、可信设备列表与撤销。已完成 33 例验收及独立检视，详见 [归档计划](openspec/changes/archive/2026-10-30-establish-node-access/plan.md)、[Windows 节点访问实现说明](docs/implementation/windows-node-access.md) 与本地记录 `testing/runs/establish-node-access/`。
 - **通用会话闭环与 Codex 首验（`deliver-codex-session-loop`，2026-11-16 归档）**：覆盖工作区登记、共享输入队列、ACP 原始 JSON 保真运行时、会话执行、严格权限审批、基础原生会话发现/重放及当前连接视图。实际验证范围以 [归档计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md) 为准；Codex 首验归档不代表任意其他 Harness 已通过真实验收。
 - **会话容量与无活动资源回收（`deliver-session-capacity`，2026-11-19 归档）**：覆盖 50 主会话名额上限、30 分钟无活动自动回收请求、已知活动保护与管理账本协调。双层 L6 验收范围见 [归档计划](openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md)，实现边界见 [节点容量说明](docs/implementation/session-capacity.md) 与 [Web 容量说明](docs/implementation/session-capacity-web.md)。
 
 ### 远期规划
 
-其余尚未开工的能力演进（如单会话客户端控制权接管、持久化展示快照库、Pi 接入实证、历史分页、子会话树、外部原生会话纳管、数据生命周期与备份恢复）均在 [openspec/changes/](openspec/changes/) 下标记 `x-deferred: true`，仅维护前期需求与设计，尚未合入产品代码。完整能力归属、依赖关系与横切边界以 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md) 和 [领域术语表](openspec/GLOSSARY.md) 为准；已归档变更的验收结论仅在各自声明的版本与范围内有效，不外推至未实施能力。
+其余尚未开工的能力演进（如单会话客户端控制权接管、持久化展示快照库、Pi 接入实证、历史分页、子会话树、外部原生会话纳管、数据生命周期与备份恢复）均在 [openspec/changes/](openspec/changes/) 下标记 `x-deferred: true`，仅维护前期需求与设计，尚未合入产品代码。完整能力归属、依赖关系与横切边界以 [能力地图](docs/architecture/capability-map.md) 和 [领域术语表](openspec/GLOSSARY.md) 为准；已归档变更的验收结论仅在各自声明的版本与范围内有效，不外推至未实施能力。
 
 ## 开始参与
 
@@ -82,7 +82,7 @@ tls_key = "D:/ACPRemote/tls/localhost.key"
 
 从终端显示的 HTTPS 地址打开页面，输入配对码，核对客户端名称和指纹后在本机终端明确批准。后续同源页面自动复用身份并重新认证。
 
-认证后可在同源 Web 界面进行可信客户端管理（分页查看、撤销客户端；自撤销会关闭当前管理连接），以及已登记工作区的会话运行、权限审批与容量状态查看；owner 也可用相同配置执行 `device list`、`device revoke --device-id <ID>` 和 `daemon stop`。更多边界与实现说明见 [Windows 节点访问](docs/WINDOWS_NODE_ACCESS.md)、[节点容量说明](docs/implementation/session-capacity.md) 与 [Web 容量说明](docs/implementation/session-capacity-web.md)。
+认证后可在同源 Web 界面进行可信客户端管理（分页查看、撤销客户端；自撤销会关闭当前管理连接），以及已登记工作区的会话运行、权限审批与容量状态查看；owner 也可用相同配置执行 `device list`、`device revoke --device-id <ID>` 和 `daemon stop`。更多边界与实现说明见 [Windows 节点访问实现](docs/implementation/windows-node-access.md)、[节点容量说明](docs/implementation/session-capacity.md) 与 [Web 容量说明](docs/implementation/session-capacity-web.md)。
 
 ## 仓库导航
 
@@ -90,13 +90,15 @@ tls_key = "D:/ACPRemote/tls/localhost.key"
 |---|---|
 | [app/](app/) | Windows Rust 节点、ACP 运行时与本地 CLI 实现 |
 | [clients/web/](clients/web/) | 同源 Web 配对、会话与节点管理前端 |
-| [docs/](docs/) | 总体设计、[重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)、[代码硬规则](docs/code-standards.md) 与实现说明 |
+| [docs/architecture/](docs/architecture/) | [总体架构](docs/architecture/overview.md) 与 [能力地图](docs/architecture/capability-map.md) |
+| [docs/implementation/](docs/implementation/) | 跨端模块内部实现机制与平台安全边界说明 |
+| [docs/hard-rules.md](docs/hard-rules.md) | 从踩坑观察池晋升的强制研发与审查硬规则 |
+| [docs/pitfalls.md](docs/pitfalls.md) | 研发与验收复盘踩坑观察池 |
 | [openspec/specs/](openspec/specs/) | 已归档落地的长期正式产品规格（产品行为权威来源） |
 | [openspec/changes/](openspec/changes/) | 活跃/远期规划变更与 `archive/` 历史归档记录 |
 | [openspec/config.yaml](openspec/config.yaml) | OpenSpec 变更流程、门禁与产物规则（含 [schemas/](openspec/schemas/) 与 [role/](openspec/role/)） |
 | [testing/suites/](testing/suites/) | 长期验收用例与规范/套件结构校验脚本 |
 | [AGENTS.md](AGENTS.md) | 编码 Agent 的工作约束与文档路由 |
-| [LESSONS.md](LESSONS.md) | 研发与验收复盘错题本 |
 | [.agents/](.agents/) | 技能与工具资源 |
 | [.github/](.github/) | 持续集成与协作配置 |
 

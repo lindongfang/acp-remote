@@ -51,7 +51,7 @@
 
 全部专项资产对齐仓库既有目录体系：探测、无密钥配置模板、开发验证与验收脚本归入 `testing/probes/pi-harness/`（按 `discovery/`、`profiles/`、`verify.ps1`、`acceptance/` 划分子路径以隔离写范围），实施与使用说明归入 `docs/implementation/pi-harness.md` 与 `docs/implementation/pi-harness-web.md`，运行证据归入 `testing/runs/integrate-pi-harness/`；集成交付门禁通过并归档时，在同一提交按原子顺序同步长期规范 `openspec/specs/pi-harness-compatibility/spec.md`、移入 `openspec/changes/archive/` 并合并长期用例套件 `testing/suites/pi-harness-compatibility/tests.md`（含 `Source definitions:` 与四列 `## 需求关联` 100% 映射表，禁止长期套件跨目录指向活动 change），不新建 `configs/`、`scripts/`、`testing/harnesses/` 或 `docs/harnesses/`。
 
-资源关闭遵循 `OwnedProcess` Job Object 与 `LESSONS.md` 硬约束：取消等待原生工作可靠终态（常驻 `pi-acp`/`pi` 进程可保留）；实例关闭或节点停止须协调原生 runtime 关闭并确认 Job 内全部后代进程（含 `pi-acp` 拉起的 `pi` RPC 子进程及工具孙进程）归零，超时保留清理与 join 责任。严禁按 `pi`/`node` 进程名批量强杀，严禁将父进程退出冒充后代已释放。
+资源关闭遵循 `OwnedProcess` Job Object 与 `docs/pitfalls.md` 硬约束：取消等待原生工作可靠终态（常驻 `pi-acp`/`pi` 进程可保留）；实例关闭或节点停止须协调原生 runtime 关闭并确认 Job 内全部后代进程（含 `pi-acp` 拉起的 `pi` RPC 子进程及工具孙进程）归零，超时保留清理与 join 责任。严禁按 `pi`/`node` 进程名批量强杀，严禁将父进程退出冒充后代已释放。
 
 ## Risks / Trade-offs
 

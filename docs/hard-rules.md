@@ -1,8 +1,8 @@
-# Code Standards
+# Hard Rules
 
-本文件收录从 [LESSONS.md](../LESSONS.md) 晋升来的硬规则。审查前必须逐条对照。
+本文件收录从 [pitfalls.md](pitfalls.md) 晋升来的强制硬规则。审查前必须逐条对照。
 
-同一规则在三次不同事件中出现后晋升。晋升时同步从 [LESSONS.md](../LESSONS.md) 删除原条目，只在本文件保留正式规则；晋升后再次发生同类问题时，只更新本文件的对应规则和复发记录，不得重新写回 LESSONS。
+同一规则在三次不同事件中出现后晋升。晋升时同步从 [pitfalls.md](pitfalls.md) 删除原条目，只在本文件保留正式规则；晋升后再次发生同类问题时，只更新本文件的对应规则和复发记录，不得重新写回 `pitfalls.md`。
 
 ## 硬规则
 

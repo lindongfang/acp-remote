@@ -17,7 +17,7 @@
 
 ### 硬约束与非目标
 
-- 以[重设计 §4.1–§4.4、§6–§7.3、§10.2.5](../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
+- 以[重设计 §4.1–§4.4、§6–§7.3、§10.2.5](../../../docs/architecture/overview.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
 - 基础执行链保留实际暴露的结构化子 Agent 载荷；不建立厂商私有读取器、不建立无期限永久聊天档案、不拼回快照文本冒充子会话原生上下文。
 - 首期限定 Windows 节点 + Web，App 后续；当前处于需求与设计定义阶段，`tests/plan/tasks` 在正式启动本变更时基于真实代码树生成。
 
@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[deliver-history-navigation](../deliver-history-navigation/proposal.md)、[deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 和基础原生身份/读取端口；各 Harness 按自身已接入能力独立验收，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：[deliver-history-navigation](../deliver-history-navigation/proposal.md)、[deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 和基础原生身份/读取端口；各 Harness 按自身已接入能力独立验收，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：子身份关系映射、受管快照子步骤引用、分页展开协议、主树控制权继承校验及 Web 展示组件；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

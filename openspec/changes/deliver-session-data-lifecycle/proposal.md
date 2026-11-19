@@ -18,7 +18,7 @@
 
 ### 硬约束与非目标
 
-- 以[重设计 §4.4、§7.1–§7.2、§8](../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
+- 以[重设计 §4.4、§7.1–§7.2、§8](../../../docs/architecture/overview.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
 - 只提供原生删除，不增加平台侧“隐藏会话”功能；不以仅删展示快照或直接删厂商私有文件冒充原生删除。
 - 首期限定 Windows 节点 + Web，App 后续；当前处于需求与设计定义阶段，`tests/plan/tasks` 在正式启动本变更时基于真实代码树生成。
 
@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[deliver-native-session-import](../deliver-native-session-import/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：[deliver-native-session-import](../deliver-native-session-import/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：原生删除协议适配、控制权校验、展示快照库同步擦除、管理事务与审计清理、临时上传回收及 Web 删除确认交互；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

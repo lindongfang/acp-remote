@@ -17,7 +17,7 @@
 
 ### 硬约束与非目标
 
-- 以[重设计 §2.2、§4.3–§4.4、§6.3、§7.3](../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
+- 以[重设计 §2.2、§4.3–§4.4、§6.3、§7.3](../../../docs/architecture/overview.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
 - 外部 CLI 与平台同时写同一原生会话的一致性不在承诺范围；不拷贝厂商私有会话文件，不回灌展示快照充当模型上下文。
 - 首期限定 Windows 节点 + Web，App 后续；当前处于需求与设计定义阶段，`tests/plan/tasks` 在正式启动本变更时基于真实代码树生成。
 
@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：基础原生身份/加载端口、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：基础原生身份/加载端口、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：平台执行所有权登记、原生恢复与展示快照代际协调、容量预留与客户端控制权接线及 Web 纳管交互；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

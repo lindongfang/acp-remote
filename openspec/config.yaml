@@ -1,7 +1,7 @@
 schema: spec-driven
 context: |
   # Project Profile
-  本分支按 docs/HARNESS_CONTROL_PLANE_REDESIGN.md 构建，不兼容旧系统。
+  本分支按 docs/architecture/overview.md 构建，不兼容旧系统。
   Windows Rust 节点、CLI、SQLite 身份与同源 Web 配对/管理已由 establish-node-access 交付归档；通用会话闭环、共享队列、严格审批与 ACP 重放/当前连接视图已由 deliver-codex-session-loop 交付归档。
   当前产品规则以 openspec/specs/ 各长期规格与活动变更的增量规格为唯一权威；工程状态与运行命令以 README.md 和 package.json 为准。
   .agents/ 是已有技能资源，未经任务授权不得修改。
@@ -9,7 +9,7 @@ context: |
   # Schemas, Sources and Commands
   单一工作流 Schema（`spec-driven`）+ 远期冻结标记（`x-deferred: true`）：全仓统一使用默认 `spec-driven`（完整 6 产物：`proposal.md`、`specs/`、`design.md`、`tests.md`、`plan.md`、`tasks.md`）。尚未排期开工的远期规划变更在 `.openspec.yaml` 标记 `x-deferred: true`，仅维护 `proposal.md`、`specs/`、`design.md`，CLI 原生保持 `isPlanningComplete: false` 与 `apply state: "blocked"`，不参与跨变更施工陪跑。远期变更获准开工时，先移除 `.openspec.yaml` 的 `x-deferred: true`，再由独立 `tester` 生成 `tests.md`、主执行者生成 `plan.md` 与 `tasks.md`，跑通单变更门禁并在 `plan.md` `## Code Review` 表经独立 `reviewer` 编码前合审登记 `passed` 后编码。
   能力目录命名统一采用扁平单层 `kebab-case`（如 `specs/user-auth/spec.md`），不使用多级嵌套子目录。不在变更归档前单独运行 `openspec-sync-specs` 写入新长期规格。
-  产品总体目标：docs/HARNESS_CONTROL_PLANE_REDESIGN.md；能力归属与依赖：docs/REBUILD_CAPABILITY_MAP.md；执行与安全硬约束：AGENTS.md、docs/code-standards.md。
+  产品总体目标：docs/architecture/overview.md；能力归属与依赖：docs/architecture/capability-map.md；执行与安全硬约束：AGENTS.md、docs/hard-rules.md。
   开发检查入口：根目录 npm ci，Web 目录 npm ci --prefix clients/web；全仓规范、归档与长期套件校验使用 npm run check:spec，单变更实施门禁使用 node testing/suites/verify-suite.mjs --change <name>（校验远期冻结定义加 `--deferred`），完整工程检查使用 npm run check 与 npm run build:rust，Rust 工具链只读 rust-toolchain.toml。
   提交信息词表以 commitlint.config.mjs 为准，默认主分支 main（PR squash 合并，不直推 main）。
   新术语首次需要时维护 openspec/GLOSSARY.md。已归档证据仅在同版本同范围内复用；新变更的协议、安全与真实 Harness 闭环按当前变更独立验证。
@@ -60,6 +60,6 @@ operations:
       - '修改和提交前核对 `git status` 与 `git diff --check`，保护用户无关修改，不混入临时文件或 `testing/runs/` 本地运行产物。'
   archive:
     guidance:
-      - '严禁对 `.openspec.yaml` 标记 `x-deferred: true` 的远期规划变更执行 `archive` 或 `sync-specs`，且严禁直接裸跑 `openspec archive` CLI 命令（该命令不执行本仓长期套件同步与后置校验）。仅限已完成全部 tracked 任务、集成交付门禁通过且阻断问题闭环的活跃变更归档；归档前同步核对 `LESSONS.md` 是否有达到 3 次复发需晋升至 `docs/code-standards.md` 的规则。'
+      - '严禁对 `.openspec.yaml` 标记 `x-deferred: true` 的远期规划变更执行 `archive` 或 `sync-specs`，且严禁直接裸跑 `openspec archive` CLI 命令（该命令不执行本仓长期套件同步与后置校验）。仅限已完成全部 tracked 任务、集成交付门禁通过且阻断问题闭环的活跃变更归档；归档前同步核对 `docs/pitfalls.md` 是否有达到 3 次复发需晋升至 `docs/hard-rules.md` 的规则。'
       - '归档在同一本地提交内按原子顺序执行：① 常规变更将增量 specs 同步合并到 `openspec/specs/<capability>/spec.md`（保留 `# <capability> Specification`、`## Purpose`、`## Requirements` 结构，不留增量头、过程说明或断链；若 `retire_capabilities: true` 移除某能力最后一个需求则删除该长期规格文件；`skip_specs: true` 变更跳过此步）；② 将变更目录移至 `openspec/changes/archive/YYYY-MM-DD-<name>/`，同步将变更目录内指向变更目录外的相对链接补齐一层 `../`（如 `../../../docs/` → `../../../../docs/`），并同步更新 `README.md` 与 `docs/` 中指向原活跃目录的引用；③ 常规变更按单一主归属能力将新增/修订用例 `### <ID>` 正文合并到主能力 `testing/suites/<capability>/tests.md` 并按归档目录日期升序追加 `Source definitions: openspec/changes/archive/YYYY-MM-DD-<name>/tests.md`，同步更新 `Stable IDs` 与受影响能力套件的四列 `## 需求关联` 表以 100% 覆盖长期规格场景（跨能力共用用例只在主能力套件定义 `### <ID>` 正文并登记 `Source definitions`，其他关联套件仅在 `## 需求关联` 按 ID 引用而不追加 `Source definitions`；若有 `REMOVED` 需求/场景则同步从受影响套件 `## 需求关联` 移除已删除项并清理无任何引用的废弃用例，若通过 `retire_capabilities: true` 退役能力则先迁移仍被其他能力引用的共用用例主归属后删除对应 `testing/suites/<capability>/` 目录；`skip_specs: true` 变更若未改动既有长期套件用例则无需新建能力套件）；④ 运行 `npm run check:spec` 与适用检查确保全绿。'
       - '归档在 PR 前完成（本地工作分支提交，最终经 PR squash 合并至 main）；纯归档/结果回填提交在零产品与测试代码改动前提下直接沿用受测集成 commit SHA 的验收与检视结论。'

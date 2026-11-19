@@ -17,7 +17,7 @@
 
 ### 硬约束与非目标
 
-- 以[重设计 §5.1–§6.3](../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
+- 以[重设计 §5.1–§6.3](../../../docs/architecture/overview.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
 - 不建立无期限永久聊天档案或全量内存常驻索引，不开发厂商私有文件读取器，不因只读翻页刷新展示快照 30 天有效期或 30 分钟空闲计时。
 - 首期限定 Windows 节点 + Web，App 后续；当前处于需求与设计定义阶段，`tests/plan/tasks` 在正式启动本变更时基于真实代码树生成。
 
@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[已归档通用会话闭环](../archive/2026-11-16-deliver-codex-session-loop/proposal.md) 与 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：[已归档通用会话闭环](../archive/2026-11-16-deliver-codex-session-loop/proposal.md) 与 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：展示快照轮次切片读取、重放流式选页、WSS 历史分页命令与 Web 会话时间线组件；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

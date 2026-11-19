@@ -15,10 +15,10 @@
 
 ### 2. 集成交付门禁（绑定集成 Commit SHA）
 - 在全部工作包（及需入库的验收测试代码）提交并完成本地工程检查后，与 `tester` 针对**同一本地分支 Git `commit SHA`**（核对 `HEAD` 与干净的受跟踪状态）执行交付检视，不再核对几百文件的手工 SHA-256 清单或尾扫报告链。
-- 重点核查：`git diff` 实际代码变更、需求与协议语义符合性、未知字段保真、失败/取消与并发资源清理（含 Windows 进程树与句柄）、密钥/凭据零泄漏、核心改动 Red Check 证据、`tester` 入库验收测试/协议探针代码的断言真实性与防假阳性（对照 [LESSONS.md](../../LESSONS.md) 排查仅验证前置部署/截图、模拟替身冒充真实 Harness、过宽子串匹配等伪断言），以及 `plan.md` 中 `Verification Results` 摘要的真实性。
+- 重点核查：`git diff` 实际代码变更、需求与协议语义符合性、未知字段保真、失败/取消与并发资源清理（含 Windows 进程树与句柄）、密钥/凭据零泄漏、核心改动 Red Check 证据、`tester` 入库验收测试/协议探针代码的断言真实性与防假阳性（对照 [docs/pitfalls.md](../../docs/pitfalls.md) 排查仅验证前置部署/截图、模拟替身冒充真实 Harness、过宽子串匹配等伪断言），以及 `plan.md` 中 `Verification Results` 摘要的真实性。
 
 ## 问题闭环与归档继承
 
 - 每个问题记录稳定 ID、严重性、代码/文档位置、受审 `commit SHA` 及修复建议。`coder` 在新 commit 修复后，`reviewer` 仅对 `git diff <old-sha>..<new-sha>` 差异范围及关联影响做增量复查并关闭问题，不得由 `coder` 代关。
-- 收尾与归档前，核查 [LESSONS.md](../../LESSONS.md) 中是否有复发达到 3 次、需同步晋升至 [docs/code-standards.md](../../docs/code-standards.md) 的工程教训。
+- 收尾与归档前，核查 [docs/pitfalls.md](../../docs/pitfalls.md) 中是否有复发达到 3 次、需同步晋升至 [docs/hard-rules.md](../../docs/hard-rules.md) 的工程教训。
 - 门禁通过后，仅用于更新 `plan.md` `## Code Review` 集成门禁 `Status` 与 `Verification Results` 结果摘要、勾选 `tasks.md` 集成门禁任务、同步 `openspec/specs/` 与 `testing/suites/`、修正归档后相对链接层级及移动 `archive/` 的后续纯文档提交，只要 `git diff <tested-sha>..HEAD` 无任何产品/测试代码及构建配置变更并通过 `npm run check:spec`，直接继承 `<tested-sha>` 审查结论，无需重复触发审查循环。

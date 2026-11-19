@@ -13,7 +13,7 @@
 ## 2. 开始工作与设计依据
 
 - 修改前检查 Git 状态、实际文件、相关代码和测试，识别并保护用户尚未提交的修改。
-- 总体产品方向见 [Harness Control Plane 设计](docs/HARNESS_CONTROL_PLANE_REDESIGN.md)，能力排期与依赖见 [重建能力地图](docs/REBUILD_CAPABILITY_MAP.md)；已落地产品规则以 [openspec/specs/](openspec/specs/) 长期规格（及活动变更的增量规格）为权威，按任务范围读取对应来源，不能假设规划设计已经实现。
+- 总体产品方向见 [Harness Control Plane 总体架构](docs/architecture/overview.md)，能力排期与依赖见 [能力地图](docs/architecture/capability-map.md)；已落地产品规则以 [openspec/specs/](openspec/specs/) 长期规格（及活动变更的增量规格）为权威，按任务范围读取对应来源，不能假设规划设计已经实现。
 - 用户已明确确认的任务要求优先。文档之间出现冲突时，先查明各自负责的范围和明确的取代关系；无法判断时指出具体冲突，不自行混合两种语义。
 - 产品行为、安全边界或数据权威需要改变时，明确说明影响并请求确认。已获授权范围内的实现细节自主决定，不反复请求许可。
 - 从历史或外部来源复用代码时，按当前设计审查接口、依赖、安全与测试，不能把来源项目的架构约束自动带入。
@@ -31,7 +31,7 @@
 
 ## 4. 流程与文档维护
 
-- 错题记录和晋升规则以 [LESSONS.md](LESSONS.md) 为准；硬规则及审查要求以 [docs/code-standards.md](docs/code-standards.md) 为准。
+- 踩坑观察池和晋升规则以 [docs/pitfalls.md](docs/pitfalls.md) 为准；强制硬规则及审查要求以 [docs/hard-rules.md](docs/hard-rules.md) 为准。
 - OpenSpec 变更流程唯一来源为 [openspec/config.yaml](openspec/config.yaml)，产物结构和模板在 [openspec/schemas/](openspec/schemas/)，角色职责在 [openspec/role/](openspec/role/)。不在本文件复制流程细则。执行 OpenSpec 技能时，`openspec/config.yaml` 中的门禁停手、编码前门禁与归档四步为本仓强制规则（优先级高于 `.agents/skills/` 中的默认可选提示），严禁直接裸跑 `openspec archive` CLI 命令。
 - 新产品规格、术语、架构决策及验收用例按当前方案建立；仅在需要时创建，不预填尚未确认的能力。
 - 修改行为、接口或依赖时，同步维护负责该内容的设计、规格和验证资产。重叠内容保留一个权威定义，其他位置链接引用。

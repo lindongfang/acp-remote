@@ -18,7 +18,7 @@
 
 ### 硬约束与非目标
 
-- 以[重设计 §5.1、§8、§10.1](../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
+- 以[重设计 §5.1、§8、§10.1](../../../docs/architecture/overview.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
 - 不得以复制正在写入的文件或打包展示快照库冒充原生一致性备份；不得覆盖用户实际数据库、密钥和原生存储进行验收。
 - 首期限定 Windows 节点 + Web，App 后续；当前处于需求与设计定义阶段，`tests/plan/tasks` 在正式启动本变更时基于真实代码树生成。
 
@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[deliver-session-data-lifecycle](../deliver-session-data-lifecycle/proposal.md)，跨 change 依赖见[能力地图](../../../docs/REBUILD_CAPABILITY_MAP.md)。
+- 依赖：[deliver-session-data-lifecycle](../deliver-session-data-lifecycle/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：核心管理存储快照导出、备份清单校验、CLI/管理恢复验证入口；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration
