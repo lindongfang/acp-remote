@@ -14,6 +14,8 @@ import {
   statusLine,
   title,
 } from "../src/workbench/dom-primitives";
+import { ApprovalController } from "../src/workbench/approval-controller";
+import { CapacityReleaseController } from "../src/workbench/capacity-release-controller";
 import {
   SessionQueueController,
   type SessionQueueHostPort,
@@ -33,6 +35,7 @@ import type { IdentityRecord } from "../src/pairing/identity";
 import {
   FakeButtonElement,
   FakeDivElement,
+  FakeDocument,
   installFakeDocument,
 } from "./support/fake-dom";
 
@@ -121,93 +124,156 @@ describe("workbench dom-primitives", () => {
     await expect(delayed).resolves.toBeUndefined();
   });
 
-  it("captures and restores active control selection (WV-15 contract)", () => {
+  it("captures and restores input and textarea selection without scrolling, including value-drift and removed-control boundaries (WV-15)", () => {
     const container = document.createElement("div");
+    const outside = document.createElement("input");
+    outside.id = "outside-input";
+    outside.value = "outside";
     const input = document.createElement("input");
     input.id = "test-input";
     input.value = "hello world";
     container.append(input);
-    document.body.append(container);
+    document.body.append(outside, container);
 
+    // 1. HTMLInputElement [2, 8] selection & preventScroll focus
     input.focus();
     input.setSelectionRange(2, 8, "forward");
+    const inputSnapshot = captureActiveControlSelection(document, container);
+    expect(inputSnapshot).toEqual({
+      id: "test-input",
+      value: "hello world",
+      start: 2,
+      end: 8,
+      direction: "forward",
+    });
 
-    const snapshot = captureActiveControlSelection(document, container);
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.id).toBe("test-input");
-    expect(snapshot?.value).toBe("hello world");
-    expect(snapshot?.start).toBe(2);
-    expect(snapshot?.end).toBe(8);
-    expect(snapshot?.direction).toBe("forward");
-
-    // Replace container content with identical ID input
     container.replaceChildren();
-    const replacement = document.createElement("input");
-    replacement.id = "test-input";
-    replacement.value = "hello world";
-    container.append(replacement);
+    const replacementInput = document.createElement("input");
+    replacementInput.id = "test-input";
+    replacementInput.value = "hello world";
+    const inputFocusSpy = vi.spyOn(replacementInput, "focus");
+    container.append(replacementInput);
 
-    restoreActiveControlSelection(document, snapshot);
-    expect(document.activeElement).toBe(replacement);
-    expect(replacement.selectionStart).toBe(2);
-    expect(replacement.selectionEnd).toBe(8);
+    restoreActiveControlSelection(document, inputSnapshot);
+    expect(inputFocusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(replacementInput);
+    expect(replacementInput.selectionStart).toBe(2);
+    expect(replacementInput.selectionEnd).toBe(8);
+    expect(replacementInput.selectionDirection).toBe("forward");
+
+    // 2. HTMLTextAreaElement [3, 9] backward selection + unsaved value preservation over default value
+    const textarea = document.createElement("textarea");
+    textarea.id = "session-input-body";
+    textarea.value = "unsaved multiline draft";
+    container.replaceChildren(textarea);
+    textarea.focus();
+    textarea.setSelectionRange(3, 9, "backward");
+
+    const textareaSnapshot = captureActiveControlSelection(document, container);
+    expect(textareaSnapshot).toEqual({
+      id: "session-input-body",
+      value: "unsaved multiline draft",
+      start: 3,
+      end: 9,
+      direction: "backward",
+    });
+
+    const replacementTextarea = document.createElement("textarea");
+    replacementTextarea.id = "session-input-body";
+    replacementTextarea.value = "";
+    const textareaFocusSpy = vi.spyOn(replacementTextarea, "focus");
+    container.replaceChildren(replacementTextarea);
+
+    restoreActiveControlSelection(document, textareaSnapshot);
+    expect(textareaFocusSpy).toHaveBeenCalledWith({ preventScroll: true });
+    expect(document.activeElement).toBe(replacementTextarea);
+    expect(replacementTextarea.value).toBe("unsaved multiline draft");
+    expect(replacementTextarea.selectionStart).toBe(3);
+    expect(replacementTextarea.selectionEnd).toBe(9);
+    expect(replacementTextarea.selectionDirection).toBe("backward");
+
+    // 3. Outside container or missing ID returns null; removed control safely no-ops
+    outside.focus();
+    expect(captureActiveControlSelection(document, container)).toBeNull();
+
+    const nameless = document.createElement("input");
+    container.replaceChildren(nameless);
+    nameless.focus();
+    expect(captureActiveControlSelection(document, container)).toBeNull();
+
+    container.replaceChildren();
+    expect(() =>
+      restoreActiveControlSelection(document, textareaSnapshot),
+    ).not.toThrow();
   });
 });
 
-describe("SessionQueueController and SharedViewController integration", () => {
-  it("session queue controller manages target lifecycle and UI reset", async () => {
-    const dashboard = vi.fn();
-    const onTargetSelected = vi.fn();
+describe("SessionQueueController, ApprovalController, CapacityReleaseController, and SharedViewController integration", () => {
+  const sampleRecord: IdentityRecord = {
+    schemaVersion: 1,
+    id: "primary",
+    origin: "https://node.local",
+    nodeId: "node-id",
+    nodePublicKey: "node-key",
+    clientId: "client-id",
+    publicKey: "client-key",
+    privateKey: {} as CryptoKey,
+    displayName: "Web Client",
+    status: "approved",
+    pairingId: "pair-1",
+    pendingClaim: null,
+    createdAt: 1000,
+    updatedAt: 1000,
+  };
+
+  it("session queue, approval, and capacity release panels respect injected getDocument without global document", () => {
+    restoreDoc?.();
+    restoreDoc = null;
+    expect((globalThis as { document?: unknown }).document).toBeUndefined();
+
+    const customDoc = new FakeDocument() as unknown as Document;
     const port: SessionQueueHostPort = {
-      getManagement: () =>
-        ({
-          inspectSessionQueue: vi.fn(async () => ({
-            items: [],
-            stopReason: null,
-            paused: false,
-          })),
-        }) as unknown as ManagementConnection,
+      getManagement: () => null,
       getManagementGeneration: () => 1,
       getOpenedSessionView: () => null,
       getSharedViewSpec: () => null,
-      getBodyPreview: () => null,
-      onTargetSelected,
+      getBodyPreview: () => "preview-text",
+      getDocument: () => customDoc,
+      onTargetSelected: vi.fn(),
       onCloseTargetSharedView: vi.fn(),
       onOpenQueueBody: vi.fn(),
-      renderDashboard: dashboard,
+      renderDashboard: vi.fn(),
     };
 
     const queue = new SessionQueueController(port);
-    expect(queue.inspectedQueueTargetId).toBeNull();
-    expect(queue.inspectedQueue).toBeNull();
+    queue.inspectedQueueTargetId = encodeBase64url(new Uint8Array(16).fill(7));
+    const queuePanel = queue.sessionQueuePanel(sampleRecord);
+    expect(queuePanel.tagName).toBe("SECTION");
+    expect(queuePanel.querySelector("#session-target-id")).not.toBeNull();
+    expect(queuePanel.querySelector("#session-input-body")).not.toBeNull();
 
-    const record: IdentityRecord = {
-      schemaVersion: 1,
-      id: "primary",
-      origin: "https://node.local",
-      nodeId: "node-id",
-      nodePublicKey: "node-key",
-      clientId: "client-id",
-      publicKey: "client-key",
-      privateKey: {} as CryptoKey,
-      displayName: "Web Client",
-      status: "approved",
-      pairingId: "pair-1",
-      pendingClaim: null,
-      createdAt: 1000,
-      updatedAt: 1000,
-    };
+    const approval = new ApprovalController({
+      getManagement: () => null,
+      getManagementGeneration: () => 1,
+      getDocument: () => customDoc,
+      renderDashboard: vi.fn(),
+    });
+    expect(approval.sessionApprovalPanel(sampleRecord).tagName).toBe("SECTION");
 
-    const panel = queue.sessionQueuePanel(record);
-    expect(panel.tagName).toBe("SECTION");
-    expect(panel.querySelector("#session-target-id")).not.toBeNull();
+    const release = new CapacityReleaseController({
+      getManagement: () => null,
+      getManagementGeneration: () => 1,
+      getInspectedQueueTargetId: () => null,
+      getDocument: () => customDoc,
+      renderDashboard: vi.fn(),
+    });
+    expect(release.nativeReleasePanel(sampleRecord).tagName).toBe("SECTION");
 
     queue.reset();
     expect(queue.inspectedQueueTargetId).toBeNull();
-    expect(queue.inspectedQueue).toBeNull();
   });
 
-  it("shared view controller persists, restores, and clears source view spec via sessionStorage", async () => {
+  it("shared view controller persists, auto-restores via restorePersistedSourceViewIfIdle when idle, skips when busy, and clears on close", async () => {
     const map = new Map<string, string>();
     const fakeStorage = {
       getItem: (key: string) => map.get(key) ?? null,
@@ -220,6 +286,11 @@ describe("SessionQueueController and SharedViewController integration", () => {
     };
     const dashboard = vi.fn();
     const connection = {
+      openSessionView: vi.fn(async () => ({
+        streamId: "stream-target",
+        snapshotRevision: "0",
+        status: { mode: "current_only", historyIncomplete: false },
+      })),
       openSourceSessionView: vi.fn(async () => ({
         streamId: "stream-source",
         snapshotRevision: "0",
@@ -273,19 +344,70 @@ describe("SessionQueueController and SharedViewController integration", () => {
       nativeSessionId: "native-123",
     });
 
-    // Simulate reload: fresh controller restores from sessionStorage
-    const restoredSpec = loadPersistedSourceViewSpec(fakeStorage);
-    expect(restoredSpec).toEqual({
+    // 1. Idle fresh controller restores persisted source view via restorePersistedSourceViewIfIdle
+    const idleController = new SharedViewController(makePort());
+    const loadSpy = vi.fn(() => loadPersistedSourceViewSpec(fakeStorage));
+    const restored = idleController.restorePersistedSourceViewIfIdle(
+      loadSpy,
+      null,
+    );
+    expect(loadSpy).toHaveBeenCalledOnce();
+    expect(restored).toEqual({
       kind: "source",
       selection,
       nativeSessionId: "native-123",
     });
-    const reloadedController = new SharedViewController(makePort());
-    reloadedController.restoreSharedViewSpec(restoredSpec!);
-    expect(reloadedController.sharedViewSpec).toEqual(restoredSpec);
+    expect(idleController.sharedViewSpec).toEqual(restored);
 
-    reloadedController.clearSharedSourceViewSpec();
+    // 2. Non-idle: inspectedQueueTargetId !== null skips restore without reading storage
+    const queueBusyController = new SharedViewController(makePort());
+    const skippedForQueue = vi.fn(() =>
+      loadPersistedSourceViewSpec(fakeStorage),
+    );
+    expect(
+      queueBusyController.restorePersistedSourceViewIfIdle(
+        skippedForQueue,
+        id16(9),
+      ),
+    ).toBeNull();
+    expect(skippedForQueue).not.toHaveBeenCalled();
+    expect(queueBusyController.sharedViewSpec).toBeNull();
+
+    // 3. Non-idle: active target sharedViewSpec already present skips restore
+    const viewBusyController = new SharedViewController(makePort());
+    await viewBusyController.openTargetSharedView(
+      {} as never,
+      id16(8),
+      null,
+    );
+    const skippedForActiveView = vi.fn(() =>
+      loadPersistedSourceViewSpec(fakeStorage),
+    );
+    expect(
+      viewBusyController.restorePersistedSourceViewIfIdle(
+        skippedForActiveView,
+        null,
+      ),
+    ).toBeNull();
+    expect(skippedForActiveView).not.toHaveBeenCalled();
+    expect(viewBusyController.sharedViewSpec).toEqual({
+      kind: "target",
+      targetId: id16(8),
+    });
+
+    // 4. Closing source view clears persisted storage so subsequent idle restore returns null
+    await controller.closeSharedSourceView(
+      {} as never,
+      controller.openedSessionView!,
+      { disabled: true } as HTMLButtonElement,
+    );
     expect(loadPersistedSourceViewSpec(fakeStorage)).toBeNull();
-    expect(reloadedController.sharedViewSpec).toBeNull();
+    const afterCloseController = new SharedViewController(makePort());
+    expect(
+      afterCloseController.restorePersistedSourceViewIfIdle(
+        () => loadPersistedSourceViewSpec(fakeStorage),
+        null,
+      ),
+    ).toBeNull();
   });
 });

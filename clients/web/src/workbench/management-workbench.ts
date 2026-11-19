@@ -103,13 +103,17 @@ export class ManagementWorkbench {
     const getInspectedQueueTargetId = () => this.sessionQueue.inspectedQueueTargetId;
     const renderDashboard = (rec: IdentityRecord, notice?: string, failure?: string) =>
       this.showManagementDashboard(rec, notice, failure);
-    const basePort = { getManagement, getManagementGeneration, renderDashboard };
+    const basePort = {
+      getManagement,
+      getManagementGeneration,
+      getDocument: getDoc,
+      renderDashboard,
+    };
 
     this.sharedView = new SharedViewController({
       ...basePort,
       getInspectedQueueTargetId,
       getSharedViewHost: () => this.#sharedViewHost,
-      getDocument: getDoc,
       displayFactory: options.displayFactory,
       persistSourceViewSpec:
         options.persistSourceView ?? ((sel, id) => persistSourceViewSpec(sel, id)),
@@ -146,7 +150,6 @@ export class ManagementWorkbench {
     this.capacityRelease = new CapacityReleaseController({
       ...basePort,
       getInspectedQueueTargetId,
-      getDocument: getDoc,
     });
 
     this.sourceSession = new SourceSessionController({
@@ -154,7 +157,6 @@ export class ManagementWorkbench {
       getSharedViewSpec: () => this.sharedView.sharedViewSpec,
       getOpenedSessionView: () => this.sharedView.openedSessionView,
       getSharedViewStaleNotice: () => this.sharedView.sharedViewStaleNotice,
-      getDocument: getDoc,
       onOpenSharedSourceView: (rec, sel, id, sub, reason) =>
         this.sharedView.openSharedSourceView(rec, sel, id, sub, reason),
       onCloseSharedSourceView: (rec, opened, sub) =>
@@ -169,7 +171,6 @@ export class ManagementWorkbench {
     this.workspaceCatalog = new WorkspaceCatalogController({
       ...basePort,
       getCurrentRecord: () => this.#currentRecord,
-      getDocument: getDoc,
       onSyncWorkspaceSelection: (wid, path) =>
         this.sourceSession.syncWorkspaceSelection(wid, path),
       onSyncHarnessProfileSelection: (sid, hid, pid, rev) =>
@@ -197,7 +198,6 @@ export class ManagementWorkbench {
       ...basePort,
       getCurrentRecord: () => this.#currentRecord,
       getPanel: () => this.#panel,
-      getDocument: getDoc,
       onManualDisconnect: () => {
         this.#manuallyDisconnected = true;
         this.#managementReconnect.cancel();
@@ -269,8 +269,9 @@ export class ManagementWorkbench {
     this.sourceSession.clearOperationViewState();
     this.resetSessionInputUi();
     this.sessionQueue.reset();
+    this.approval.reset();
     this.workspaceCatalog.resetInventory();
-    this.capacityRelease.resetCapacity();
+    this.capacityRelease.resetAll();
     this.devices.reset();
   }
 

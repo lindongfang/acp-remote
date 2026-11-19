@@ -17,6 +17,7 @@ import { managementErrorMessage } from "./error-formatting";
 export interface ApprovalHostPort {
   readonly getManagement: () => ManagementConnection | null;
   readonly getManagementGeneration: () => number;
+  readonly getDocument?: () => Document;
   readonly renderDashboard: (
     record: IdentityRecord,
     notice?: string,
@@ -69,16 +70,18 @@ export class ApprovalController {
   }
 
   sessionApprovalPanel(record: IdentityRecord): HTMLElement {
-    const section = element("section", "session-composer");
+    const doc = this.#port.getDocument?.() ?? globalThis.document;
+    const section = element("section", "session-composer", undefined, doc);
     section.append(
-      element("h3", "section-title", "原生审批"),
+      element("h3", "section-title", "原生审批", doc),
       paragraph(
         "审批由节点从当前 Harness 连接读取。原始载荷只作为不可执行文本显示；登记和裁决都使用节点返回的规范 ID。",
         "field-help",
+        doc,
       ),
     );
 
-    const refresh = button("刷新审批列表", "secondary-button");
+    const refresh = button("刷新审批列表", "secondary-button", doc);
     refresh.addEventListener("click", () => {
       refresh.disabled = true;
       void this.loadApprovalList(record, this.#port.getManagementGeneration());
@@ -87,23 +90,24 @@ export class ApprovalController {
 
     const approvals = this.#approvalList;
     if (approvals === null) {
-      section.append(paragraph("尚未读取审批列表。", "empty-state"));
+      section.append(paragraph("尚未读取审批列表。", "empty-state", doc));
       return section;
     }
     if (approvals.length === 0) {
-      section.append(paragraph("当前没有待显示的审批。", "empty-state"));
+      section.append(paragraph("当前没有待显示的审批。", "empty-state", doc));
       return section;
     }
 
     for (const approval of approvals) {
-      const card = element("article", "device-card");
+      const card = element("article", "device-card", undefined, doc);
       card.append(
-        detailBlock("审批", approval.approvalId),
-        detailBlock("有效性", approval.status.validity),
-        detailBlock("来源协议", `ACP v${approval.source.protocolVersion}`),
+        detailBlock("审批", approval.approvalId, doc),
+        detailBlock("有效性", approval.status.validity, doc),
+        detailBlock("来源协议", `ACP v${approval.source.protocolVersion}`, doc),
         detailBlock(
           "处理状态",
           `${approval.status.delivery} / ${approval.status.sourceClose}`,
+          doc,
         ),
       );
       const select = button(
@@ -111,6 +115,7 @@ export class ApprovalController {
           ? "重新读取此审批"
           : "读取此审批",
         "secondary-button",
+        doc,
       );
       select.addEventListener("click", () => {
         select.disabled = true;
@@ -125,31 +130,33 @@ export class ApprovalController {
       return section;
     }
 
-    const detail = element("article", "session-composer");
+    const detail = element("article", "session-composer", undefined, doc);
     detail.append(
-      element("h4", undefined, "审批详情"),
-      detailBlock("审批", approval.approvalId),
-      detailBlock("来源实例", approval.source.instanceId),
-      detailBlock("连接代际", approval.source.connectionEpoch),
+      element("h4", undefined, "审批详情", doc),
+      detailBlock("审批", approval.approvalId, doc),
+      detailBlock("来源实例", approval.source.instanceId, doc),
+      detailBlock("连接代际", approval.source.connectionEpoch, doc),
       detailBlock(
         "关联",
         approval.context.kind === "verified_input"
           ? `已验证输入 ${approval.context.dispatchId}`
           : "会话请求",
+        doc,
       ),
       detailBlock(
         "当前裁决",
         approvalStatusText(this.#approvalStatus ?? approval.status),
+        doc,
       ),
     );
 
-    const limitations = element("div", "detail-block");
-    limitations.append(element("span", "detail-label", "显示限制"));
+    const limitations = element("div", "detail-block", undefined, doc);
+    limitations.append(element("span", "detail-label", "显示限制", doc));
     if (approval.limitations.length === 0) {
-      limitations.append(element("code", undefined, "无"));
+      limitations.append(element("code", undefined, "无", doc));
     } else {
       for (const limitation of approval.limitations) {
-        limitations.append(element("code", undefined, limitation));
+        limitations.append(element("code", undefined, limitation, doc));
       }
     }
     detail.append(limitations);
@@ -159,19 +166,21 @@ export class ApprovalController {
         "pre",
         "body-preview approval-content",
         approval.content.rawJson,
+        doc,
       );
       raw.setAttribute("aria-label", "审批原始载荷");
       detail.append(raw);
     } else {
-      detail.append(statusLine("原始审批载荷当前不可用。", "error"));
+      detail.append(statusLine("原始审批载荷当前不可用。", "error", doc));
     }
 
-    detail.append(element("h4", undefined, "可选决定"));
-    const choices = element("div", "action-row");
+    detail.append(element("h4", undefined, "可选决定", doc));
+    const choices = element("div", "action-row", undefined, doc);
     for (const choice of approval.choices) {
       const select = button(
         `${choice.ordinal}. ${choice.originalKind} (${choice.originalOptionId})`,
         choice.selectable ? "secondary-button" : undefined,
+        doc,
       );
       select.disabled = !choice.selectable;
       select.addEventListener("click", () => {
@@ -192,15 +201,16 @@ export class ApprovalController {
         detailBlock(
           "已登记决定",
           this.#approvalRegistration.approvalRegistrationId,
+          doc,
         ),
       );
-      const actions = element("div", "action-row");
-      const decide = button("提交已登记决定", "submit");
+      const actions = element("div", "action-row", undefined, doc);
+      const decide = button("提交已登记决定", "submit", doc);
       decide.addEventListener("click", () => {
         decide.disabled = true;
         void this.submitApprovalDecision(record, decide);
       });
-      const inspect = button("刷新审批状态", "secondary-button");
+      const inspect = button("刷新审批状态", "secondary-button", doc);
       inspect.addEventListener("click", () => {
         inspect.disabled = true;
         void this.refreshApprovalStatus(record, inspect);

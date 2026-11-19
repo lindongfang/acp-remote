@@ -47,6 +47,10 @@ export class CapacityReleaseController {
     this.#nativeReleaseTargetId = value;
   }
 
+  get nativeReleaseRegistration(): NativeReleaseRegistered | null {
+    return this.#nativeReleaseRegistration;
+  }
+
   resetCapacity(): void {
     this.#sessionCapacity = null;
   }
@@ -71,19 +75,21 @@ export class CapacityReleaseController {
   }
 
   nativeReleasePanel(record: IdentityRecord): HTMLElement {
-    const section = element("section", "session-composer");
+    const doc = this.#port.getDocument?.() ?? globalThis.document;
+    const section = element("section", "session-composer", undefined, doc);
     section.append(
-      element("h3", "section-title", "原生会话释放"),
+      element("h3", "section-title", "原生会话释放", doc),
       paragraph(
         "先登记释放操作，再明确执行。只有节点确认原会话关闭并可靠记录结果后，界面才显示已释放。",
         "field-help",
+        doc,
       ),
     );
 
-    const form = element("form", "pair-form");
-    const label = element("label", undefined, "待释放 target ID");
+    const form = element("form", "pair-form", undefined, doc);
+    const label = element("label", undefined, "待释放 target ID", doc);
     label.htmlFor = "native-release-target";
-    const input = element("input") as HTMLInputElement;
+    const input = element("input", undefined, undefined, doc) as HTMLInputElement;
     input.id = "native-release-target";
     input.name = "native-release-target";
     input.type = "text";
@@ -97,7 +103,7 @@ export class CapacityReleaseController {
       "";
     input.placeholder = "22 位 canonical base64url ID";
     input.disabled = this.#nativeReleaseRegistration !== null;
-    const register = button("登记释放", "submit");
+    const register = button("登记释放", "submit", doc);
     register.type = "submit";
     register.disabled = this.#nativeReleaseRegistration !== null;
     form.append(label, input, register);
@@ -124,8 +130,8 @@ export class CapacityReleaseController {
       return section;
     }
     section.append(
-      detailBlock("释放操作", registration.releaseOperationId),
-      detailBlock("目标", registration.targetId),
+      detailBlock("释放操作", registration.releaseOperationId, doc),
+      detailBlock("目标", registration.targetId, doc),
     );
     if (this.#nativeReleaseStatus !== null) {
       section.append(
@@ -134,26 +140,28 @@ export class CapacityReleaseController {
           this.#nativeReleaseStatus.state === "failed"
             ? `failed / ${this.#nativeReleaseStatus.error}`
             : this.#nativeReleaseStatus.state,
+          doc,
         ),
       );
     }
-    const actions = element("div", "action-row");
+    const actions = element("div", "action-row", undefined, doc);
     const release = button(
       this.#nativeReleaseStatus?.state === "released"
         ? "重试释放协调"
         : "执行原生释放",
       "danger-button",
+      doc,
     );
     release.addEventListener("click", () => {
       release.disabled = true;
       void this.executeNativeRelease(record, release);
     });
-    const inspect = button("刷新释放状态", "secondary-button");
+    const inspect = button("刷新释放状态", "secondary-button", doc);
     inspect.addEventListener("click", () => {
       inspect.disabled = true;
       void this.refreshNativeReleaseStatus(record, inspect);
     });
-    const another = button("登记另一目标", "secondary-button");
+    const another = button("登记另一目标", "secondary-button", doc);
     another.addEventListener("click", () => {
       this.#nativeReleaseTargetId = null;
       this.#nativeReleaseRegistration = null;

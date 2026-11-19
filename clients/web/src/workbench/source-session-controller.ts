@@ -95,6 +95,10 @@ export class SourceSessionController {
     return this.#activeSourceResultRead?.streamId ?? null;
   }
 
+  get manualNativeSessionIdDraft(): string {
+    return this.#sourceManualNativeIdDraft;
+  }
+
   syncWorkspaceSelection(workspaceId: string, canonicalPath: string): void {
     this.#sourceSelectionDraft = { ...this.#sourceSelectionDraft, workspaceId, launchPath: canonicalPath };
   }
@@ -273,6 +277,7 @@ export class SourceSessionController {
     generation: number,
     frame: ViewDataFrame,
   ): boolean {
+    if (generation !== this.#port.getManagementGeneration()) return false;
     const read = this.#activeSourceResultRead;
     if (read === null || frame.streamId !== read.streamId) return false;
     let update;

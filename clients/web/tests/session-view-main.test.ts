@@ -441,10 +441,28 @@ function createBodyHarness() {
     detachSessionStream: vi.fn(),
     sendSessionViewCredit: vi.fn(),
   };
+  let nextTimerId = 1;
+  const timers: Array<{
+    readonly id: number;
+    readonly ms: number;
+    readonly callback: () => void;
+  }> = [];
   const timerApi = {
-    setTimeout: vi.fn(() => 1),
+    setTimeout: vi.fn((callback: () => void, ms: number) => {
+      const id = nextTimerId++;
+      timers.push({
+        id,
+        ms,
+        callback,
+      });
+      return id as unknown as ReturnType<typeof globalThis.setTimeout>;
+    }),
     clearTimeout: vi.fn(),
   };
+  const readers: Array<{
+    readonly accept: ReturnType<typeof vi.fn>;
+    readonly seal: ReturnType<typeof vi.fn>;
+  }> = [];
   const dashboard = vi.fn();
   let currentTargetId: string | null = "A";
 
@@ -453,11 +471,14 @@ function createBodyHarness() {
     getManagementGeneration: () => 1,
     getInspectedQueueTargetId: () => currentTargetId,
     renderDashboard: dashboard,
-    readerFactory: () =>
-      ({
-        accept: vi.fn(),
+    readerFactory: () => {
+      const reader = {
+        accept: vi.fn(() => ({ state: "pending" as const })),
         seal: vi.fn(),
-      }) as unknown as QueuedBodyReaderLike,
+      };
+      readers.push(reader);
+      return reader as unknown as QueuedBodyReaderLike;
+    },
     timerApi,
     formatError: String,
   });
@@ -466,6 +487,9 @@ function createBodyHarness() {
     controller,
     connection,
     dashboard,
+    timerApi,
+    timers,
+    readers,
     setTarget: (target: string | null) => {
       currentTargetId = target;
       controller.reset();
@@ -529,5 +553,103 @@ describe("actual queued-body open fencing during view target changes", () => {
     expect(connection.detachSessionStream).toHaveBeenCalledExactlyOnceWith(
       "first",
     );
+  });
+
+  it("seals reader, detaches active stream, and renders timeout failure after 30_000ms", async () => {
+    const { controller, connection, dashboard, timerApi, timers, readers } =
+      createBodyHarness();
+    connection.openSessionBody.mockResolvedValueOnce({
+      streamId: "stream-timeout",
+      totalBytes: "16",
+    });
+
+    await controller.openQueueBody(
+      {} as never,
+      "A",
+      { itemId: "item-timeout", revision: "1" } as never,
+      { disabled: true } as HTMLButtonElement,
+    );
+
+    expect(controller.activeBodyRead?.streamId).toBe("stream-timeout");
+    expect(timers).toHaveLength(1);
+    expect(timers[0]?.ms).toBe(30_000);
+    expect(connection.sendSessionViewCredit).toHaveBeenCalledExactlyOnceWith(
+      "stream-timeout",
+      0n,
+    );
+
+    timers[0]!.callback();
+
+    expect(readers[0]?.seal).toHaveBeenCalledOnce();
+    expect(connection.detachSessionStream).toHaveBeenCalledExactlyOnceWith(
+      "stream-timeout",
+    );
+    expect(timerApi.clearTimeout).toHaveBeenCalledWith(timers[0]?.id);
+    expect(controller.activeBodyRead).toBeNull();
+    expect(dashboard.mock.calls.at(-1)?.[2]).toBe("读取正文超时。");
+  });
+
+  it("seals and detaches an already-active body stream when switching targets or starting a new body read", async () => {
+    const {
+      controller,
+      connection,
+      timerApi,
+      timers,
+      readers,
+      setTarget,
+    } = createBodyHarness();
+    connection.openSessionBody
+      .mockResolvedValueOnce({ streamId: "active-A1", totalBytes: "10" })
+      .mockResolvedValueOnce({ streamId: "active-B1", totalBytes: "10" })
+      .mockResolvedValueOnce({ streamId: "active-B2", totalBytes: "10" });
+
+    await controller.openQueueBody(
+      {} as never,
+      "A",
+      { itemId: "item-1", revision: "1" } as never,
+      { disabled: true } as HTMLButtonElement,
+    );
+    expect(controller.activeBodyRead?.streamId).toBe("active-A1");
+
+    // Feed an in-flight chunk so the stream is actively reading before switching target
+    const handled = controller.acceptViewFrame({} as never, 1, {
+      type: "data",
+      streamId: "active-A1",
+      packetSequence: 1n,
+      recordId: 1n,
+      byteOffset: 0n,
+      totalLength: 10n,
+      kind: "original_raw",
+      last: false,
+      payload: new Uint8Array([65, 66]),
+    });
+    expect(handled).toBe(true);
+    expect(readers[0]?.accept).toHaveBeenCalledOnce();
+
+    setTarget("B");
+    expect(readers[0]?.seal).toHaveBeenCalledOnce();
+    expect(connection.detachSessionStream).toHaveBeenCalledWith("active-A1");
+    expect(timerApi.clearTimeout).toHaveBeenCalledWith(timers[0]?.id);
+    expect(controller.activeBodyRead).toBeNull();
+
+    // Re-opening within target B while active-B1 is established seals and detaches active-B1
+    await controller.openQueueBody(
+      {} as never,
+      "B",
+      { itemId: "item-2", revision: "1" } as never,
+      { disabled: true } as HTMLButtonElement,
+    );
+    expect(controller.activeBodyRead?.streamId).toBe("active-B1");
+
+    await controller.openQueueBody(
+      {} as never,
+      "B",
+      { itemId: "item-3", revision: "2" } as never,
+      { disabled: true } as HTMLButtonElement,
+    );
+    expect(readers[1]?.seal).toHaveBeenCalledOnce();
+    expect(connection.detachSessionStream).toHaveBeenCalledWith("active-B1");
+    expect(timerApi.clearTimeout).toHaveBeenCalledWith(timers[1]?.id);
+    expect(controller.activeBodyRead?.streamId).toBe("active-B2");
   });
 });
