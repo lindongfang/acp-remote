@@ -17,7 +17,7 @@
 
 ## 4. 集成验收与独立交付检视（WP4）
 
-- [ ] 4.1 WP4 在 `1.1`~`3.2` 勾选并提交为干净的本地分支受测 `commit SHA` 后，由独立 `tester` 执行 `FBL-001`~`FBL-010` 全量验收、独立 `reviewer` 执行集成代码检视，闭环全部阻断项并回填结果摘要至 [plan.md](plan.md)；完成判据：全部必需用例通过、独立检视 `Status` 为 `passed`、`node testing/suites/verify-suite.mjs --change fix-build-and-legacy-baseline` 与 `npm run check:spec` 校验通过。
+- [x] 4.1 WP4 在 `1.1`~`3.2` 勾选并提交为干净的本地分支受测 `commit SHA` 后，由独立 `tester` 执行 `FBL-001`~`FBL-010` 全量验收、独立 `reviewer` 执行集成代码检视，闭环全部阻断项并回填结果摘要至 [plan.md](plan.md)；完成判据：全部必需用例通过、独立检视 `Status` 为 `passed`、`node testing/suites/verify-suite.mjs --change fix-build-and-legacy-baseline` 与 `npm run check:spec` 校验通过。
 
 ## Workflow follow-up
 

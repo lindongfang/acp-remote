@@ -48,7 +48,7 @@
 | Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes |
 | --- | --- | --- | --- | --- | --- |
 | 编码前门禁（`proposal`/`design`/`tests`/`plan`/`tasks`） | 独立 `reviewer` | 核查 `skip_specs: true` 适用边界、`SC1`~`SC4` 100% 映射、现役外键父表（`harnesses`/`workspaces`/`product_*`）保护、`approvals <-> approval_options` 双向外键迁移顺序与测试覆盖充分性 | `verify-suite.mjs --change fix-build-and-legacy-baseline` 与 `npm run check:spec` 通过且独立 `reviewer` 无阻断问题 | passed | 基于分支 `v2` 基线 `35d048d` 完成增量复审（`FBL-R001`~`FBL-R003` 已全部关闭；`verify-suite.mjs --change fix-build-and-legacy-baseline` 与隔离洁净快照 `openspec validate` 全部通过；详见 `testing/runs/fix-build-and-legacy-baseline/reviewer/pre-code-gate-review.md`） |
-| 集成交付门禁（受测集成 `commit SHA` 全量 diff 与验收证据） | 独立 `reviewer` | 核查受测 `commit SHA` 真实代码 diff、`verify-suite.mjs` 与 CI 门禁有效性、`Storage` 关闭时序安全性、`SCHEMA_VERSION = 15` 事务原子性、敏感信息零残留与临时测试资源清理 | `FBL-001`~`FBL-010` 独立验收通过且全部审查阻断项在新 commit 复核闭环 | pending | 待 `WP1`~`WP3` 实施完成并锁定干净本地受测 `commit SHA` 后启动 |
+| 集成交付门禁（受测集成 `commit SHA` 全量 diff 与验收证据） | 独立 `reviewer` | 核查受测 `commit SHA` 真实代码 diff、`verify-suite.mjs` 与 CI 门禁有效性、`Storage` 关闭时序安全性、`SCHEMA_VERSION = 15` 事务原子性、敏感信息零残留与临时测试资源清理 | `FBL-001`~`FBL-010` 独立验收通过且全部审查阻断项在新 commit 复核闭环 | passed | 基于本地受测提交 `ac2f0e5902fd515cf8eb3085de0424fe524599d2` 完成集成全量代码检视，80 文件改动（+5698/-12718）全部符合规范，零阻断项（`0` blocking findings），详见 `testing/runs/fix-build-and-legacy-baseline/reviewer/integrated-delivery-review.md` |
 
 ## Main E2E
 
@@ -89,22 +89,22 @@ alternative_checks:
 
 ## Verification Results
 
-- 受测版本：未执行（当前处于编码前规划阶段，基线 commit `35d048d`）
-- 执行者与环境：待编码实现并锁定受测集成 `commit SHA` 后由独立 `tester` 与独立 `reviewer` 在 Windows 环境执行
-- 验证命令及退出码：当前仅执行规划结构校验（`node testing/suites/verify-suite.mjs --change fix-build-and-legacy-baseline` 与 `npm run check:spec`）
+- 受测版本：`ac2f0e5902fd515cf8eb3085de0424fe524599d2`（受跟踪工作树干净，基线 `35d048d9`）
+- 执行者与环境：独立 `tester` 与独立 `reviewer` 并行执行，Windows 平台，Rust 1.91.1，Node v22.20.0
+- 验证命令及退出码：`verify-suite.mjs`（exit 0）、`npm run check:spec`（exit 0）、`npm run check`（exit 0）、`npm run build:rust`（exit 0）、`cargo clippy --all-targets --all-features --locked -- -D warnings`（exit 0）
 
 | Case ID | Executor | Commit SHA | Status | Evidence / Limitations |
 | --- | --- | --- | --- | --- |
-| FBL-001 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-002 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-003 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-004 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-005 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-006 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-007 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-008 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-009 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
-| FBL-010 | pending | n/a | not-run | 编码前规划阶段，待锁定受测集成 commit SHA 后执行 |
+| FBL-001 | tester | ac2f0e59 | passed | `git ls-files` 确认验收对端在库；`git archive` 解压至隔离临时目录（完全无 `testing/runs/`），`cargo build --bin session_capacity_acceptance_peer --features native-dispatch-dev-fixtures --locked` 与 `cargo check --all-targets --all-features --locked` 均退出码 0 编译通过 |
+| FBL-002 | tester | ac2f0e59 | passed | `verify-suite.mjs` 正向基线通过；在隔离临时副本构造场景 A（`testing/runs`）、B（`.tmp`）、C（`target`）、D（`node_modules`）、E（缺失源码）及 Rust `include!` / `#[path]` 注入篡改，全部 7 组负向检查 100% 退出码 1 拦截并准确定位错误 |
+| FBL-003 | tester | ac2f0e59 | passed | `cargo clippy --all-targets --all-features --locked -- -D warnings` 零告警通过（exit 0）；6 个单 feature（`shared-view-*`、`registration-*`、`acp-runtime-*`、`native-dispatch-*`、`approval-owner-*`）独立 `cargo check` 零告警通过；`cargo test --all-targets --all-features --no-run --locked -j 2` 链接成功（exit 0） |
+| FBL-004 | tester | ac2f0e59 | passed | `npm run check` 退出码 0 通过（Web 测试 40/40 + 打包，Rust 1041 单元测试 + 2 main 测试 + 13 集成套件全绿）；`npm run build:rust` 退出码 0 通过；`git diff --check` 无空白缺陷；`.github/workflows/ci.yml:34` 确认包含 `--all-features` Clippy 强阻断步骤 |
+| FBL-005 | tester | ac2f0e59 | passed | 源码核查确认 `StorageData`、`impl Deref for Storage` 与 `Storage::{approvals, histories, sessions}` 完全清零（prod 与 `#[cfg(test)]` 均无残留）；`cargo doc --no-deps --locked` 零告警通过，公开文档无内部监督/连接池泄漏 |
+| FBL-006 | tester | ac2f0e59 | passed | `cargo test --lib storage:: --locked -- --test-threads=4` 299/299 单元测试全绿；5 套 `registration_*` 集成套件（`shutdown_ownership`、`owner_acceptance` 51 例、`reconcile_ownership` 2 例、`restart` 1 例、`factory_waiter` 1 例）全绿通过；验证队列单次认领互斥与“先取消/等待运行时监督退出再封存物理池”不变量 |
+| FBL-007 | tester | ac2f0e59 | passed | 全新数据库 `v0 -> v15` 初始化实测：`SCHEMA_VERSION == 15`，`user_version = 15`，`node_meta.schema_version = 15`，`harnesses` 与 `workspaces` 两张基础目录父表完好，15 张死表与 3 个旧索引在新库中从未创建，`foreign_key_check` 零违例（通过 `session_storage::tests::fresh_v0_to_v15_creates_catalog_tables_without_legacy_tables_or_indexes`） |
+| FBL-008 | tester | ac2f0e59 | passed | `v1..=v14 -> v15` 升级实测：含 `approvals <-> approval_options` 双向外键真实关联行的 `v14` 库平滑升级至 `v15`，死表/索引全部消失且现役数据无损；前置故障注入事务原子回滚，重试升级成功；历史迁移测试 `schema3_migration`、`schema4_migration`、`schema5_registration_acceptance` 全绿 |
+| FBL-009 | tester | ac2f0e59 | passed | `user_version` 为 16 与 77 时安全返回 `StorageError::UnknownSchema`，哨兵表数据零篡改；4 组带病库（死表残留、死索引/阴影视图残留、未授权触发器、缺失目录父表）被 `validate` 确定性拒绝（通过 `session_storage::tests::unknown_inconsistent_and_v15_tampered_or_legacy_residual_schemas_are_rejected_read_only`） |
+| FBL-010 | tester | ac2f0e59 | passed | 确认 7 个第一代遗留模块文件及 `InputRepository`/`InputService` 符号彻底清零；全特性回归子集（`registration-acceptance-fixtures` 全部测试、`acp-runtime-acceptance-fixtures` 18 套件、`--lib --all-features storage::` 40 例、`--lib --all-features session_storage::` 268 例、`SOURCE_SESSION_CHILD` + `capacity_rb001_` 33 例）100% 通过；无任何产品逻辑或现役能力回归 |
 
-- 未执行项与已知限制：`FBL-001`~`FBL-010` 全部处于编码前待执行状态（`not-run`），将在 `WP1`~`WP3` 合入后由独立 `tester` 完整执行并将原始日志归档于 `testing/runs/fix-build-and-legacy-baseline/`。
-- 问题关闭依据：none
+- 未执行项与已知限制：基线 `35d048d9` 既有的 6 组范围外开发/L6 夹具（`application::native_dispatch::dev_tests`、`approval_owner_development`、`native_views_bridge`、`r3_source_wss_development`、`source_session_development`、`shared_view_module_acceptance` 2/4）按 `PV4`/`3.2` 范围明确排除在运行时之外，`ac2f0e59` 未引入任何新增回归。
+- 问题关闭依据：编码前门禁问题 `FBL-R001`~`FBL-R003` 已在 Round 2 关闭；集成交付门禁独立 `reviewer` 与独立 `tester` 检视验收均未发现新增阻断项，集成门禁登记 `passed`。
