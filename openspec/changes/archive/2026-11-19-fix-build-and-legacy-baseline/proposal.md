@@ -16,7 +16,7 @@
 
 ### 硬约束与非目标
 
-- 本变更属于不改变外部可观察产品规格与网络协议契约的内部工程与存储基线收敛，在 `.openspec.yaml` 声明 `skip_specs: true`，严格遵守 [总体设计](../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)、[AGENTS.md](../../../AGENTS.md) 与 `openspec/specs/` 既有长期规格。
+- 本变更属于不改变外部可观察产品规格与网络协议契约的内部工程与存储基线收敛，在 `.openspec.yaml` 声明 `skip_specs: true`，严格遵守 [总体设计](../../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)、[AGENTS.md](../../../../AGENTS.md) 与 `openspec/specs/` 既有长期规格。
 - 仅移除第一代废弃聊天正文/会话/旧审批死表及其专属 `#[cfg(test)]` 遗留模块（`legacy`、`history`、`approvals`），**严禁误删仍在生产目录与外键链路中使用的 `harnesses`、`workspaces` 及 `product_sources`、`product_harness_sources`、`product_targets`**。
 - 不在本变更中重写 `vendor/sqlx-sqlite` 补丁驱动、不拆分 `clients/web/src/main.ts`（留归后续独立前端预重构变更），也不触碰任何 `x-deferred: true` 远期变更的业务实现。
 - 不删除用户真实运行数据目录、私钥或本机私有配置文件。
@@ -47,10 +47,10 @@
 
 - 构建与工程校验：`app/Cargo.toml`、`app/dev-fixtures/`、`testing/suites/verify-suite.mjs`、`.github/workflows/ci.yml`。
 - 存储与运行时装配：`app/src/storage.rs`、`app/src/storage/`、`app/src/session_storage/schema.rs`、`app/src/session_storage/mod.rs`、`app/src/domain/mod.rs`、`app/src/application/mod.rs` 及被移除的第一代 `#[cfg(test)]` 遗留模块。
-- 前置与后续衔接：在已归档 [deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md) 之上收敛工程底座，为后续前端工作台预重构及 [deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md)、[deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md) 提供干净基线。
+- 前置与后续衔接：在已归档 [deliver-session-capacity](../2026-11-19-deliver-session-capacity/proposal.md) 之上收敛工程底座，为后续前端工作台预重构及 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md)、[deliver-session-transcript-cache](../../deliver-session-transcript-cache/proposal.md) 提供干净基线。
 
 ## Exploration
 
 - **清理范围确认（用户确认 A1）**：确认在本次工程收敛变更中一并清理第一代 `SESSION` 聊天正文死表及 `legacy`/`history`/`approvals` 测试遗留代码，采用 `SCHEMA_VERSION = 15` 迁移兼容历史测试迁移链（如 `v2/v3/v4` 升级用例）并收口新库基线；经核查 `node_catalog_schema.rs` 与 `node_management_audit` 外键约束，`harnesses`、`workspaces` 及 `product_sources`/`product_harness_sources`/`product_targets` 仍为现役父表，予以完整保留。
 - **工作区基线处理确认（用户确认 A2）**：已按用户确认先将分支 `v2` 上已完成的 CT-001/TC-001 远期规划修订独立提交为规划 commit（`35d048d`），确保本变更在干净受跟踪基线上建立。
-- **术语与 ADR 复核**：复用 [领域术语表](../../GLOSSARY.md) 既有定义，不引入新业务概念，无需新增独立 ADR。
+- **术语与 ADR 复核**：复用 [领域术语表](../../../GLOSSARY.md) 既有定义，不引入新业务概念，无需新增独立 ADR。
