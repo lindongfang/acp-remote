@@ -17,7 +17,7 @@
 
 ## 4. 集成验收与交付检视门禁（WP4）
 
-- [ ] 4.1 WP4 在完成 `WP1`–`WP3` 并锁定受跟踪文件干净的本地分支集成 `commit SHA` 后，并行执行独立 `tester` 正式验收（`RWW-001`–`RWW-009`）与独立 `reviewer` 交付检视；完成判据：`PV1`–`PV5` 全部通过、所有阻断问题闭环、`plan.md` 中 `Code Review` 集成交付门禁登记为 `passed` 且 `Verification Results` 完成精简证据回填。
+- [x] 4.1 WP4 在完成 `WP1`–`WP3` 并锁定受跟踪文件干净的本地分支集成 `commit SHA` 后，并行执行独立 `tester` 正式验收（`RWW-001`–`RWW-009`）与独立 `reviewer` 交付检视；完成判据：`PV1`–`PV5` 全部通过、所有阻断问题闭环、`plan.md` 中 `Code Review` 集成交付门禁登记为 `passed` 且 `Verification Results` 完成精简证据回填。
 
 ## Workflow follow-up
 
