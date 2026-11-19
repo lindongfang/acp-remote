@@ -56,7 +56,7 @@ async fn repeated_trust_scopes_share_one_original_physical_close() {
         ConnectionCloseStatus::Complete
     );
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -108,7 +108,7 @@ async fn registry_cannot_take_trust_idle_and_full_idle_returns_original() {
         assert_eq!(observation.snapshot().close, CloseProgress::ConfirmedJoined);
     }
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -148,7 +148,7 @@ async fn seal_before_retain_returns_full_original_outside_fence() {
         .expect("close");
     assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -202,7 +202,7 @@ async fn seal_before_idle_take_closes_cache_without_waiting_for_new_business() {
     assert_eq!(next.snapshot().close, CloseProgress::ConfirmedJoined);
     assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -255,7 +255,7 @@ async fn idle_take_cancel_and_close_waiter_cancel_keep_original_link() {
         assert_eq!(observation.snapshot().close, CloseProgress::ConfirmedJoined);
     }
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -338,7 +338,7 @@ async fn cancelled_cached_worker(commit: bool) {
     assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
     assert_eq!(next.snapshot().close, CloseProgress::ConfirmedJoined);
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     drop(release);
     area.cleanup();
 }
@@ -365,7 +365,7 @@ async fn storage_drop_seals_and_drains_retained_owner_cycle() {
         .expect("retain");
     let original = original_acquisition(&storage);
     let registry = storage.request_registry();
-    let pool = storage.pool.clone();
+    let pool = storage.pool_for_test().clone();
     let gate = CloseBarrier::new();
     registry
         .connection_closer_for_test()
@@ -435,7 +435,7 @@ async fn revoke_replay_ok_with_active_transaction_does_not_retain() {
     assert_eq!(first.snapshot().close, CloseProgress::ConfirmedJoined);
     assert_eq!(second.snapshot().close, CloseProgress::ConfirmedJoined);
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -486,6 +486,6 @@ async fn unknown_close_report_survives_later_successful_trust_reuse() {
         ConnectionCloseStatus::Unconfirmed
     );
     storage_scope.stop_and_observe().await;
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }

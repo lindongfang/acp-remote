@@ -118,7 +118,10 @@ pub(super) async fn legacy(area: &Area, version: i64) {
         .await
         .unwrap();
     if version == 2 {
-        for definition in schema::SESSION {
+        for definition in schema::CATALOG_TABLES
+            .iter()
+            .chain(schema::LEGACY_SESSION_DEFINITIONS)
+        {
             sqlx::query(definition)
                 .execute(&mut connection)
                 .await
@@ -217,23 +220,47 @@ pub(super) async fn assert_preserved(
         .unwrap();
     assert_eq!(audit, (8, "revoked".into()));
     if old_version == 2 {
-        let body: Vec<u8> = sqlx::query_scalar("SELECT body FROM content_objects")
+        let harness: String =
+            sqlx::query_scalar("SELECT name FROM harnesses WHERE harness_id='legacy-h'")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+        assert_eq!(harness, "old");
+        let workspace: String = sqlx::query_scalar(
+            "SELECT canonical_path FROM workspaces WHERE workspace_id='legacy-w'",
+        )
+        .fetch_one(&mut *connection)
+        .await
+        .unwrap();
+        assert_eq!(workspace, "D:/synthetic-test");
+        if expected_version < 15 {
+            let body: Vec<u8> = sqlx::query_scalar("SELECT body FROM content_objects")
+                .fetch_one(&mut *connection)
+                .await
+                .unwrap();
+            assert_eq!(body, b"synthetic-legacy-body");
+            let approval: (String, Vec<u8>, Vec<u8>) =
+                sqlx::query_as("SELECT status,raw_request,scope_raw FROM approvals")
+                    .fetch_one(&mut *connection)
+                    .await
+                    .unwrap();
+            assert_eq!(approval, ("invalid".into(), b"{}".to_vec(), b"{}".to_vec()));
+            let item: (String, String, i64) = sqlx::query_as(
+                "SELECT item_id,content_ref,committed_version FROM conversation_items",
+            )
             .fetch_one(&mut *connection)
             .await
             .unwrap();
-        assert_eq!(body, b"synthetic-legacy-body");
-        let approval: (String, Vec<u8>, Vec<u8>) =
-            sqlx::query_as("SELECT status,raw_request,scope_raw FROM approvals")
-                .fetch_one(&mut *connection)
-                .await
-                .unwrap();
-        assert_eq!(approval, ("invalid".into(), b"{}".to_vec(), b"{}".to_vec()));
-        let item: (String, String, i64) =
-            sqlx::query_as("SELECT item_id,content_ref,committed_version FROM conversation_items")
-                .fetch_one(&mut *connection)
-                .await
-                .unwrap();
-        assert_eq!(item, ("legacy-i".into(), "legacy-content".into(), 1));
+            assert_eq!(item, ("legacy-i".into(), "legacy-content".into(), 1));
+        } else {
+            let legacy_remaining: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('sessions','content_objects','approvals','conversation_items')",
+            )
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+            assert_eq!(legacy_remaining, 0);
+        }
     }
     let pragma: i64 = sqlx::query_scalar("PRAGMA user_version")
         .fetch_one(connection)

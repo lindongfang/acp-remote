@@ -15,6 +15,10 @@ use tokio::{sync::Notify, task::JoinHandle};
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
 tokio::task_local! {static APPROVAL_OWNED_TASK:std::sync::Weak<TaskSlot>;}
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "Re-exported as pub(crate) from native_dispatch"
+)]
 pub(crate) fn owned_job_registered_for_approval_test() -> bool {
     APPROVAL_OWNED_TASK
         .try_with(|original| original.upgrade().is_some())
@@ -296,6 +300,10 @@ impl TaskRegistry {
         Ok(slot)
     }
     #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
+    #[allow(
+        dead_code,
+        reason = "Used by approval-owner-acceptance diagnostic mount"
+    )]
     pub(super) fn approval_diagnostic_counts(
         &self,
     ) -> Result<(usize, usize, usize, bool), DispatchError> {

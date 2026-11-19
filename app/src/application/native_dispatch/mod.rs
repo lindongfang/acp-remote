@@ -36,6 +36,10 @@ mod approval_recovery;
         feature = "approval-owner-acceptance-fixtures"
     )
 ))]
+#[allow(
+    unused_imports,
+    reason = "Re-exported for approval-owner-dev-fixtures node tests"
+)]
 pub(crate) use approval_recovery::{
     ApprovalReconcileOutcome, ApprovalRepairMode, ApprovalRepairScope,
 };
@@ -507,7 +511,13 @@ pub(crate) use tasks::owned_job_registered_for_approval_test;
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
 mod approval_acceptance_mount;
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
-pub(crate) use approval_acceptance_mount::observe_approval_original;
+#[allow(
+    unused_imports,
+    reason = "Re-exported for approval-owner-dev-fixtures node tests"
+)]
+pub(crate) use approval_acceptance_mount::{
+    OriginalApprovalDiagnosticSnapshot, OriginalApprovalObservation, observe_approval_original,
+};
 
 #[cfg(test)]
 mod origin_tree_acceptance;

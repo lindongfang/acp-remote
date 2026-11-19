@@ -154,7 +154,7 @@ async fn storage_close_drains_late_return_while_original_pool_clones_remain() {
         .await
         .expect("actual initialized Storage")
         .projection(host);
-    let observer = storage.pool.clone();
+    let observer = storage.pool_for_test().clone();
     let mut connection = observer.acquire().await.expect("same real pool connection");
     connection
         .execute("SELECT revision FROM node_state WHERE singleton=1")
@@ -212,7 +212,7 @@ async fn storage_normal_return_and_repeated_close_physically_release_files() {
         .await
         .expect("normal Storage")
         .projection(host);
-    let observer = storage.pool.clone();
+    let observer = storage.pool_for_test().clone();
     let mut connection = observer.acquire().await.expect("same normal pool");
     connection
         .execute("SELECT revision FROM node_state WHERE singleton=1")

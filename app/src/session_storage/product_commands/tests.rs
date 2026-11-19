@@ -424,7 +424,8 @@ async fn metadata_admission_replay_conflict_and_no_body_tables() {
         "session_commands",
     ] {
         assert_eq!(
-            sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table}"))
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_schema WHERE name=?")
+                .bind(table)
                 .fetch_one(&f.pool)
                 .await
                 .unwrap(),

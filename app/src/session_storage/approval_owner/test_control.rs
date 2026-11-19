@@ -1,4 +1,12 @@
 //! Opt-in observation and real-statement fault seams over the original registry/close slots.
+#![allow(
+    dead_code,
+    clippy::struct_excessive_bools,
+    clippy::significant_drop_tightening,
+    clippy::missing_errors_doc,
+    clippy::must_use_candidate,
+    reason = "Test-only approval fault and cut controller scaffolding"
+)]
 use crate::{
     application::native_dispatch::owned_job_registered_for_approval_test,
     domain::{EntityId, approval_owner::*},
@@ -9,7 +17,7 @@ use std::sync::{
 };
 use tokio::{sync::Notify, time::Instant};
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ApprovalCut {
+pub enum ApprovalCut {
     RequestBeforeBegin,
     RegisterBeforeBegin,
     DecideBeforeBegin,
@@ -25,7 +33,7 @@ pub(crate) enum ApprovalCut {
     LeaseAfterCloseAck,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ApprovalSqlOperation {
+pub enum ApprovalSqlOperation {
     Resolve,
     Observe,
     Register,
@@ -40,7 +48,7 @@ pub(crate) enum ApprovalSqlOperation {
     ApprovalAudit,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ApprovalOperationTag {
+pub struct ApprovalOperationTag {
     pub operation: EntityId,
     pub kind: ApprovalSqlOperation,
     pub instance: Option<EntityId>,
@@ -49,7 +57,7 @@ pub(crate) struct ApprovalOperationTag {
     pub response: Option<ApprovalReplyId>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ApprovalCutSelector {
+pub enum ApprovalCutSelector {
     Next,
     Operation(EntityId),
     Approval(ApprovalId),
@@ -72,6 +80,10 @@ impl ApprovalCutSelector {
             Self::SourceInstance(id) => tag.instance == Some(id),
         }
     }
+    #[allow(
+        clippy::match_same_arms,
+        reason = "Distinct tuple payload types per variant"
+    )]
     fn overlaps(self, other: Self) -> bool {
         match (self, other) {
             (Self::Operation(a), Self::Operation(b)) => a == b,
@@ -87,9 +99,9 @@ impl ApprovalCutSelector {
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct ApprovalArmId(u64);
+pub struct ApprovalArmId(u64);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ApprovalControlError {
+pub enum ApprovalControlError {
     Occupied,
     Poisoned,
     InvalidPoint,
@@ -98,13 +110,13 @@ pub(crate) enum ApprovalControlError {
     Exhausted,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ApprovalWaitError {
+pub enum ApprovalWaitError {
     TimedOut,
     Disarmed,
     Stopped,
 }
 #[derive(Clone, Debug)]
-pub(crate) struct ApprovalCutArrival {
+pub struct ApprovalCutArrival {
     pub event_sequence: u64,
     pub arm: ApprovalArmId,
     pub point: ApprovalCut,
@@ -116,7 +128,7 @@ pub(crate) struct ApprovalCutArrival {
     pub actual_close_ack_observed: bool,
 }
 #[derive(Clone, Debug)]
-pub(crate) struct ApprovalCutEvent {
+pub struct ApprovalCutEvent {
     pub sequence: u64,
     pub arrival: ApprovalCutArrival,
 }
@@ -159,13 +171,13 @@ struct Pause {
     state: Mutex<PauseState>,
     changed: Notify,
 }
-pub(crate) struct ApprovalPauseGuard {
+pub struct ApprovalPauseGuard {
     id: ApprovalArmId,
     controller: Arc<ApprovalTestController>,
     original: Arc<Pause>,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ApprovalStatement {
+pub enum ApprovalStatement {
     InsertRequest,
     InsertAssociation,
     InsertRegistration,
@@ -183,7 +195,7 @@ pub(crate) enum ApprovalStatement {
     Commit,
 }
 #[derive(Clone, Debug)]
-pub(crate) struct ApprovalFaultObservation {
+pub struct ApprovalFaultObservation {
     pub tag: ApprovalOperationTag,
     pub point: ApprovalStatement,
     pub sqlite_primary_code: Option<i32>,
@@ -201,7 +213,7 @@ struct Fault {
     observation: Mutex<Option<ApprovalFaultObservation>>,
     changed: Notify,
 }
-pub(crate) struct ApprovalFaultGuard {
+pub struct ApprovalFaultGuard {
     original: Arc<Fault>,
 }
 pub(in crate::session_storage) struct ApprovalStatementFault {
@@ -216,11 +228,11 @@ struct State {
     events: Vec<ApprovalCutEvent>,
     stopped: bool,
 }
-pub(crate) struct ApprovalTestController {
+pub struct ApprovalTestController {
     state: Mutex<State>,
 }
 impl ApprovalTestController {
-    pub(in crate::session_storage) fn new_registry_controller() -> Self {
+    pub(in crate::session_storage) const fn new_registry_controller() -> Self {
         Self {
             state: Mutex::new(State {
                 next: 0,
@@ -234,7 +246,7 @@ impl ApprovalTestController {
     }
 }
 impl ApprovalTestController {
-    pub(crate) fn pause_next(
+    pub fn pause_next(
         self: &Arc<Self>,
         point: ApprovalCut,
         selector: ApprovalCutSelector,
@@ -284,13 +296,13 @@ impl ApprovalTestController {
             original,
         })
     }
-    pub(crate) fn fail_result_after_ack(
+    pub fn fail_result_after_ack(
         &self,
         guard: &ApprovalPauseGuard,
     ) -> Result<(), ApprovalControlError> {
         self.report_effect(guard, false)
     }
-    pub(crate) fn lose_commit_report(
+    pub fn lose_commit_report(
         &self,
         guard: &ApprovalPauseGuard,
     ) -> Result<(), ApprovalControlError> {
@@ -301,7 +313,7 @@ impl ApprovalTestController {
         guard: &ApprovalPauseGuard,
         commit: bool,
     ) -> Result<(), ApprovalControlError> {
-        if !std::ptr::eq(self, &*guard.controller) {
+        if !std::ptr::eq(self, &raw const *guard.controller) {
             return Err(ApprovalControlError::InvalidGuard);
         }
         let mut state = guard
@@ -418,7 +430,7 @@ impl ApprovalTestController {
             changed.await;
         }
     }
-    pub(crate) fn events_after(&self, sequence: u64) -> Vec<ApprovalCutEvent> {
+    pub fn events_after(&self, sequence: u64) -> Vec<ApprovalCutEvent> {
         self.state.lock().map_or_else(
             |_| Vec::new(),
             |state| {
@@ -499,14 +511,14 @@ impl ApprovalTestController {
         state.faults.push(original.clone());
         Ok(ApprovalFaultGuard { original })
     }
-    pub(crate) fn abort_next_statement(
+    pub fn abort_next_statement(
         &self,
         point: ApprovalStatement,
         selector: ApprovalCutSelector,
     ) -> Result<ApprovalFaultGuard, ApprovalControlError> {
         self.arm_fault(point, selector, false)
     }
-    pub(crate) fn deferred_foreign_key_at_commit(
+    pub fn deferred_foreign_key_at_commit(
         &self,
         selector: ApprovalCutSelector,
     ) -> Result<ApprovalFaultGuard, ApprovalControlError> {
@@ -540,10 +552,10 @@ impl ApprovalTestController {
     }
 }
 impl ApprovalPauseGuard {
-    pub(crate) const fn id(&self) -> ApprovalArmId {
+    pub const fn id(&self) -> ApprovalArmId {
         self.id
     }
-    pub(crate) async fn wait_until_arrived(
+    pub async fn wait_until_arrived(
         &self,
         until: Instant,
     ) -> Result<ApprovalCutArrival, ApprovalWaitError> {
@@ -572,7 +584,7 @@ impl ApprovalPauseGuard {
                 .map_err(|_| ApprovalWaitError::TimedOut)?;
         }
     }
-    pub(crate) fn release(&self) {
+    pub fn release(&self) {
         if let Ok(mut state) = self.original.state.lock() {
             state.released = true;
         }
@@ -592,10 +604,10 @@ impl Drop for ApprovalPauseGuard {
     }
 }
 impl ApprovalFaultGuard {
-    pub(crate) fn id(&self) -> ApprovalArmId {
+    pub fn id(&self) -> ApprovalArmId {
         self.original.id
     }
-    pub(crate) async fn wait_until_fired(
+    pub async fn wait_until_fired(
         &self,
         until: Instant,
     ) -> Result<ApprovalFaultObservation, ApprovalWaitError> {
@@ -603,13 +615,13 @@ impl ApprovalFaultGuard {
             let changed = self.original.changed.notified();
             tokio::pin!(changed);
             changed.as_mut().enable();
-            if let Some(observation) = self
+            let observation = self
                 .original
                 .observation
                 .lock()
                 .map_err(|_| ApprovalWaitError::Stopped)?
-                .clone()
-            {
+                .clone();
+            if let Some(observation) = observation {
                 return Ok(observation);
             }
             if self.original.disarmed.load(Ordering::Acquire) {
@@ -639,7 +651,7 @@ impl ApprovalStatementFault {
     pub(in crate::session_storage) fn observe(&self, error: Option<&sqlx::Error>, attempted: bool) {
         let extended = error
             .and_then(sqlx::Error::as_database_error)
-            .and_then(|error| error.code())
+            .and_then(sqlx::error::DatabaseError::code)
             .and_then(|value| value.parse::<i32>().ok());
         let observation = ApprovalFaultObservation {
             tag: self.tag,
@@ -681,7 +693,7 @@ pub(in crate::session_storage) fn current_original_context() -> Option<ApprovalC
     APPROVAL_CONTEXT.try_with(Clone::clone).ok()
 }
 
-pub(crate) use super::test_migration::*;
+pub use super::test_migration::*;
 
 #[cfg(test)]
 mod tests;

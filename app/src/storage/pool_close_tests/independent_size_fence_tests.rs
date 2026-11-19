@@ -72,7 +72,7 @@ impl Fixture {
         })
     }
     fn pool(&self) -> &SqlitePool {
-        &self.storage.pool
+        self.storage.pool_for_test()
     }
     fn probe_once(&self) -> Result<()> {
         ensure!(

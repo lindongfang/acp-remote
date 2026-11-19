@@ -149,9 +149,13 @@ async fn open_two(
         .await
         .expect("existing private Storage factory")
         .projection(host);
-    let mut first = storage.pool.acquire().await.expect("first real connection");
+    let mut first = storage
+        .pool_for_test()
+        .acquire()
+        .await
+        .expect("first real connection");
     let mut second = storage
-        .pool
+        .pool_for_test()
         .acquire()
         .await
         .expect("second simultaneous real connection");
@@ -170,7 +174,7 @@ async fn open_two(
             .await
             .expect("real SQL on each connection");
     }
-    assert_eq!(storage.pool.size(), 2);
+    assert_eq!(storage.pool_for_test().size(), 2);
     (storage, first, second)
 }
 async fn pool_stage(storage: &Storage, pool: &SqlitePool) {
@@ -192,8 +196,8 @@ async fn reach<F: Future<Output = ()> + Unpin>(
 ) -> Result<(), Tail> {
     tokio::select! {
         biased;
-        () = closing => Err(first_tail(area, &storage.pool)),
-        () = pool_stage(storage, &storage.pool) => Ok(()),
+        () = closing => Err(first_tail(area, storage.pool_for_test())),
+        () = pool_stage(storage, storage.pool_for_test()) => Ok(()),
     }
 }
 fn finish(area: &OwnedDatabase, storage: &Storage, tail: &Tail) {
@@ -221,7 +225,7 @@ async fn development_held_return_is_paced_until_real_ack() {
     let start = Instant::now();
     let early = tokio::select! {
         biased;
-        () = &mut closing => Some(first_tail(&area, &storage.pool)),
+        () = &mut closing => Some(first_tail(&area, storage.pool_for_test())),
         () = tokio::time::sleep(Duration::from_millis(250)) => None,
     };
     let elapsed = start.elapsed();
@@ -239,7 +243,7 @@ async fn development_held_return_is_paced_until_real_ack() {
     tokio::time::timeout(Duration::from_secs(2), &mut closing)
         .await
         .expect("same close after real normal return ACK");
-    let tail = first_tail(&area, &storage.pool);
+    let tail = first_tail(&area, storage.pool_for_test());
     let mut repeat = Box::pin(storage.close());
     let fast =
         std::future::poll_fn(|context| Poll::Ready(repeat.as_mut().poll(context).is_ready())).await;
@@ -274,8 +278,8 @@ async fn development_two_callers_are_retained_until_first_physical_probe() {
     let (which, tail) = tokio::time::timeout(Duration::from_secs(2), async {
         tokio::select! {
             biased;
-            () = &mut closing => (0, first_tail(&area, &storage.pool)),
-            () = &mut other => (1, first_tail(&area, &storage.pool)),
+            () = &mut closing => (0, first_tail(&area, storage.pool_for_test())),
+            () = &mut other => (1, first_tail(&area, storage.pool_for_test())),
         }
     })
     .await
@@ -310,7 +314,7 @@ async fn development_cancelled_waiter_reenters_the_same_owner() {
             .await;
     assert!(
         pending
-            && storage.pool.size() == 1
+            && storage.pool_for_test().size() == 1
             && storage.required_close_status_in_scope().is_complete()
     );
     held.await;
@@ -318,6 +322,6 @@ async fn development_cancelled_waiter_reenters_the_same_owner() {
     tokio::time::timeout(Duration::from_secs(2), reentry)
         .await
         .expect("same owner completes after waiter cancellation");
-    let tail = first_tail(&area, &storage.pool);
+    let tail = first_tail(&area, storage.pool_for_test());
     finish(&area, &storage, &tail);
 }

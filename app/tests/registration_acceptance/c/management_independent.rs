@@ -1705,19 +1705,6 @@ async fn m_new_path_never_changes_legacy_body_or_security_metadata() {
         .execute(&f.pool)
         .await
         .unwrap();
-    sqlx::query("INSERT INTO sessions VALUES('old-s','old-h','old-w','released',NULL,NULL,NULL)")
-        .execute(&f.pool)
-        .await
-        .unwrap();
-    let old = b"LEGACY_SYNTHETIC_BODY";
-    sqlx::query("INSERT INTO content_objects VALUES('old-content','old-s',?,3,'input',?,?,?)")
-        .bind(id(1).encode())
-        .bind(old.as_slice())
-        .bind(hex::encode(Sha256::digest(old)))
-        .bind(i64::try_from(old.len()).unwrap())
-        .execute(&f.pool)
-        .await
-        .unwrap();
     sqlx::query("INSERT INTO management_commands VALUES(?,'old-request','device.revoke','old-digest','{}',9)").bind(id(1).encode()).execute(&f.pool).await.unwrap();
     sqlx::query(
         "INSERT INTO security_audit(actor_id,action,outcome,occurred_at) VALUES(?,'old','kept',1)",
@@ -1726,10 +1713,6 @@ async fn m_new_path_never_changes_legacy_body_or_security_metadata() {
     .execute(&f.pool)
     .await
     .unwrap();
-    let before: Vec<u8> = sqlx::query_scalar("SELECT body FROM content_objects")
-        .fetch_one(&f.pool)
-        .await
-        .unwrap();
     let target = f.target(10).await;
     let token = f.token(&target).await;
     let inputs = MemoryInputs::default();
@@ -1754,27 +1737,44 @@ async fn m_new_path_never_changes_legacy_body_or_security_metadata() {
         .await
         .unwrap();
     assert_eq!(
-        sqlx::query_scalar::<_, Vec<u8>>("SELECT body FROM content_objects")
+        sqlx::query_scalar::<_, String>("SELECT name FROM harnesses WHERE harness_id='old-h'")
             .fetch_one(&f.pool)
             .await
             .unwrap(),
-        before
+        "old"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT canonical_path FROM workspaces WHERE workspace_id='old-w'"
+        )
+        .fetch_one(&f.pool)
+        .await
+        .unwrap(),
+        "synthetic"
     );
     assert_eq!(
         (
-            f.count("content_objects").await,
             f.count("management_commands").await,
             f.count("security_audit").await
         ),
-        (1, 1, 1)
+        (1, 1)
     );
     for table in [
+        "sessions",
+        "content_objects",
         "turns",
         "conversation_items",
         "session_commands",
         "history_content_pins",
     ] {
-        assert_eq!(f.count(table).await, 0);
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_schema WHERE name=?")
+                .bind(table)
+                .fetch_one(&f.pool)
+                .await
+                .unwrap(),
+            0
+        );
     }
     assert_eq!(
         f.service

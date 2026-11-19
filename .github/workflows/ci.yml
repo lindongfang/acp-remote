@@ -30,6 +30,8 @@ jobs:
         run: |
           . ./testing/ci/windows-owner.ps1
           npm run check
+      - name: 全特性 Rust Clippy 门禁
+        run: cargo clippy --manifest-path app/Cargo.toml --all-targets --all-features --locked -- -D warnings
       - name: 开发与 Web 依赖审计
         run: |
           npm audit --audit-level=high

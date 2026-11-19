@@ -707,6 +707,9 @@ async fn session_tree_upgrade_preserves_existing_capacity_history() {
         .execute(fixture.storage.pool_for_test())
         .await
         .expect("owned populated predecessor fixture");
+    schema::install_legacy_session_for_test(fixture.storage.pool_for_test())
+        .await
+        .expect("legacy session tables for v13");
     schema::initialize(fixture.storage.pool_for_test())
         .await
         .expect("additive populated migration");

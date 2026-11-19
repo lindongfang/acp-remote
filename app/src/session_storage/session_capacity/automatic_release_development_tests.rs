@@ -895,6 +895,9 @@ async fn automatic_schema13_real_historical12_preserves_capacity_and_explicit_as
     let names:Vec<String>=sqlx::query_scalar("SELECT name FROM main.sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
         .fetch_all(&mut *connection).await.expect("pinned historical table names");
     for name in &names {
+        if crate::session_storage::schema::is_retired_legacy_object(name) {
+            continue;
+        }
         assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
         sqlx::query(&format!(
             "INSERT INTO main.{name} SELECT * FROM fixture_seed.{name}"
@@ -967,6 +970,17 @@ async fn automatic_schema13_real_historical12_preserves_capacity_and_explicit_as
         associations
     );
     for (name, definition) in definitions {
+        if crate::session_storage::schema::is_retired_legacy_object(&name) {
+            assert_eq!(
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM sqlite_schema WHERE name=?")
+                    .bind(&name)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("retired absent"),
+                0
+            );
+            continue;
+        }
         assert_eq!(
             sqlx::query_scalar::<_, String>("SELECT sql FROM sqlite_schema WHERE name=?")
                 .bind(name)

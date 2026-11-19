@@ -134,23 +134,21 @@ async fn capacity_l6_last_slot(
         serde_json::json!({"selection":f.selection_json(),"operation":{"kind":"create"}}),
     )
     .await?;
-    let operation = match registered["result"]["sourceOperationId"].as_str() {
-        Some(op) => op.to_owned(),
-        None => {
-            if registered["ok"] != true {
-                return Err(match registered["error"]["code"].as_str() {
-                    Some("session_capacity_full") => "last_slot_create_capacity_full",
-                    Some("node_stopping") => "last_slot_create_node_stopping",
-                    Some("invalid_configuration") => "last_slot_create_invalid_configuration",
-                    Some("invalid_target") => "last_slot_create_invalid_target",
-                    Some("rate_limit") => "last_slot_create_rate_limit",
-                    Some("revoked") => "last_slot_create_revoked",
-                    _ => "last_slot_create_not_registered",
-                });
-            }
-            return Err("last_slot_create_not_registered");
+    let Some(op) = registered["result"]["sourceOperationId"].as_str() else {
+        if registered["ok"] != true {
+            return Err(match registered["error"]["code"].as_str() {
+                Some("session_capacity_full") => "last_slot_create_capacity_full",
+                Some("node_stopping") => "last_slot_create_node_stopping",
+                Some("invalid_configuration") => "last_slot_create_invalid_configuration",
+                Some("invalid_target") => "last_slot_create_invalid_target",
+                Some("rate_limit") => "last_slot_create_rate_limit",
+                Some("revoked") => "last_slot_create_revoked",
+                _ => "last_slot_create_not_registered",
+            });
         }
+        return Err("last_slot_create_not_registered");
     };
+    let operation = op.to_owned();
     let node = f.node.as_ref().ok_or("last_slot_node_missing")?;
     let native = node
         .session_services
@@ -199,8 +197,7 @@ async fn capacity_l6_last_slot(
                     }
                 }
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Binary(_) | Message::Frame(_) | Message::Close(_)))
-                | Some(Err(_))
+                Some(Ok(Message::Binary(_) | Message::Frame(_) | Message::Close(_)) | Err(_))
                 | None => return Err("last_slot_execute_socket_ended"),
             }
         }
@@ -216,7 +213,9 @@ async fn capacity_l6_last_slot(
         }
     };
     if let Some(response) = early_response {
-        return Err(if response["ok"] != true {
+        return Err(if response["ok"] == true {
+            "last_slot_execute_responded_before_reservation"
+        } else {
             match response["error"]["code"].as_str() {
                 Some("source_released") => "last_slot_execute_source_released",
                 Some("invalid_target") => "last_slot_execute_invalid_target",
@@ -227,8 +226,6 @@ async fn capacity_l6_last_slot(
                 Some("node_stopping") => "last_slot_execute_node_stopping",
                 _ => "last_slot_execute_rejected",
             }
-        } else {
-            "last_slot_execute_responded_before_reservation"
         });
     }
     let reserved:Vec<String>=sqlx::query_scalar("SELECT reservation_id FROM node_session_capacity WHERE native_id IS NULL AND released=0 AND physically_closed=0")
@@ -285,9 +282,9 @@ async fn capacity_l6_last_slot(
         if queued["ok"] != true
             || !state["active"].is_null()
             || !state["priority"].is_null()
-            || !state["waiting"]
+            || state["waiting"]
                 .as_array()
-                .is_some_and(|waiting| waiting.len() == 1)
+                .is_none_or(|waiting| waiting.len() != 1)
         {
             return Err("real_execution_last_slot_attempt_not_one_accepted_input");
         }
@@ -386,7 +383,7 @@ async fn capacity_l6_last_slot(
     // The original accepted executions must settle before this observer starts
     // an explicit close and a different original tree's replay. A durably loaded
     // slot alone does not establish that those queued jobs have completed.
-    match timeout(Duration::from_secs(90), async {
+    if let Ok(result) = timeout(Duration::from_secs(90), async {
         loop {
             let queue = capacity_l6_call(
                 f,
@@ -409,8 +406,8 @@ async fn capacity_l6_last_slot(
     })
     .await
     {
-        Ok(result) => result?,
-        Err(_) => {
+        result?;
+    } else {
             if let Ok(queue) = capacity_l6_call(
                 f,
                 "input.queue",
@@ -436,8 +433,7 @@ async fn capacity_l6_last_slot(
                     }).unwrap_or_default(),
                 }));
             }
-            return Err("real_execution_accepted_work_not_settled_before_release");
-        }
+        return Err("real_execution_accepted_work_not_settled_before_release");
     }
     // Observe the accepted queue's original durable load. ensure_target is an
     // execution preparation API requiring a currently accepted queue item; a

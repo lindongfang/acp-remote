@@ -1,4 +1,4 @@
-//! Development regressions only. Independent CLDB01–07 remain unexecuted.
+//! Development regressions only. Independent CLDB01閳?7 remain unexecuted.
 use super::*;
 use crate::{
     domain::request_registry::RegistryError,
@@ -70,7 +70,7 @@ async fn cancelled_registry_acquire_retains_original_task_before_attach() {
         storage.registry_close_status(),
         ConnectionCloseStatus::Complete
     );
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -117,7 +117,7 @@ async fn trust_scope_cancel_uses_same_storage_acquisition_and_original_close() {
         .expect("same Storage closes Trust worker");
     assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
     assert!(original.snapshot().acquisition_joined);
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -164,7 +164,7 @@ async fn cancelled_trust_transaction_keeps_original_connection_close_receipt() {
         .await
         .expect("rollback and original close ACK");
     assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 
@@ -259,7 +259,7 @@ async fn real_worker_cancellation(fresh: bool) {
                 .expect("drain idle"),
         );
         assert_eq!(
-            storage.pool.size(),
+            storage.pool_for_test().size(),
             0,
             "fresh path has no idle physical connection"
         );
@@ -281,7 +281,7 @@ async fn real_worker_cancellation(fresh: bool) {
     );
     assert_eq!(original.snapshot().close, CloseProgress::NotStarted);
     assert!(
-        !area.snapshot(&storage.pool).is_closed(),
+        !area.snapshot(storage.pool_for_test()).is_closed(),
         "original worker still owns real files"
     );
     gate.release();
@@ -290,7 +290,7 @@ async fn real_worker_cancellation(fresh: bool) {
         .expect("real worker close ACK and acquisition join");
     assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
     assert!(original.snapshot().acquisition_joined);
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     drop(release);
     area.cleanup();
 }
@@ -338,7 +338,7 @@ async fn sqlx_internal_timeout_with_real_worker_remains_unconfirmed() {
     assert!(original.snapshot().acquisition_joined);
     assert_eq!(original.snapshot().close, CloseProgress::NotStarted);
     assert!(
-        !area.snapshot(&storage.pool).is_closed(),
+        !area.snapshot(storage.pool_for_test()).is_closed(),
         "size zero cannot replace original worker ACK"
     );
     gate.release();
@@ -411,7 +411,7 @@ async fn delivered_query_cancel_keeps_worker_and_original_close_receipt() {
         .await
         .expect("query worker original close ACK and join");
     assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     drop(release);
     area.cleanup();
 }
@@ -422,7 +422,7 @@ async fn trust_and_registry_acquires_drain_one_permit_without_shutdown_cycle() {
     let (host, ticket) = prepare_storage(&area, SqlitePoolOptions::new().max_connections(1));
     let storage = ticket.ready().await.expect("Storage").projection(host);
     let blocker = storage
-        .pool
+        .pool_for_test()
         .acquire()
         .await
         .expect("fixture owns only permit");
@@ -450,7 +450,7 @@ async fn trust_and_registry_acquires_drain_one_permit_without_shutdown_cycle() {
         assert!(original.snapshot().acquisition_joined);
         assert_eq!(original.snapshot().close, CloseProgress::ConfirmedJoined);
     }
-    assert!(area.snapshot(&storage.pool).is_closed());
+    assert!(area.snapshot(storage.pool_for_test()).is_closed());
     area.cleanup();
 }
 

@@ -536,22 +536,10 @@ mod tests {
         include!("node/session_services/runtime_child_admission_node_acceptance.rs");
         include!("node/session_services/runtime_child_queue_node_acceptance.rs");
         include!("node/session_services/runtime_child_competing_node_acceptance.rs");
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_node_acceptance.rs"
-        ));
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_extended_acceptance.rs"
-        ));
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_additional_acceptance.rs"
-        ));
-        include!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_restart_acceptance.rs"
-        ));
+        include!("node/session_services/capacity_node_acceptance.rs");
+        include!("node/session_services/capacity_extended_acceptance.rs");
+        include!("node/session_services/capacity_additional_acceptance.rs");
+        include!("node/session_services/capacity_restart_acceptance.rs");
     }
 
     mod catalog_development {

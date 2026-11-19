@@ -55,7 +55,7 @@ pub(in crate::session_storage) async fn before(
     }
     Ok(Some(fault))
 }
-pub(in crate::session_storage) async fn after<T>(
+pub(in crate::session_storage) async fn after<T: Sync>(
     connection: &mut SqliteConnection,
     fault: Option<ApprovalStatementFault>,
     result: &Result<T, sqlx::Error>,

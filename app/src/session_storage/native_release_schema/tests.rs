@@ -75,6 +75,9 @@ async fn exact_nine() -> sqlx::SqlitePool {
         .execute(&pool)
         .await
         .expect("schema9 pragma");
+    schema::install_legacy_session_for_test(&pool)
+        .await
+        .expect("legacy session tables for v9");
     pool
 }
 
@@ -114,6 +117,9 @@ async fn exact_ten_with_release_fact() -> sqlx::SqlitePool {
         .execute(&pool)
         .await
         .expect("schema10 metadata");
+    schema::install_legacy_session_for_test(&pool)
+        .await
+        .expect("legacy session tables for v10");
     sqlx::query("INSERT INTO main.clients(client_id,public_key,display_name,status,auth_generation,created_at) VALUES('AAAAAAAAAAAAAAAAAAAAAA',X'01','release actor','trusted',7,0)")
         .execute(&pool)
         .await
@@ -160,12 +166,15 @@ async fn seed_preserved_security_facts(pool: &sqlx::SqlitePool) {
 /// Exact SQLite literals preserve NULL, BLOB bytes, numbers and text separately.
 /// Only the schema version is excluded: all identity and old table data remain.
 async fn preserved_facts(pool: &sqlx::SqlitePool) -> Vec<(String, Vec<Vec<String>>)> {
-    let tables: Vec<String> = sqlx::query_scalar(
+    let tables: Vec<String> = sqlx::query_scalar::<_, String>(
         "SELECT name FROM main.sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE 'node_source_session_%' AND name NOT LIKE 'node_session_capacity%' AND name NOT LIKE 'node_session_automatic_%' AND name!='node_session_parents' ORDER BY name",
     )
     .fetch_all(pool)
     .await
-    .expect("old table names");
+    .expect("old table names")
+    .into_iter()
+    .filter(|name| !schema::is_retired_legacy_object(name))
+    .collect();
     let mut snapshot = Vec::new();
     for table in tables {
         let columns: Vec<String> = sqlx::query_scalar(
@@ -293,7 +302,7 @@ async fn source_object_count(pool: &sqlx::SqlitePool) -> i64 {
 }
 
 async fn old_layout(pool: &sqlx::SqlitePool) -> Vec<(String, Option<String>)> {
-    sqlx::query_as(
+    sqlx::query_as::<_, (String, Option<String>)>(
         "SELECT name,sql FROM main.sqlite_schema \
          WHERE name NOT LIKE 'node_native_release_%' \
            AND name NOT LIKE 'sqlite_autoindex_node_native_release_%' \
@@ -307,6 +316,9 @@ async fn old_layout(pool: &sqlx::SqlitePool) -> Vec<(String, Option<String>)> {
     .fetch_all(pool)
     .await
     .expect("schema9 layout")
+    .into_iter()
+    .filter(|(name, _)| !schema::is_retired_legacy_object(name))
+    .collect()
 }
 
 async fn assert_schema9_intact(pool: &sqlx::SqlitePool, before: &[(String, Option<String>)]) {
@@ -410,7 +422,11 @@ async fn schema11_upgrades_exact_nine_and_preserves_old_layout_and_data() {
 async fn schema11_upgrades_exact_ten_and_preserves_release_rows_and_indexes() {
     let pool = exact_ten_with_release_fact().await;
     let facts_before = preserved_facts(&pool).await;
-    let layout_before = complete_layout(&pool).await;
+    let layout_before: Vec<_> = complete_layout(&pool)
+        .await
+        .into_iter()
+        .filter(|(name, _)| !schema::is_retired_legacy_object(name))
+        .collect();
     let before: Vec<(String, Option<String>)> = sqlx::query_as("SELECT name,sql FROM main.sqlite_schema WHERE name LIKE 'node_native_release_%' OR name LIKE 'sqlite_autoindex_node_native_release_%' ORDER BY name")
         .fetch_all(&pool).await.expect("release layout before");
     schema::initialize(&pool)
@@ -432,6 +448,7 @@ async fn schema11_upgrades_exact_ten_and_preserves_release_rows_and_indexes() {
                 && !name.starts_with("sqlite_autoindex_node_session_automatic_")
                 && name != "node_session_parents"
                 && name != "sqlite_autoindex_node_session_parents_1"
+                && !schema::is_retired_legacy_object(name)
         })
         .collect();
     assert_eq!(old_objects_after, layout_before);

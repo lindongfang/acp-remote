@@ -745,18 +745,18 @@ async fn capacity_l6_new(f: &mut R3WssCase) -> CapacityL6Result<String> {
     let result = capacity_l6_operation(f, serde_json::json!({"kind":"create"})).await?;
     if result["ok"] != true || result["result"]["outcome"] != "succeeded" {
         // Do not print the upstream message, raw response, auth path or body.
-        return Err(if result["ok"] != true {
+        return Err(if result["ok"] == true {
+            "real_new_not_confirmed_auth_or_capability_required"
+        } else {
             match result["error"]["code"].as_str() {
                 Some("session_capacity_full") => "real_new_capacity_full",
                 Some("rate_limit") => "real_new_rate_limit",
                 Some("node_stopping") => "real_new_node_stopping",
                 Some("invalid_configuration") => "real_new_invalid_configuration",
                 Some("invalid_target") => "real_new_invalid_target",
-                Some("revoked") | Some("unauthenticated") => "real_new_revoked",
+                Some("revoked" | "unauthenticated") => "real_new_revoked",
                 _ => "real_new_not_confirmed_auth_or_capability_required",
             }
-        } else {
-            "real_new_not_confirmed_auth_or_capability_required"
         });
     }
     result["result"]["response"]["nativeSessionId"]

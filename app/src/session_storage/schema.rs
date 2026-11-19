@@ -54,9 +54,33 @@ pub(super) const CORE: &[&str] = &[
                 revision INTEGER NOT NULL
             )",
 ];
-pub(super) const SESSION: &[&str] = &[
+pub(super) const CATALOG_TABLES: &[&str] = &[
     r"CREATE TABLE harnesses(harness_id TEXT PRIMARY KEY, name TEXT NOT NULL, executable TEXT NOT NULL, arguments_json TEXT NOT NULL, config_ref TEXT)",
     r"CREATE TABLE workspaces(workspace_id TEXT PRIMARY KEY, canonical_path TEXT NOT NULL)",
+];
+pub(super) const LEGACY_SESSION_TABLES: &[&str] = &[
+    "history_content_pins",
+    "history_integrity",
+    "session_state",
+    "approval_audit_links",
+    "approval_deliveries",
+    "approval_options",
+    "approvals",
+    "approval_run_sources",
+    "approval_connections",
+    "conversation_items",
+    "runs",
+    "turns",
+    "session_commands",
+    "content_objects",
+    "sessions",
+];
+pub(super) const LEGACY_SESSION_INDEXES: &[&str] = &[
+    "tool_reference_key",
+    "tool_native_identity",
+    "one_foreground_run",
+];
+pub(super) const LEGACY_SESSION_DEFINITIONS: &[&str] = &[
     r"CREATE TABLE sessions(session_id TEXT PRIMARY KEY, harness_id TEXT NOT NULL REFERENCES harnesses(harness_id), workspace_id TEXT NOT NULL REFERENCES workspaces(workspace_id), state TEXT NOT NULL CHECK(state IN ('loaded','released','releasing','interrupted')), native_scope TEXT, native_session_id TEXT, recovery_json TEXT)",
     r"CREATE TABLE content_objects(content_ref TEXT PRIMARY KEY, session_id TEXT NOT NULL REFERENCES sessions(session_id), actor_id TEXT NOT NULL REFERENCES clients(client_id), auth_generation INTEGER NOT NULL CHECK(auth_generation >= 0), purpose TEXT NOT NULL CHECK(purpose IN ('input','output')), body BLOB NOT NULL, sha256 TEXT NOT NULL CHECK(length(sha256) = 64), total_bytes INTEGER NOT NULL CHECK(total_bytes >= 0 AND total_bytes <= 16777216 AND length(body) = total_bytes))",
     r"CREATE TABLE session_commands(command_id TEXT PRIMARY KEY, actor_id TEXT NOT NULL REFERENCES clients(client_id), request_id TEXT NOT NULL, action TEXT NOT NULL, payload_digest TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES sessions(session_id), status TEXT NOT NULL CHECK(status IN ('accepted','dispatching','completed','failed','delivery_unknown')), UNIQUE(actor_id, request_id))",
@@ -76,6 +100,24 @@ pub(super) const SESSION: &[&str] = &[
     r"CREATE UNIQUE INDEX tool_native_identity ON conversation_items(session_id,turn_id,tool_instance_id,tool_generation,tool_native_session_digest,native_tool_digest) WHERE native_tool_digest IS NOT NULL",
     r"CREATE UNIQUE INDEX one_foreground_run ON runs(session_id) WHERE status IN ('accepted','dispatching','running','cancelling','unknown')",
 ];
+#[cfg(test)]
+pub fn is_retired_legacy_object(name: &str) -> bool {
+    LEGACY_SESSION_TABLES
+        .iter()
+        .chain(LEGACY_SESSION_INDEXES)
+        .any(|legacy| name.eq_ignore_ascii_case(legacy))
+        || LEGACY_SESSION_TABLES.iter().any(|table| {
+            let prefix = format!("sqlite_autoindex_{table}_");
+            name.len() > prefix.len() && name[..prefix.len()].eq_ignore_ascii_case(&prefix)
+        })
+}
+#[cfg(test)]
+pub async fn install_legacy_session_for_test(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
+    for definition in LEGACY_SESSION_DEFINITIONS {
+        sqlx::query(definition).execute(pool).await?;
+    }
+    Ok(())
+}
 fn normalized(sql: &str) -> String {
     let mut result = String::new();
     let mut quoted = false;
@@ -107,9 +149,16 @@ fn required_table(definition: &str) -> Option<&str> {
         .and_then(|name| name.split('(').next())
 }
 async fn validate_required_triggers(connection: &mut SqliteConnection) -> Result<(), StorageError> {
+    let current = version(connection).await?;
+    let legacy = if (2..15).contains(&current) {
+        LEGACY_SESSION_DEFINITIONS
+    } else {
+        &[]
+    };
     for definition in CORE
         .iter()
-        .chain(SESSION)
+        .chain(CATALOG_TABLES)
+        .chain(legacy)
         .chain(product_schema::DEFINITIONS)
         .chain(product_schema::DELIVERY_DEFINITIONS)
         .chain(registration_schema::DEFINITIONS)
@@ -127,6 +176,27 @@ async fn validate_required_triggers(connection: &mut SqliteConnection) -> Result
             if exists != 0 {
                 return Err(StorageError::UnrecognizedSchema);
             }
+        }
+    }
+    Ok(())
+}
+
+async fn validate_no_legacy_session_objects(
+    connection: &mut SqliteConnection,
+) -> Result<(), StorageError> {
+    for name in LEGACY_SESSION_TABLES.iter().chain(LEGACY_SESSION_INDEXES) {
+        let present: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE type IN ('table','view','index','trigger') AND (name=? COLLATE NOCASE OR tbl_name=? COLLATE NOCASE))
+             OR EXISTS(SELECT 1 FROM temp.sqlite_schema WHERE type IN ('table','view','index','trigger') AND (name=? COLLATE NOCASE OR tbl_name=? COLLATE NOCASE))",
+        )
+        .bind(name)
+        .bind(name)
+        .bind(name)
+        .bind(name)
+        .fetch_one(&mut *connection)
+        .await?;
+        if present != 0 {
+            return Err(StorageError::UnrecognizedSchema);
         }
     }
     Ok(())
@@ -231,7 +301,10 @@ async fn version(connection: &mut SqliteConnection) -> Result<i64, StorageError>
         .fetch_one(connection)
         .await?)
 }
-async fn validate(connection: &mut SqliteConnection, current: i64) -> Result<(), StorageError> {
+pub(super) async fn validate(
+    connection: &mut SqliteConnection,
+    current: i64,
+) -> Result<(), StorageError> {
     if !(0..=crate::storage::SCHEMA_VERSION).contains(&current) {
         return Err(StorageError::UnknownSchema(current));
     }
@@ -281,7 +354,13 @@ async fn validate(connection: &mut SqliteConnection, current: i64) -> Result<(),
         validate_empty_identity(connection, current).await?;
     }
     if current >= 2 {
-        validate_definitions(connection, SESSION).await?;
+        validate_definitions(connection, CATALOG_TABLES).await?;
+    }
+    if (2..15).contains(&current) {
+        validate_definitions(connection, LEGACY_SESSION_DEFINITIONS).await?;
+    }
+    if current >= 15 {
+        validate_no_legacy_session_objects(connection).await?;
     }
     validate_native_layout(connection, current).await?;
     validate_product_layout(connection, current).await?;
@@ -350,7 +429,10 @@ async fn validate_empty_identity(
         return Err(StorageError::MissingNodeMeta);
     }
     if current >= 2 {
-        require_empty_identity_tables(connection, SESSION).await?;
+        require_empty_identity_tables(connection, CATALOG_TABLES).await?;
+    }
+    if (2..15).contains(&current) {
+        require_empty_identity_tables(connection, LEGACY_SESSION_DEFINITIONS).await?;
     }
     if current >= 3 {
         require_empty_identity_tables(connection, product_schema::DEFINITIONS).await?;
@@ -691,6 +773,9 @@ pub async fn initialize(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MigrationFault {
+    LegacyCleanupDdl,
+    LegacyCleanupMetadata,
+    LegacyCleanupPragma,
     CatalogDdlBefore(u8),
     CatalogDdlAfter(u8),
     CatalogMetadata,
@@ -812,7 +897,7 @@ async fn initialize_inner(
             .await?;
     }
     if current < 2 {
-        for definition in SESSION {
+        for definition in CATALOG_TABLES {
             sqlx::query(definition).execute(&mut *transaction).await?;
         }
     }
@@ -1087,6 +1172,47 @@ async fn initialize_inner(
         #[cfg(test)]
         checkpoint(fault, MigrationFault::SessionTreePragma)?;
     }
+    if current < 15 {
+        if (2..15).contains(&current) {
+            sqlx::query("UPDATE main.approvals SET selected_choice_id = NULL")
+                .execute(&mut *transaction)
+                .await?;
+            sqlx::query("DELETE FROM main.approval_options")
+                .execute(&mut *transaction)
+                .await?;
+        }
+        if (1..15).contains(&current) {
+            for index in LEGACY_SESSION_INDEXES {
+                sqlx::query(&format!("DROP INDEX IF EXISTS main.{index}"))
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+            for table in LEGACY_SESSION_TABLES {
+                sqlx::query(&format!("DROP TABLE IF EXISTS main.{table}"))
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+            #[cfg(test)]
+            checkpoint(fault, MigrationFault::LegacyCleanupDdl)?;
+            if !sqlx::query("PRAGMA main.foreign_key_check")
+                .fetch_all(&mut *transaction)
+                .await?
+                .is_empty()
+            {
+                return Err(StorageError::UnrecognizedSchema);
+            }
+        }
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::LegacyCleanupMetadata)?;
+        sqlx::query("UPDATE main.node_meta SET schema_version=15")
+            .execute(&mut *transaction)
+            .await?;
+        #[cfg(test)]
+        checkpoint(fault, MigrationFault::LegacyCleanupPragma)?;
+        sqlx::query("PRAGMA main.user_version=15")
+            .execute(&mut *transaction)
+            .await?;
+    }
     #[cfg(test)]
     checkpoint(fault, MigrationFault::Validation)?;
     validate(&mut transaction, crate::storage::SCHEMA_VERSION).await?;
@@ -1148,7 +1274,7 @@ async fn add_registration_schema(
 mod independent_schema5;
 
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
-pub(crate) async fn initialize_approval_for_test(
+pub async fn initialize_approval_for_test(
     pool: &sqlx::SqlitePool,
     fault: Option<super::approval_owner::test_control::ApprovalMigrationFault>,
     trace: std::sync::Arc<super::approval_owner::test_control::ApprovalMigrationTrace>,

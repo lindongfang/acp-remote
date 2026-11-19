@@ -3,10 +3,6 @@ pub mod activity;
 pub mod approval_audit;
 pub mod approval_owner;
 pub mod approval_records;
-#[cfg(test)]
-pub mod approvals;
-#[cfg(test)]
-pub mod history;
 pub mod input_queue;
 pub(crate) mod management_audit;
 pub mod native;
@@ -60,87 +56,8 @@ pub struct ActorContext {
     pub auth_generation: i64,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub struct InputRequest {
-    pub request_id: EntityId,
-    pub session_id: EntityId,
-    pub content_ref: EntityId,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AcceptedInput {
-    pub command_id: String,
-    pub run_id: String,
-    pub turn_id: String,
-    pub item_id: String,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum CommandStatus {
-    Accepted,
-    Dispatching,
-    Completed,
-    Failed,
-    DeliveryUnknown,
-}
-impl CommandStatus {
-    #[must_use]
-    pub fn from_storage(value: &str) -> Option<Self> {
-        match value {
-            "accepted" => Some(Self::Accepted),
-            "dispatching" => Some(Self::Dispatching),
-            "completed" => Some(Self::Completed),
-            "failed" => Some(Self::Failed),
-            "delivery_unknown" => Some(Self::DeliveryUnknown),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CommandRecord {
-    pub input: AcceptedInput,
-    pub status: CommandStatus,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Admission {
-    pub command: CommandRecord,
-    pub replayed: bool,
-}
-
-/// Not Clone: an execution owner can consume a single durable dispatch claim.
-#[derive(Debug)]
-pub struct DispatchPermit {
-    pub(crate) input: AcceptedInput,
-}
-impl DispatchPermit {
-    #[must_use]
-    pub fn into_input(self) -> AcceptedInput {
-        self.input
-    }
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
-    #[error("session actor is not current")]
-    InvalidActor,
-    #[error("session resource not found")]
-    NotFound,
-    #[error("request identifier conflicts with prior content")]
-    RequestConflict,
-    #[error("session has an active foreground run")]
-    Busy,
-    #[error("session does not accept input in its current state")]
-    InvalidState,
-    #[error("session command capacity is exhausted")]
-    CapacityExhausted,
-    #[error("session content is invalid or incomplete")]
-    InvalidContent,
-    #[error("session identifier generation is unavailable")]
-    RandomUnavailable,
-    #[error("session storage is unavailable")]
-    StorageUnavailable,
     #[error("session stored state is invalid")]
     CorruptState,
 }

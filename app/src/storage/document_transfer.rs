@@ -3,7 +3,7 @@
     dead_code,
     reason = "Preserves existing module structure and intentional scaffolding"
 )]
-use super::{Arc, Ordering, Storage};
+use super::{Arc, Storage};
 use crate::application::{
     document_disposal::{DocumentDisposalRegistration, DocumentShutdownPort},
     queue_owner::QueueRuntimeIdentity,
@@ -16,27 +16,10 @@ impl Storage {
         expected: &QueueRuntimeIdentity,
         receipt: Arc<dyn DocumentShutdownPort>,
     ) -> Result<(), RegistryError> {
-        let _lifecycle = self
-            .queue_lifecycle
-            .lock()
-            .map_err(|_| RegistryError::StorageUnavailable)?;
-        if self.queue_closed.load(Ordering::SeqCst) {
-            return Err(RegistryError::NodeStopping);
-        }
-        let supervisor = self
-            .queue_supervisor
-            .lock()
-            .map_err(|_| RegistryError::StorageUnavailable)?
-            .clone()
-            .ok_or(RegistryError::NodeStarting)?;
-        let mut receipt = Some(receipt);
-        supervisor.register_document(expected, &mut || {
-            self.document_shutdown
-                .install(receipt.take().ok_or(RegistryError::StorageUnavailable)?)
-        })
+        self.inner.coordinator.register_document(expected, receipt)
     }
     pub(crate) fn document_shutdown_receipt(&self) -> Option<Arc<dyn DocumentShutdownPort>> {
-        self.document_shutdown.get()
+        self.inner.coordinator.document_receipt()
     }
 }
 

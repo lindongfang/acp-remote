@@ -97,7 +97,8 @@ async fn schema4(area: &Area) {
     // Build the existing four layouts directly; never create schema5 and forge an old header.
     for definitions in [
         schema::CORE,
-        schema::SESSION,
+        schema::CATALOG_TABLES,
+        schema::LEGACY_SESSION_DEFINITIONS,
         product_schema::DEFINITIONS,
         product_schema::DELIVERY_DEFINITIONS,
     ] {
@@ -185,14 +186,42 @@ async fn preserved(c: &mut SqliteConnection, version: i64) {
         )
     );
     assert_eq!(
-        sqlx::query_scalar::<_, Vec<u8>>(
-            "SELECT body FROM content_objects WHERE content_ref='old-body'"
+        sqlx::query_scalar::<_, String>("SELECT name FROM harnesses WHERE harness_id='old-h'")
+            .fetch_one(&mut *c)
+            .await
+            .unwrap(),
+        "synthetic"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT canonical_path FROM workspaces WHERE workspace_id='old-w'",
         )
         .fetch_one(&mut *c)
         .await
         .unwrap(),
-        [0, 255, 123, 125]
+        "D:/synthetic-unused"
     );
+    if version < 15 {
+        assert_eq!(
+            sqlx::query_scalar::<_, Vec<u8>>(
+                "SELECT body FROM content_objects WHERE content_ref='old-body'"
+            )
+            .fetch_one(&mut *c)
+            .await
+            .unwrap(),
+            [0, 255, 123, 125]
+        );
+    } else {
+        assert_eq!(
+            sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('sessions','content_objects')",
+            )
+            .fetch_one(&mut *c)
+            .await
+            .unwrap(),
+            0
+        );
+    }
     assert_eq!(
         sqlx::query_scalar::<_, i64>("SELECT time_floor_ms FROM product_control")
             .fetch_one(&mut *c)

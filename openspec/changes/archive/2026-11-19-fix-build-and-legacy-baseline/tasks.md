@@ -1,0 +1,24 @@
+# Tasks
+
+## 1. 洁净构建边界与全特性静态门禁（WP1）
+
+- [x] 1.1 WP1 将 `session_capacity_acceptance_peer` 源码迁入受 Git 跟踪的 `app/dev-fixtures/session_capacity_acceptance_peer.rs` 并更新 `app/Cargo.toml` 路径，同步将 `app/src/node.rs` 引用的 4 份 `capacity_{node,extended,additional,restart}_acceptance.rs` 迁入受版本控制的 `app/src/node/session_services/` 并改为本地 `include!`，同时在 `testing/suites/verify-suite.mjs` 新增对 `Cargo.toml` 中所有 `path` 条目与 `app/**/*.rs` 中编译期路径引入（`include!` / `#[path]`）不得指向忽略目录或缺失文件的机器检查；完成判据：无 `testing/runs/` 的洁净导出树下 `cargo build --manifest-path app/Cargo.toml --bin session_capacity_acceptance_peer --features native-dispatch-dev-fixtures --locked` 与 `cargo check --manifest-path app/Cargo.toml --all-targets --all-features --locked` 通过，且临时副本负向路径篡改被 `verify-suite.mjs` 非零退出拦截（满足 `FBL-001`、`FBL-002`）。
+- [x] 1.2 WP1 修复 `--all-features --all-targets` 及 6 个独立特性组合下的 `private_interfaces`、`dead_code` 与 Clippy 告警（覆盖 `native_dispatch/`、`session_storage/{approval_owner*,registry_connection_owner.rs,schema.rs}`、`node.rs`、`node/{approval_owner/,session_services/}`），并在 `.github/workflows/ci.yml` 的 `product` 任务中新增全特性 Clippy 门禁步骤；完成判据：`cargo clippy --manifest-path app/Cargo.toml --all-targets --all-features --locked -- -D warnings` 与 6 个单特性 `RUSTFLAGS="-D warnings" cargo check` 均退出码 0 零告警通过（满足 `FBL-003`、`FBL-004`）。
+
+## 2. Storage 内部封装与运行时监督协调解耦（WP2）
+
+- [x] 2.1 WP2 移除 `app/src/storage.rs` 中 `#[doc(hidden)] pub struct StorageData` 与 `impl std::ops::Deref for Storage`，在 `app/src/storage/runtime_coordinator.rs` 提取私有 `StorageRuntimeCoordinator` 统一封装队列单次认领与准备阶段关闭槽位（`#[cfg(test)]` 下的 `Storage::{approvals, histories, sessions}` 暂改为内部转发以保持 `WP2` 阶段 `--lib` 单测可编译，留归 `3.2` 原子删除）；完成判据：`cargo doc --manifest-path app/Cargo.toml --no-deps` 不再暴露 `StorageData` 与 `Deref`，`cargo test --manifest-path app/Cargo.toml --lib storage:: --locked` 全部通过（支撑 `FBL-005`）。
+- [x] 2.2 WP2 补充并验证 `StorageRuntimeCoordinator` 的重复认领拒绝与“先取消/等待运行时监督退出、再封存并物理关闭 `SqlitePool`”关闭时序回归测试，必要时同步 `docs/implementation/session-capacity.md` 中相关存储引用说明；完成判据：`cargo test --manifest-path app/Cargo.toml --features registration-acceptance-fixtures --test registration_shutdown_ownership --test registration_owner_acceptance --test registration_reconcile_ownership --test registration_restart --test registration_factory_waiter --locked` 全绿通过（满足 `FBL-006`）。
+
+## 3. SQLite Schema v15 死表收口与第一代遗留模块清理（WP3）
+
+- [x] 3.1 WP3 将 `SCHEMA_VERSION` 推进至 `15`，在 `app/src/session_storage/schema.rs` 将 `harnesses` 与 `workspaces` 独立为 `CATALOG_TABLES`，实现 `v0 -> v15` 新库不再创建 15 张第一代 `SESSION` 死表与 3 个旧索引、`v1..=v14 -> v15` 在 `BEGIN IMMEDIATE` 事务中先解除 `approvals <-> approval_options` 双向外键再按拓扑顺序清理死表与旧索引，以及 `v15` 残留死表/未知版本预检拦截；在 `app/src/session_storage/mod.rs` 显式补挂 `#[cfg(test)] mod tests;` 并同步对齐 `app/src/session_storage/` 下 9 份现役子模块单测与 `registration_acceptance` 历史迁移回归断言；完成判据：`cargo test --manifest-path app/Cargo.toml --lib session_storage::tests:: --locked`（实跑用例数大于 0）、`cargo test --manifest-path app/Cargo.toml --lib session_storage:: --locked` 及 `schema3_migration`、`schema4_migration`、`independent_schema5`、`management_independent` 全部通过（满足 `FBL-007`、`FBL-008`、`FBL-009`）。
+- [x] 3.2 WP3 原子移除 `app/src/storage.rs` 中的 `Storage::{approvals, histories, sessions}`、第一代废弃模块文件及目录（`app/src/domain/{history.rs,approvals.rs}`、`app/src/application/{history.rs,history/,approvals.rs,approvals-development.md}`、`app/src/session_storage/{legacy.rs,history.rs,history/,approvals.rs,approvals/}`）、`InputRepository`/`InputService` 符号及 `app/tests/acceptance/` 下未引用的重复旧迁移孤儿文件，同步校对总体设计存储基线描述并跑通全仓工程检查；完成判据：`cargo clippy --manifest-path app/Cargo.toml --all-targets --all-features --locked -- -D warnings`、`cargo test --manifest-path app/Cargo.toml --all-targets --all-features --no-run --locked`、干净全特性回归子集（`--features registration-acceptance-fixtures --locked`、`--features acp-runtime-acceptance-fixtures --locked`、`--lib --all-features storage:: --locked`、`--lib --all-features session_storage:: --locked`、`SOURCE_SESSION_CHILD` 单线程 `capacity_rb001_`）、`npm run check` 与 `npm run build:rust` 全部退出码 0 通过（满足 `FBL-005`、`FBL-010`、`FBL-004`；`tests.md` 中 `FBL-010` 边界留待 WP4 由独立 `tester`/`reviewer` 同步确认或记录范围外既有夹具说明）。
+
+## 4. 集成验收与独立交付检视（WP4）
+
+- [x] 4.1 WP4 在 `1.1`~`3.2` 勾选并提交为干净的本地分支受测 `commit SHA` 后，由独立 `tester` 执行 `FBL-001`~`FBL-010` 全量验收、独立 `reviewer` 执行集成代码检视，闭环全部阻断项并回填结果摘要至 [plan.md](plan.md)；完成判据：全部必需用例通过、独立检视 `Status` 为 `passed`、`node testing/suites/verify-suite.mjs --change fix-build-and-legacy-baseline` 与 `npm run check:spec` 校验通过。
+
+## Workflow follow-up
+
+- 归档在同一本地提交内按原子顺序执行：① 本变更声明 `skip_specs: true`，跳过 `openspec/specs/` 长期规范同步 → ② 移动变更目录至 `openspec/changes/archive/YYYY-MM-DD-fix-build-and-legacy-baseline/` 并补齐内部指向变更外相对链接的 `../` 层级（如 `proposal.md` 中指向 `docs/`、`AGENTS.md`、`openspec/` 的相对路径），同步检查 `README.md`/`docs/` 引用 → ③ 本变更属 `skip_specs: true` 内部工程基线收敛，无长期能力套件 `testing/suites/<capability>/tests.md` 变更时跳过套件合并 → ④ 运行 `npm run check:spec` 与 `git diff --check` 校验通过后提交（本节保持普通列表，严禁使用 `- [ ]` 或 `- [x]` checkbox）。

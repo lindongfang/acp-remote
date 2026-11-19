@@ -350,7 +350,7 @@ fn capacity_l6_capability_tool_retained(
 fn capacity_l6_kill_owned_app_server() -> CapacityL6Result<Vec<u32>> {
     let parent_pid = std::process::id();
     let script = format!(
-        r#"
+        r"
 $parentPid = {parent_pid}
 $procs = Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name, CommandLine
 $descendants = [Collections.Generic.HashSet[int]]::new()
@@ -373,7 +373,7 @@ foreach ($t in $targets) {{
   $killed += [int]$t.ProcessId
 }}
 ConvertTo-Json @($killed) -Compress
-"#
+"
     );
     let output = std::process::Command::new("pwsh.exe")
         .args(["-NoProfile", "-Command", &script])
@@ -473,18 +473,7 @@ async fn capacity_l6_capability_missing(
             if capacity_l6_clock_state(f, root).await? != (0, 0, 0) {
                 return Err("capability_phase_changed_original_live_reservation");
             }
-            if !child_branch {
-                if capacity_l6_capability_current(f, root, E::Background)?
-                    && let Some(observed) = capacity_l6_capability_matching(
-                        capacity_l6_capability_raw(f, root)?,
-                        before_missing,
-                        E::Background,
-                        |fact| fact.kind == "state_update" && fact.background_missing,
-                    )
-                {
-                    return Ok(observed);
-                }
-            } else {
+            if child_branch {
                 // 真实 codex-acp 不发 background 字段：父收到缺 background 字段的 idle state_update 后，已知子代理工作仍保留保护。
                 let eligible = capacity_l6_clock_sample(f, root)?.1.is_some();
                 if !eligible
@@ -503,6 +492,15 @@ async fn capacity_l6_capability_missing(
                 {
                     return Ok(observed);
                 }
+            } else if capacity_l6_capability_current(f, root, E::Background)?
+                && let Some(observed) = capacity_l6_capability_matching(
+                    capacity_l6_capability_raw(f, root)?,
+                    before_missing,
+                    E::Background,
+                    |fact| fact.kind == "state_update" && fact.background_missing,
+                )
+            {
+                return Ok(observed);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
@@ -641,7 +639,7 @@ async fn capacity_l6_cp032_capabilities(
     .await?;
     timeout(Duration::from_secs(60), async {
         loop {
-            if !capacity_l6_clock_sample(f, &invalid_root)?.1.is_none()
+            if capacity_l6_clock_sample(f, &invalid_root)?.1.is_some()
                 || !capacity_l6_tree_has_active_child(f, &invalid_root)?
             {
                 tokio::time::sleep(Duration::from_millis(50)).await;

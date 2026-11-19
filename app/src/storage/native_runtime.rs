@@ -1,5 +1,5 @@
 //! Composition under Storage's original runtime claim and physical `ConnectionOwner`.
-use super::{Arc, AtomicBool, Duration, Ordering, Storage};
+use super::{Arc, Duration, Storage, runtime_coordinator::ClaimFailure};
 use crate::{
     application::{
         native_dispatch::{
@@ -14,7 +14,11 @@ use crate::{
         native_dispatch::SqliteNativeDispatch, request_registry::SqliteRequestRegistry,
     },
 };
-use std::{future::Future, pin::Pin};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::atomic::{AtomicBool, Ordering},
+};
 type Service<A, V, C> = QueueService<A, V, SqliteRequestRegistry, C>;
 struct CombinedSupervisor<A, V: ValidatedBodyPort, C, P, L, G>
 where
@@ -250,80 +254,65 @@ impl Storage {
     {
         options.validate()?;
         authority
-            .verify_owner_scope(&self.request_registry.owner_scope())
+            .verify_owner_scope(&self.inner.request_registry.owner_scope())
             .map_err(|error| match error {
                 crate::domain::request_registry::RegistryError::InvalidActor => {
                     DispatchError::InvalidScope
                 }
                 other => DispatchError::from(other),
             })?;
-        let (service, native, startup) = {
-            let _lifecycle = self
-                .queue_lifecycle
-                .lock()
-                .map_err(|_| DispatchError::StorageUnavailable)?;
-            if self.queue_closed.load(Ordering::SeqCst) {
-                return Err(DispatchError::NodeStopping);
-            }
-            self.queue_runtime_claim
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .map_err(|_| DispatchError::RuntimeAlreadyStarted)?;
-            let runtime = match random_id() {
-                Ok(id) => RuntimeEpoch(id),
-                Err(error) => {
-                    self.queue_runtime_claim.store(false, Ordering::SeqCst);
-                    return Err(error.into());
-                }
-            };
-            let (environment, changes) = NativeEnvironment::new();
-            let (service, driver) = QueueService::new(
-                authority,
-                validator,
-                self.request_registry(),
-                self.request_registry.owner_scope(),
-                clock,
-                runtime,
-                environment.clone(),
-                audit,
-                self.queue_runtime_claim.clone(),
-                #[cfg(test)]
-                self.queue_randoms.clone(),
-            );
-            let core = NativeCoordinator::create(
-                protocol,
-                launcher,
-                configuration,
-                self.request_registry.native_dispatch_repository(),
-                driver,
-                retain,
-                environment,
-                service.native_clock(),
-                runtime,
-                self.queue_runtime_claim.clone(),
-                options,
-            );
-            let native = NativeRuntimeHandle { core };
-            let supervisor = Arc::new(CombinedSupervisor {
-                service: service.clone(),
-                native: native.clone(),
-                claim: self.queue_runtime_claim.clone(),
-                #[cfg(windows)]
-                preparation: self.preparation_shutdown.clone(),
-                #[cfg(windows)]
-                document: self.document_shutdown.clone(),
-                #[cfg(windows)]
-                catalog: self.catalog_shutdown.clone(),
-            });
-            if let Ok(mut slot) = self.queue_supervisor.lock() {
-                *slot = Some(supervisor);
-            } else {
-                self.queue_runtime_claim.store(false, Ordering::SeqCst);
-                return Err(DispatchError::StorageUnavailable);
-            }
-            native.core.launch(changes)?;
-            let startup = service.launch_startup()?;
-            (service, native, startup)
+        let map_claim_err = |failure| match failure {
+            ClaimFailure::Unavailable => DispatchError::StorageUnavailable,
+            ClaimFailure::Stopping => DispatchError::NodeStopping,
+            ClaimFailure::AlreadyStarted => DispatchError::RuntimeAlreadyStarted,
         };
+        let (service, native, startup) =
+            self.inner.coordinator.claim_runtime(map_claim_err, |ctx| {
+                let runtime = RuntimeEpoch(random_id()?);
+                let (environment, changes) = NativeEnvironment::new();
+                let (service, driver) = QueueService::new(
+                    authority,
+                    validator,
+                    self.request_registry(),
+                    self.inner.request_registry.owner_scope(),
+                    clock,
+                    runtime,
+                    environment.clone(),
+                    audit,
+                    ctx.claim(),
+                    #[cfg(test)]
+                    self.inner.queue_randoms.clone(),
+                );
+                let core = NativeCoordinator::create(
+                    protocol,
+                    launcher,
+                    configuration,
+                    self.inner.request_registry.native_dispatch_repository(),
+                    driver,
+                    retain,
+                    environment,
+                    service.native_clock(),
+                    runtime,
+                    ctx.claim(),
+                    options,
+                );
+                let native = NativeRuntimeHandle { core };
+                let supervisor = Arc::new(CombinedSupervisor {
+                    service: service.clone(),
+                    native: native.clone(),
+                    claim: ctx.claim(),
+                    #[cfg(windows)]
+                    preparation: ctx.preparation(),
+                    #[cfg(windows)]
+                    document: ctx.document(),
+                    #[cfg(windows)]
+                    catalog: ctx.catalog(),
+                });
+                ctx.install_supervisor(supervisor).map_err(map_claim_err)?;
+                native.core.launch(changes)?;
+                let startup = service.launch_startup()?;
+                Ok((service, native, startup))
+            })?;
         let _ = startup.await;
         Ok((service, native))
     }

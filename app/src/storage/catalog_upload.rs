@@ -3,7 +3,7 @@
     dead_code,
     reason = "Preserves existing module structure and intentional scaffolding"
 )]
-use super::{Arc, Ordering, Storage};
+use super::{Arc, Storage};
 use crate::application::{
     catalog_preparation::{CatalogPreparationRegistration, CatalogUploadShutdownPort},
     queue_owner::QueueRuntimeIdentity,
@@ -16,29 +16,12 @@ impl Storage {
         expected: &QueueRuntimeIdentity,
         receipt: Arc<dyn CatalogUploadShutdownPort>,
     ) -> Result<(), RegistryError> {
-        let _lifecycle = self
-            .queue_lifecycle
-            .lock()
-            .map_err(|_| RegistryError::StorageUnavailable)?;
-        if self.queue_closed.load(Ordering::SeqCst) {
-            return Err(RegistryError::NodeStopping);
-        }
-        let supervisor = self
-            .queue_supervisor
-            .lock()
-            .map_err(|_| RegistryError::StorageUnavailable)?
-            .clone()
-            .ok_or(RegistryError::NodeStarting)?;
-        let mut receipt = Some(receipt);
-        supervisor.register_catalog(expected, &mut || {
-            self.catalog_shutdown
-                .install(receipt.take().ok_or(RegistryError::StorageUnavailable)?)
-        })
+        self.inner.coordinator.register_catalog(expected, receipt)
     }
     pub(crate) fn catalog_upload_shutdown_receipt(
         &self,
     ) -> Option<Arc<dyn CatalogUploadShutdownPort>> {
-        self.catalog_shutdown.get()
+        self.inner.coordinator.catalog_receipt()
     }
 }
 

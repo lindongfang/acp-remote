@@ -82,6 +82,16 @@ async fn automatic_schema13_preserves_real_historical12_definitions_and_empty_id
     assert_eq!(head(&pool).await, crate::storage::SCHEMA_VERSION);
     assert_eq!(auto_objects(&pool).await, 3);
     for (name, definition) in before {
+        if schema::is_retired_legacy_object(&name) {
+            let retired: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM main.sqlite_schema WHERE name=?")
+                    .bind(&name)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("retired check");
+            assert_eq!(retired, 0, "retired object {name} should be removed");
+            continue;
+        }
         let current: String = sqlx::query_scalar("SELECT sql FROM main.sqlite_schema WHERE name=?")
             .bind(name)
             .fetch_one(&pool)

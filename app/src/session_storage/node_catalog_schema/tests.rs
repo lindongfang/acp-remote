@@ -71,6 +71,7 @@ async fn synthetic_eight(pool: &sqlx::SqlitePool) -> Result<(), StorageError> {
     sqlx::query("PRAGMA main.user_version=8")
         .execute(pool)
         .await?;
+    schema::install_legacy_session_for_test(pool).await?;
     Ok(())
 }
 async fn head_and_tables(pool: &sqlx::SqlitePool) -> Result<(i64, i64), sqlx::Error> {
