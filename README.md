@@ -48,7 +48,7 @@ npm --prefix clients/web run dev -- --host 127.0.0.1 --port 4173 --strictPort
 
 浏览器打开 `http://127.0.0.1:4173/tests/browser/jws.html`，页面显示 `PASS` 表示固定 Rust/WebCrypto 签名、浏览器生成签名、high-S、篡改、非法公钥和不安全整数检查均通过。该页面只覆盖 JWS 合同；真实 TLS、DPAPI、named pipe、SQLite、IndexedDB 与完整配对闭环仍需按验收用例执行。
 
-依赖选择、许可证、平台限制和已知风险见 [节点接入依赖审查](app/DEPENDENCIES.md)。
+依赖选型、许可证、平台限制与底层安全边界见 [依赖与安全边界说明](docs/implementation/dependencies.md)。
 
 ## 启动节点
 
@@ -91,7 +91,7 @@ tls_key = "D:/ACPRemote/tls/localhost.key"
 | [app/](app/) | Windows Rust 节点、ACP 运行时与本地 CLI 实现 |
 | [clients/web/](clients/web/) | 同源 Web 配对、会话与节点管理前端 |
 | [docs/architecture/](docs/architecture/) | [总体架构](docs/architecture/overview.md) 与 [能力地图](docs/architecture/capability-map.md) |
-| [docs/implementation/](docs/implementation/) | 跨端模块内部实现机制与平台安全边界说明 |
+| [docs/implementation/](docs/implementation/) | 跨端模块内部实现机制、依赖合规与平台安全边界说明 |
 | [docs/hard-rules.md](docs/hard-rules.md) | 从踩坑观察池晋升的强制研发与审查硬规则 |
 | [docs/pitfalls.md](docs/pitfalls.md) | 研发与验收复盘踩坑观察池 |
 | [openspec/specs/](openspec/specs/) | 已归档落地的长期正式产品规格（产品行为权威来源） |

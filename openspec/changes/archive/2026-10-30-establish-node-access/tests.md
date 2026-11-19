@@ -55,7 +55,7 @@
 ### NA-002 静态合同与供应链
 
 - 用例级别：L2
-- 操作步骤：在仓库根目录执行 npm run check 与 npm audit --audit-level=high；按 .github/workflows/ci.yml 检查密钥扫描与供应链作业。BASE/HEAD 为真实可解析提交时运行 npm run lint:commits -- --from BASE --to HEAD --verbose。按 README 的浏览器 JWS 入口在真实 Chromium 复核固定向量，并按 app/DEPENDENCIES.md 与实际配置独立核对密码库、产品依赖官方维护状态、许可证、平台支持、漏洞信息及锁文件；结合合同§1–7检查不自造密码学，安全边界与实现的整体符合性由独立reviewer检视。
+- 操作步骤：在仓库根目录执行 npm run check 与 npm audit --audit-level=high；按 .github/workflows/ci.yml 检查密钥扫描与供应链作业。BASE/HEAD 为真实可解析提交时运行 npm run lint:commits -- --from BASE --to HEAD --verbose。按 README 的浏览器 JWS 入口在真实 Chromium 复核固定向量，并按 docs/implementation/dependencies.md 与实际配置独立核对密码库、产品依赖官方维护状态、许可证、平台支持、漏洞信息及锁文件；结合合同§1–7检查不自造密码学，安全边界与实现的整体符合性由独立reviewer检视。
 - 预期结果：现有静态检查、协议向量及适用供应链检查通过；开发工具审计不能替代 Rust/Web 产品供应链审查，CI 作业定义不能当作已执行证据。缺少审计工具、真实提交范围或执行证据时如实记录未执行；结构检查不代表场景覆盖充分；依赖与密码库审查须有可追溯结论和问题关联，未审或未解决阻断项不得写通过。
 
 ### NA-003 严格编码与签名互操作

@@ -107,7 +107,7 @@ Web密钥为不可导出WebCrypto P-256 CryptoKey，连同非秘密nodeId/public
 
 ## 7. 实施与验证分界
 
-本文定义算法和应用编码，独立reviewer仍需检视。实现已引入依赖并纳入锁文件，选择依据见 `app/DEPENDENCIES.md`；构建或 npm audit 通过不能替代 Rust 公告库扫描及独立供应链验收。
+本文定义算法和应用编码，独立reviewer仍需检视。实现已引入依赖并纳入锁文件，选择依据见 `docs/implementation/dependencies.md`；构建或 npm audit 通过不能替代 Rust 公告库扫描及独立供应链验收。
 
 必须建立Windows真实TLS + 浏览器WebCrypto/IndexedDB + named pipe/DPAPI + SQLite的端到端验收。故障测试可在可控存储端口注入失败，但正式正常配对、撤销和重启不可用mock替代。固定测试向量包含JWS header/payload原字节、SEC1公钥、正反签名、跨用途与跨连接重放；使用专门公开测试key，不放生产秘密。向量和运行证据由实现及独立tester实际建立，文档存在不代表密码学互操作实测通过。
 
