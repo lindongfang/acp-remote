@@ -16,7 +16,7 @@
 
 ### 硬约束与非目标
 
-- 本变更属于不改变外部可观察产品规格与网络协议契约的内部工程与存储基线收敛，在 `.openspec.yaml` 声明 `skip_specs: true`，严格遵守 [总体设计](../../../../docs/HARNESS_CONTROL_PLANE_REDESIGN.md)、[AGENTS.md](../../../../AGENTS.md) 与 `openspec/specs/` 既有长期规格。
+- 本变更属于不改变外部可观察产品规格与网络协议契约的内部工程与存储基线收敛，在 `.openspec.yaml` 声明 `skip_specs: true`，严格遵守 [总体设计](../../../../docs/architecture/overview.md)、[AGENTS.md](../../../../AGENTS.md) 与 `openspec/specs/` 既有长期规格。
 - 仅移除第一代废弃聊天正文/会话/旧审批死表及其专属 `#[cfg(test)]` 遗留模块（`legacy`、`history`、`approvals`），**严禁误删仍在生产目录与外键链路中使用的 `harnesses`、`workspaces` 及 `product_sources`、`product_harness_sources`、`product_targets`**。
 - 不在本变更中重写 `vendor/sqlx-sqlite` 补丁驱动、不拆分 `clients/web/src/main.ts`（留归后续独立前端预重构变更），也不触碰任何 `x-deferred: true` 远期变更的业务实现。
 - 不删除用户真实运行数据目录、私钥或本机私有配置文件。
