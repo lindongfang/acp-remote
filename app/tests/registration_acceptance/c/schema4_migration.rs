@@ -341,10 +341,29 @@ async fn cl004_schema4_nonempty_pinned_one_two_three_upgrade_preserves_every_old
     for v in [1, 2, 3] {
         let a = Area::new();
         fixture(&a, v).await;
-        let before = snapshot(&a, None).await;
-        let names: Vec<String> = before.definitions.keys().cloned().collect();
+        let mut before = snapshot(&a, None).await;
+        let names: Vec<String> = before
+            .definitions
+            .keys()
+            .filter(|name| !crate::session_storage::schema::is_retired_legacy_object(name))
+            .cloned()
+            .collect();
+        before
+            .definitions
+            .retain(|name, _| !crate::session_storage::schema::is_retired_legacy_object(name));
+        before
+            .rows
+            .retain(|name, _| !crate::session_storage::schema::is_retired_legacy_object(name));
         current(&a).await;
         verify_four(&a).await;
+        let current_snapshot = snapshot(&a, None).await;
+        assert!(
+            !current_snapshot
+                .definitions
+                .keys()
+                .chain(current_snapshot.rows.keys())
+                .any(|name| crate::session_storage::schema::is_retired_legacy_object(name))
+        );
         assert_eq!(snapshot(&a, Some(&names)).await, before);
         let mut c = connect(&a.db()).await;
         let attempts: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM product_delivery_attempts")
@@ -485,8 +504,19 @@ async fn cl004_schema4_commit_success_lost_response_is_durable_not_rolled_back()
     for v in [1, 2, 3] {
         let a = Area::new();
         fixture(&a, v).await;
-        let before = snapshot(&a, None).await;
-        let names: Vec<String> = before.definitions.keys().cloned().collect();
+        let mut before = snapshot(&a, None).await;
+        let names: Vec<String> = before
+            .definitions
+            .keys()
+            .filter(|name| !crate::session_storage::schema::is_retired_legacy_object(name))
+            .cloned()
+            .collect();
+        before
+            .definitions
+            .retain(|name, _| !crate::session_storage::schema::is_retired_legacy_object(name));
+        before
+            .rows
+            .retain(|name, _| !crate::session_storage::schema::is_retired_legacy_object(name));
         let p = pool(&a).await;
         assert!(
             schema::initialize_for_test(&p, MigrationFault::CommitUnknown)
@@ -567,7 +597,7 @@ async fn cl004_schema4_rejects_partial_objects_versions_and_missing_identity_rea
             "future"=>{exec(&mut c,"UPDATE node_meta SET schema_version=77").await;exec(&mut c,"PRAGMA user_version=77").await;},
             "missing-index"=>exec(&mut c,"DROP INDEX product_delivery_claim_identity").await,
             "missing-table"=>exec(&mut c,"DROP TABLE product_delivery_attempts").await,
-            "missing-legacy"=>exec(&mut c,"DROP INDEX tool_reference_key").await,
+            "missing-legacy"=>exec(&mut c,"CREATE TABLE content_objects(stale TEXT)").await,
             "missing-control"=>exec(&mut c,"DELETE FROM product_control").await,
             _=>{
                 exec(&mut c,"PRAGMA foreign_keys=OFF").await;

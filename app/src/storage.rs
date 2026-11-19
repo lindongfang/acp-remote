@@ -1,14 +1,7 @@
 pub use crate::session_storage::sqlite_lifecycle::{
     StorageLifecycleHost, StorageOpenOwner, StorageOpenRoots, StorageOpenTicket,
 };
-use std::{
-    path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::Duration,
-};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use sqlx::{
     Row, SqlitePool,
@@ -17,8 +10,9 @@ use sqlx::{
 
 use crate::error::StorageError;
 mod native_runtime;
+mod runtime_coordinator;
 
-pub const SCHEMA_VERSION: i64 = 14;
+pub const SCHEMA_VERSION: i64 = 15;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NodeMeta {
@@ -35,47 +29,30 @@ mod document_transfer;
 #[cfg(windows)]
 mod prompt_preparation;
 pub struct Storage {
-    data: Arc<StorageData>,
+    inner: Arc<StorageInner>,
     lifecycle: std::sync::Weak<crate::session_storage::sqlite_lifecycle::SqliteOpenState>,
     host: Option<Arc<crate::session_storage::sqlite_lifecycle::StorageLifecycleHost>>,
 }
-#[doc(hidden)]
-pub struct StorageData {
-    #[cfg(windows)]
-    preparation_shutdown: Arc<crate::application::prompt_preparation::PreparationShutdownSlot>,
-    #[cfg(windows)]
-    document_shutdown: Arc<crate::application::document_disposal::DocumentShutdownSlot>,
-    #[cfg(windows)]
-    catalog_shutdown: Arc<crate::application::catalog_preparation::CatalogShutdownSlot>,
+
+struct StorageInner {
     pool: SqlitePool,
     #[cfg(test)]
     product_store: crate::session_storage::product_commands::ProductStore,
     request_registry: crate::session_storage::request_registry::SqliteRequestRegistry,
-    queue_runtime_claim: Arc<AtomicBool>,
-    queue_supervisor:
-        std::sync::Mutex<Option<Arc<dyn crate::application::queue_owner::RuntimeSupervisor>>>,
-    queue_close: tokio::sync::Mutex<()>,
-    queue_lifecycle: std::sync::Mutex<()>,
-    queue_closed: AtomicBool,
+    coordinator: runtime_coordinator::StorageRuntimeCoordinator,
     #[cfg(test)]
     queue_randoms: Arc<crate::application::request_registry::random_hooks::Controller>,
     #[cfg(test)]
     close_barrier: std::sync::Mutex<Option<Arc<crate::test_support::AsyncBarrier>>>,
 }
 
-impl std::ops::Deref for Storage {
-    type Target = StorageData;
-    fn deref(&self) -> &StorageData {
-        &self.data
-    }
-}
 impl Storage {
     fn projection(
         &self,
         host: Arc<crate::session_storage::sqlite_lifecycle::StorageLifecycleHost>,
     ) -> Self {
         Self {
-            data: self.data.clone(),
+            inner: self.inner.clone(),
             lifecycle: self.lifecycle.clone(),
             host: Some(host),
         }
@@ -97,7 +74,7 @@ impl Storage {
     pub fn request_registry(
         &self,
     ) -> crate::session_storage::request_registry::SqliteRequestRegistry {
-        self.request_registry.clone()
+        self.inner.request_registry.clone()
     }
     pub(crate) fn native_release_operations(
         &self,
@@ -110,10 +87,10 @@ impl Storage {
     pub(crate) fn queue_random_faults_for_test(
         &self,
     ) -> Arc<crate::application::request_registry::random_hooks::Controller> {
-        self.queue_randoms.clone()
+        self.inner.queue_randoms.clone()
     }
     fn management_audit_port(&self) -> Arc<dyn crate::application::request_registry::AuditPort> {
-        Arc::new(self.request_registry.management_audit())
+        Arc::new(self.inner.request_registry.management_audit())
     }
 
     /// Starts with this Storage owner's actual SQL audit port.
@@ -280,78 +257,65 @@ impl Storage {
             application::{queue_owner::QueueService, request_registry::random_id},
             domain::{native::RuntimeEpoch, request_registry::RegistryError},
         };
-        authority.verify_owner_scope(&self.request_registry.owner_scope())?;
-        let (service, driver, startup) = {
-            let _lifecycle = self
-                .queue_lifecycle
-                .lock()
-                .map_err(|_| RegistryError::StorageUnavailable)?;
-            if self.queue_closed.load(Ordering::SeqCst) {
-                return Err(RegistryError::NodeStopping);
+        authority.verify_owner_scope(&self.inner.request_registry.owner_scope())?;
+        let map_claim_err = |failure| match failure {
+            runtime_coordinator::ClaimFailure::Unavailable => RegistryError::StorageUnavailable,
+            runtime_coordinator::ClaimFailure::Stopping => RegistryError::NodeStopping,
+            runtime_coordinator::ClaimFailure::AlreadyStarted => {
+                RegistryError::RuntimeAlreadyStarted
             }
-            self.queue_runtime_claim
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .map_err(|_| RegistryError::RuntimeAlreadyStarted)?;
-            let setup = (|| {
+        };
+        let (service, driver, startup) =
+            self.inner.coordinator.claim_runtime(map_claim_err, |ctx| {
                 #[cfg(test)]
                 let generated = self
+                    .inner
                     .queue_randoms
                     .take(crate::application::request_registry::random_hooks::Point::Runtime)?
                     .unwrap_or_else(random_id);
                 #[cfg(not(test))]
                 let generated = random_id();
-                Ok((RuntimeEpoch(generated?), wrap(self.request_registry())?))
-            })();
-            let (runtime, repository) = match setup {
-                Ok(value) => value,
-                Err(error) => {
-                    self.queue_runtime_claim.store(false, Ordering::SeqCst);
-                    return Err(error);
-                }
-            };
-            let (service, driver) = QueueService::new(
-                authority,
-                validator,
-                repository,
-                self.request_registry.owner_scope(),
-                clock,
-                runtime,
-                environment,
-                audit,
-                self.queue_runtime_claim.clone(),
-                #[cfg(test)]
-                self.queue_randoms.clone(),
-            );
-            // Retain the supervisor before the first await. Dropping the factory waiter cannot
-            // remove Storage's cancellation/join path or start a second runtime.
-            if let Ok(mut slot) = self.queue_supervisor.lock() {
+                let runtime = RuntimeEpoch(generated?);
+                let repository = wrap(self.request_registry())?;
+                let (service, driver) = QueueService::new(
+                    authority,
+                    validator,
+                    repository,
+                    self.inner.request_registry.owner_scope(),
+                    clock,
+                    runtime,
+                    environment,
+                    audit,
+                    ctx.claim(),
+                    #[cfg(test)]
+                    self.inner.queue_randoms.clone(),
+                );
+                // Retain the supervisor before the first await. Dropping the factory waiter cannot
+                // remove Storage's cancellation/join path or start a second runtime.
                 #[cfg(windows)]
-                {
-                    *slot = Some(Arc::new(prompt_preparation::QueuePreparationSupervisor {
-                        service: service.clone(),
-                        preparation: self.preparation_shutdown.clone(),
-                        document: self.document_shutdown.clone(),
-                        catalog: self.catalog_shutdown.clone(),
-                    }));
-                }
+                let supervisor: Arc<
+                    dyn crate::application::queue_owner::RuntimeSupervisor,
+                > = Arc::new(prompt_preparation::QueuePreparationSupervisor {
+                    service: service.clone(),
+                    preparation: ctx.preparation(),
+                    document: ctx.document(),
+                    catalog: ctx.catalog(),
+                });
                 #[cfg(not(windows))]
-                {
-                    *slot = Some(Arc::new(service.clone()));
-                }
-            } else {
-                self.queue_runtime_claim.store(false, Ordering::SeqCst);
-                return Err(RegistryError::StorageUnavailable);
-            }
-            let startup = service.launch_startup()?;
-            (service, driver, startup)
-        };
+                let supervisor: Arc<
+                    dyn crate::application::queue_owner::RuntimeSupervisor,
+                > = Arc::new(service.clone());
+                ctx.install_supervisor(supervisor).map_err(map_claim_err)?;
+                let startup = service.launch_startup()?;
+                Ok((service, driver, startup))
+            })?;
         let _ = startup.await;
         Ok((service, driver))
     }
     #[cfg(test)]
     #[must_use]
     pub fn product_commands(&self) -> crate::session_storage::product_commands::ProductStore {
-        self.product_store.clone()
+        self.inner.product_store.clone()
     }
     /// Opens production storage while retaining its original node directory ownership guard.
     /// # Errors
@@ -495,7 +459,7 @@ impl Storage {
         let storage = Self {
             lifecycle: Arc::downgrade(scope),
             host: None,
-            data: Arc::new(StorageData {
+            inner: Arc::new(StorageInner {
                 #[cfg(test)]
                 product_store: crate::session_storage::product_commands::ProductStore::new(
                     pool.clone(),
@@ -505,23 +469,7 @@ impl Storage {
                         pool.clone(),
                         Arc::downgrade(scope),
                     ),
-                queue_runtime_claim: Arc::new(AtomicBool::new(false)),
-                queue_supervisor: std::sync::Mutex::new(None),
-                #[cfg(windows)]
-                document_shutdown: Arc::new(
-                    crate::application::document_disposal::DocumentShutdownSlot::default(),
-                ),
-                #[cfg(windows)]
-                catalog_shutdown: Arc::new(
-                    crate::application::catalog_preparation::CatalogShutdownSlot::default(),
-                ),
-                #[cfg(windows)]
-                preparation_shutdown: Arc::new(
-                    crate::application::prompt_preparation::PreparationShutdownSlot::default(),
-                ),
-                queue_close: tokio::sync::Mutex::new(()),
-                queue_lifecycle: std::sync::Mutex::new(()),
-                queue_closed: AtomicBool::new(false),
+                coordinator: runtime_coordinator::StorageRuntimeCoordinator::new(),
                 #[cfg(test)]
                 queue_randoms: Arc::default(),
                 pool,
@@ -531,13 +479,13 @@ impl Storage {
         };
         #[cfg(test)]
         let initialization = crate::session_storage::schema::initialize_catalog_for_test(
-            &storage.pool,
+            &storage.inner.pool,
             fault,
             namespace,
         )
         .await;
         #[cfg(not(test))]
-        let initialization = crate::session_storage::schema::initialize(&storage.pool).await;
+        let initialization = crate::session_storage::schema::initialize(&storage.inner.pool).await;
         initialization?;
         Ok(storage)
     }
@@ -552,7 +500,7 @@ impl Storage {
             "SELECT schema_version, node_id, public_key, key_file_ref \
              FROM node_meta WHERE singleton = 1",
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(&self.inner.pool)
         .await?;
         Ok(row.map(|row| NodeMeta {
             schema_version: row.get("schema_version"),
@@ -571,7 +519,7 @@ impl Storage {
         if meta.schema_version != SCHEMA_VERSION {
             return Err(StorageError::UnrecognizedSchema);
         }
-        let mut transaction = self.pool.begin().await?;
+        let mut transaction = self.inner.pool.begin().await?;
         sqlx::query(
             "INSERT INTO node_meta(singleton, schema_version, node_id, public_key, key_file_ref) \
              VALUES (1, ?, ?, ?, ?) \
@@ -603,7 +551,7 @@ impl Storage {
                 OR EXISTS(SELECT 1 FROM security_audit)
              THEN 1 ELSE 0 END",
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&self.inner.pool)
         .await?;
         Ok(present != 0)
     }
@@ -615,43 +563,18 @@ impl Storage {
     /// Returns an error when the revision row cannot be read.
     pub async fn list_revision(&self) -> Result<i64, StorageError> {
         sqlx::query_scalar("SELECT revision FROM node_state WHERE singleton = 1")
-            .fetch_one(&self.pool)
+            .fetch_one(&self.inner.pool)
             .await
             .map_err(StorageError::from)
     }
 
     #[cfg(test)]
     pub(crate) fn original_runtime_registration_for_test(&self) -> (bool, Option<usize>) {
-        let _lifecycle = self
-            .queue_lifecycle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let slot = self
-            .queue_supervisor
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        (
-            self.queue_runtime_claim.load(Ordering::SeqCst),
-            slot.as_ref()
-                .map(|owner| Arc::as_ptr(owner).cast::<()>() as usize),
-        )
+        self.inner.coordinator.runtime_registration_for_test()
     }
     /// Synchronously seals installation on the original runtime lifecycle fence.
     pub(crate) fn begin_runtime_shutdown(&self) {
-        let supervisor = {
-            let _lifecycle = self
-                .queue_lifecycle
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.queue_closed.store(true, Ordering::SeqCst);
-            self.queue_supervisor
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clone()
-        };
-        if let Some(supervisor) = supervisor {
-            supervisor.cancel();
-        }
+        self.inner.coordinator.begin_shutdown();
         // Keep registry leases available through native source metadata closure. The
         // combined supervisor performs physical shutdown and required SQL bookkeeping
         // before joining; close_in_scope seals the registry only after that join.
@@ -671,31 +594,11 @@ impl Storage {
         }
     }
     pub(crate) async fn close_in_scope(&self) {
-        self.begin_runtime_shutdown();
-        let _closing = self.queue_close.lock().await;
-        let supervisor = self
-            .queue_supervisor
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
-        if let Some(supervisor) = supervisor {
-            supervisor.stop_and_join().await;
-            // Keep ownership across the await (including close cancellation), then release
-            // the same supervisor only after its actual task join has completed.
-            let mut slot = match self.queue_supervisor.lock() {
-                Ok(slot) => slot,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            if slot
-                .as_ref()
-                .is_some_and(|current| Arc::ptr_eq(current, &supervisor))
-            {
-                *slot = None;
-            }
-        }
+        self.inner.coordinator.close_supervisor_and_join().await;
         #[cfg(test)]
         {
             let barrier = self
+                .inner
                 .close_barrier
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -707,13 +610,13 @@ impl Storage {
         // Native/Queue/body closure advances concurrently with original transport users.
         if let Some(scope) = self.lifecycle.upgrade() {
             scope.wait_users().await;
-            self.request_registry.seal_connections();
+            self.inner.request_registry.seal_connections();
         }
-        let registry = self.request_registry.close_connections();
+        let registry = self.inner.request_registry.close_connections();
         let pool_close = async {
             loop {
-                self.pool.close().await;
-                if self.pool.size() == 0 {
+                self.inner.pool.close().await;
+                if self.inner.pool.size() == 0 {
                     break;
                 }
                 // Time only limits rechecks; normal closure still requires the real pool count.
@@ -729,12 +632,12 @@ impl Storage {
     pub(crate) fn required_close_status_in_scope(
         &self,
     ) -> crate::session_storage::ConnectionCloseStatus {
-        self.request_registry.close_status()
+        self.inner.request_registry.close_status()
     }
     pub(crate) fn registry_close_status(&self) -> crate::session_storage::ConnectionCloseStatus {
         use crate::session_storage::{ConnectionCloseStatus as Status, sqlite_lifecycle::Actual};
         match self.lifecycle.upgrade().map(|s| s.actual()) {
-            Some(Actual::Joined) => self.request_registry.close_status(),
+            Some(Actual::Joined) => self.inner.request_registry.close_status(),
             Some(Actual::Unconfirmed) | None => Status::Unconfirmed,
             _ => Status::Pending,
         }
@@ -744,30 +647,13 @@ impl Storage {
     pub(crate) fn pause_next_close(&self) -> Arc<crate::test_support::AsyncBarrier> {
         let barrier = Arc::new(crate::test_support::AsyncBarrier::default());
         let mut slot = self
+            .inner
             .close_barrier
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         assert!(slot.is_none(), "only one close barrier can be installed");
         *slot = Some(Arc::clone(&barrier));
         barrier
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn approvals(&self) -> crate::session_storage::approvals::ApprovalStore {
-        crate::session_storage::approvals::ApprovalStore::new(self.pool.clone())
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn histories(&self) -> crate::session_storage::history::HistoryStore {
-        crate::session_storage::history::HistoryStore::new(self.pool.clone())
-    }
-
-    #[cfg(test)]
-    #[must_use]
-    pub fn sessions(&self) -> crate::session_storage::SessionStore {
-        crate::session_storage::SessionStore::new(self.pool.clone())
     }
 
     #[must_use]
@@ -777,7 +663,7 @@ impl Storage {
 
     #[cfg(test)]
     pub(crate) fn pool_for_test(&self) -> &SqlitePool {
-        &self.pool
+        &self.inner.pool
     }
 }
 
@@ -785,7 +671,7 @@ impl Drop for Storage {
     fn drop(&mut self) {
         // Seal the storage-scoped registry before releasing the last Storage owner. A retained
         // external registry clone must hand off its idle connection into the tracked close owner.
-        self.request_registry.seal_connections();
+        self.inner.request_registry.seal_connections();
         if self.host.is_some()
             && let Some(scope) = self.lifecycle.upgrade()
         {
@@ -840,15 +726,15 @@ mod tests {
         let path = test_database();
         let storage = Storage::open(&path).await.expect("storage");
         sqlx::query("PRAGMA user_version = 77")
-            .execute(&storage.pool)
+            .execute(storage.pool_for_test())
             .await
             .expect("set schema");
         sqlx::query("CREATE TABLE sentinel(value TEXT NOT NULL)")
-            .execute(&storage.pool)
+            .execute(storage.pool_for_test())
             .await
             .expect("create sentinel");
         sqlx::query("INSERT INTO sentinel(value) VALUES ('preserve-me')")
-            .execute(&storage.pool)
+            .execute(storage.pool_for_test())
             .await
             .expect("insert sentinel");
         storage.close().await;
@@ -870,6 +756,67 @@ mod tests {
             .expect("read sentinel");
         assert_eq!(value, "preserve-me");
         pool.close().await;
+        std::fs::remove_file(path).expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn close_cancels_and_joins_runtime_supervisor_before_sealing_and_closing_pool() {
+        let path = test_database();
+        let storage = Arc::new(Storage::open(&path).await.expect("storage"));
+        let supervisor = storage
+            .inner
+            .coordinator
+            .claim_runtime(
+                |err| err,
+                |ctx| {
+                    let supervisor =
+                        runtime_coordinator::tests::RecordingSupervisor::new(ctx.claim());
+                    ctx.install_supervisor(Arc::clone(&supervisor)
+                        as Arc<dyn crate::application::queue_owner::RuntimeSupervisor>)?;
+                    Ok(supervisor)
+                },
+            )
+            .expect("claim runtime supervisor");
+
+        let close_task = {
+            let storage = Arc::clone(&storage);
+            tokio::spawn(async move {
+                storage.close().await;
+            })
+        };
+
+        tokio::time::timeout(Duration::from_secs(2), supervisor.join_entered.notified())
+            .await
+            .expect("supervisor cancel triggered stop_and_join");
+
+        assert_eq!(supervisor.events(), vec!["cancel", "stop_and_join_start"]);
+        assert!(
+            !storage.pool_for_test().is_closed(),
+            "pool must remain open until supervisor stop_and_join finishes"
+        );
+        assert!(
+            !storage.required_close_status_in_scope().is_complete(),
+            "registry connections must not complete close before supervisor joins"
+        );
+
+        supervisor.release_join.notify_one();
+        tokio::time::timeout(Duration::from_secs(2), close_task)
+            .await
+            .expect("storage close completes")
+            .expect("close task did not panic");
+
+        assert_eq!(
+            supervisor.events(),
+            vec!["cancel", "stop_and_join_start", "stop_and_join_finish"]
+        );
+        assert_eq!(
+            storage.original_runtime_registration_for_test(),
+            (false, None)
+        );
+        assert!(storage.pool_for_test().is_closed());
+        assert_eq!(storage.pool_for_test().size(), 0);
+        assert!(storage.required_close_status_in_scope().is_complete());
+        drop(storage);
         std::fs::remove_file(path).expect("cleanup");
     }
 }

@@ -3,7 +3,7 @@
     dead_code,
     reason = "Preserves existing module structure and intentional scaffolding"
 )]
-use super::{Arc, Ordering, Storage};
+use super::{Arc, Storage};
 use crate::application::{
     prompt_preparation::{PreparationShutdownSlot, PromptPreparationShutdownPort},
     queue_owner::{QueueRuntimeIdentity, RuntimeSupervisor},
@@ -16,29 +16,14 @@ impl Storage {
         expected: &QueueRuntimeIdentity,
         receipt: Arc<dyn PromptPreparationShutdownPort>,
     ) -> Result<(), RegistryError> {
-        let _lifecycle = self
-            .queue_lifecycle
-            .lock()
-            .map_err(|_| RegistryError::StorageUnavailable)?;
-        if self.queue_closed.load(Ordering::SeqCst) {
-            return Err(RegistryError::NodeStopping);
-        }
-        let supervisor = self
-            .queue_supervisor
-            .lock()
-            .map_err(|_| RegistryError::StorageUnavailable)?
-            .clone()
-            .ok_or(RegistryError::NodeStarting)?;
-        let mut receipt = Some(receipt);
-        supervisor.register_preparation(expected, &mut || {
-            self.preparation_shutdown
-                .install(receipt.take().ok_or(RegistryError::StorageUnavailable)?)
-        })
+        self.inner
+            .coordinator
+            .register_preparation(expected, receipt)
     }
     pub(crate) fn prompt_preparation_receipt(
         &self,
     ) -> Option<Arc<dyn PromptPreparationShutdownPort>> {
-        self.preparation_shutdown.get()
+        self.inner.coordinator.preparation_receipt()
     }
 }
 pub(super) struct QueuePreparationSupervisor<

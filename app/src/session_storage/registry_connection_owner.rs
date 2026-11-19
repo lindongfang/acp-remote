@@ -649,11 +649,9 @@ impl ConnectionLease {
                 .pause(test_hooks::ClosePoint::BeforeClose)
                 .await;
             #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
-            let mut approval_report_failed = false;
-            #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
-            if let Some(context) = &approval_context {
+            let mut approval_report_failed = if let Some(context) = &approval_context {
                 use super::approval_owner::test_control::{ApprovalCut, ApprovalCutState};
-                approval_report_failed = context
+                context
                     .controller
                     .hit(
                         ApprovalCut::LeaseBeforeClose,
@@ -674,8 +672,10 @@ impl ConnectionLease {
                         },
                     )
                     .await
-                    .map_or(true, |effect| effect.fail_close_report);
-            }
+                    .map_or(true, |effect| effect.fail_close_report)
+            } else {
+                false
+            };
             let actual_confirmed = connection.close().await.is_ok();
             task_actual.store(
                 if actual_confirmed { 1 } else { 2 },

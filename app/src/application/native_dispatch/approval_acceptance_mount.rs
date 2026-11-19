@@ -1,4 +1,12 @@
 //! Readonly weak references to the actual original Source, permission and task groups.
+#![allow(
+    dead_code,
+    clippy::struct_excessive_bools,
+    clippy::too_many_lines,
+    clippy::needless_collect,
+    clippy::redundant_pub_crate,
+    reason = "Read-only diagnostic mount for approval owner acceptance tests"
+)]
 use super::{
     environment::{PermissionResponseOwner, SourcePermissionSlot},
     runtime::SourceSlot,

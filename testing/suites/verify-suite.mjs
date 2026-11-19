@@ -218,6 +218,459 @@ function validateMarkdownRelativeLinks(relPath, check) {
   }
 }
 
+function extractCargoTomlPathEntries(raw) {
+  const entries = [];
+  let i = 0;
+  let line = 1;
+  let currentSection = '<root>';
+  let braceDepth = 0;
+  let atLineStart = true;
+
+  const skipWs = () => {
+    while (i < raw.length && (raw[i] === ' ' || raw[i] === '\t' || raw[i] === '\r')) i += 1;
+  };
+  const readQuotedString = quote => {
+    const startLine = line;
+    const triple = raw.slice(i, i + 3) === quote.repeat(3);
+    i += triple ? 3 : 1;
+    let value = '';
+    while (i < raw.length) {
+      if (triple && raw.slice(i, i + 3) === quote.repeat(3)) {
+        i += 3;
+        return {value, line: startLine};
+      }
+      const ch = raw[i];
+      if (!triple && ch === quote) {
+        i += 1;
+        return {value, line: startLine};
+      }
+      if (ch === '\n') {
+        line += 1;
+        value += ch;
+        i += 1;
+        continue;
+      }
+      if (quote === '"' && ch === '\\' && i + 1 < raw.length) {
+        const next = raw[i + 1];
+        if (next === 'n') value += '\n';
+        else if (next === 'r') value += '\r';
+        else if (next === 't') value += '\t';
+        else value += next;
+        if (next === '\n') line += 1;
+        i += 2;
+        continue;
+      }
+      value += ch;
+      i += 1;
+    }
+    return {value, line: startLine};
+  };
+
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === ' ' || ch === '\t' || ch === '\r') {
+      i += 1;
+      continue;
+    }
+    if (ch === '\n') {
+      line += 1;
+      i += 1;
+      atLineStart = true;
+      continue;
+    }
+    if (ch === '#') {
+      while (i < raw.length && raw[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '[' && atLineStart && braceDepth === 0) {
+      const isArrayTable = raw[i + 1] === '[';
+      i += isArrayTable ? 2 : 1;
+      const start = i;
+      const endMarker = isArrayTable ? ']]' : ']';
+      while (i < raw.length && raw[i] !== '\n' && !raw.startsWith(endMarker, i)) {
+        i += 1;
+      }
+      currentSection = raw.slice(start, i).trim();
+      if (raw.startsWith(endMarker, i)) i += endMarker.length;
+      atLineStart = false;
+      continue;
+    }
+    atLineStart = false;
+    if (ch === '{') {
+      braceDepth += 1;
+      i += 1;
+      continue;
+    }
+    if (ch === '}') {
+      braceDepth = Math.max(0, braceDepth - 1);
+      i += 1;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      const quotedKey = readQuotedString(ch);
+      skipWs();
+      if (raw[i] === '=') {
+        i += 1;
+        skipWs();
+        if (raw[i] === '"' || raw[i] === "'") {
+          const val = readQuotedString(raw[i]);
+          if (quotedKey.value === 'path') {
+            entries.push({line: val.line, section: currentSection, rawPath: val.value});
+          }
+        }
+      }
+      continue;
+    }
+    if (/[A-Za-z0-9_-]/.test(ch)) {
+      const keyStart = i;
+      const keyLine = line;
+      while (i < raw.length && /[A-Za-z0-9_-]/.test(raw[i])) i += 1;
+      const key = raw.slice(keyStart, i);
+      skipWs();
+      if (raw[i] === '.') {
+        i += 1;
+        continue;
+      }
+      if (raw[i] === '=') {
+        i += 1;
+        skipWs();
+        if (raw[i] === '"' || raw[i] === "'") {
+          const val = readQuotedString(raw[i]);
+          if (key === 'path') {
+            entries.push({line: keyLine, section: currentSection, rawPath: val.value});
+          }
+        }
+      }
+      continue;
+    }
+    i += 1;
+  }
+  return entries;
+}
+
+function validateBuildTimeRepoPath(
+  sourceLabel,
+  rawPath,
+  baseDir,
+  check,
+  allowManifestLeadingSlash = false,
+) {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    check(false, `${sourceLabel} 路径不能为空`);
+    return;
+  }
+  const normalizedInput = allowManifestLeadingSlash ? trimmed.replace(/^[/\\]+/, '') : trimmed;
+  if (
+    /^[a-zA-Z]:/.test(trimmed) ||
+    (!allowManifestLeadingSlash &&
+      (path.isAbsolute(trimmed) || trimmed.startsWith('/') || trimmed.startsWith('\\'))) ||
+    (allowManifestLeadingSlash &&
+      (trimmed.startsWith('//') || trimmed.startsWith('\\\\') || path.isAbsolute(normalizedInput)))
+  ) {
+    check(false, `${sourceLabel} "${rawPath}" 不允许使用绝对路径`);
+    return;
+  }
+  const resolved = path.resolve(baseDir, normalizedInput);
+  const relTarget = path.relative(root, resolved).replaceAll('\\', '/');
+  const isInsideRepo =
+    relTarget !== '..' && !relTarget.startsWith('../') && !path.isAbsolute(relTarget);
+  if (!isInsideRepo) {
+    check(false, `${sourceLabel} "${rawPath}" 超出仓库边界（解析为 "${relTarget}"）`);
+    return;
+  }
+  if (
+    IGNORED_LINK_PREFIX_RE.test(relTarget) ||
+    /(?:^|\/)(?:\.tmp|node_modules|dist|\.worktrees|\.target-wt)(?:\/|$)/.test(relTarget) ||
+    /\.log$/i.test(relTarget)
+  ) {
+    check(false, `${sourceLabel} "${rawPath}" 不得指向 .gitignore 忽略路径 (${relTarget})`);
+    return;
+  }
+  check(fs.existsSync(resolved), `${sourceLabel} "${rawPath}" 指向的目标不存在 (${relTarget})`);
+}
+
+function validateCargoManifestPaths(check) {
+  const manifestPath = 'app/Cargo.toml';
+  if (!exists(manifestPath)) return;
+  const manifestDir = path.dirname(abs(manifestPath));
+  const entries = extractCargoTomlPathEntries(read(manifestPath));
+
+  for (const {line, section, rawPath} of entries) {
+    validateBuildTimeRepoPath(`${manifestPath}:${line}: [${section}] path`, rawPath, manifestDir, check);
+  }
+}
+
+function tokenizeRustSourceForPaths(raw) {
+  const tokens = [];
+  let i = 0;
+  let line = 1;
+  const n = raw.length;
+  const isIdentStart = ch => /[A-Za-z_]/.test(ch);
+  const isIdentCont = ch => /[A-Za-z0-9_]/.test(ch);
+
+  while (i < n) {
+    const ch = raw[i];
+    if (ch === '\n') {
+      line += 1;
+      i += 1;
+      continue;
+    }
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+    if (ch === '/' && raw[i + 1] === '/') {
+      while (i < n && raw[i] !== '\n') i += 1;
+      continue;
+    }
+    if (ch === '/' && raw[i + 1] === '*') {
+      let depth = 1;
+      i += 2;
+      while (i < n && depth > 0) {
+        if (raw[i] === '\n') line += 1;
+        if (raw[i] === '/' && raw[i + 1] === '*') {
+          depth += 1;
+          i += 2;
+          continue;
+        }
+        if (raw[i] === '*' && raw[i + 1] === '/') {
+          depth -= 1;
+          i += 2;
+          continue;
+        }
+        i += 1;
+      }
+      continue;
+    }
+    // Raw string literals: r"...", r#"..."#, br#"..."#, cr#"..."#
+    const rawMatch = raw.slice(i, i + 40).match(/^(?:[bc]?r)(#*)\"/);
+    if (rawMatch) {
+      const startLine = line;
+      const hashes = rawMatch[1];
+      i += rawMatch[0].length;
+      const startVal = i;
+      const closing = '"' + hashes;
+      while (i < n && !raw.startsWith(closing, i)) {
+        if (raw[i] === '\n') line += 1;
+        i += 1;
+      }
+      const value = raw.slice(startVal, i);
+      if (raw.startsWith(closing, i)) i += closing.length;
+      tokens.push({type: 'str', value, line: startLine});
+      continue;
+    }
+    // Normal or byte/c string literal
+    if (ch === '"' || ((ch === 'b' || ch === 'c') && raw[i + 1] === '"')) {
+      const startLine = line;
+      if (ch !== '"') i += 1;
+      i += 1;
+      let value = '';
+      while (i < n && raw[i] !== '"') {
+        if (raw[i] === '\n') line += 1;
+        if (raw[i] === '\\' && i + 1 < n) {
+          const next = raw[i + 1];
+          if (next === '\n') line += 1;
+          if (next === 'n') value += '\n';
+          else if (next === 'r') value += '\r';
+          else if (next === 't') value += '\t';
+          else value += next;
+          i += 2;
+          continue;
+        }
+        value += raw[i];
+        i += 1;
+      }
+      if (raw[i] === '"') i += 1;
+      tokens.push({type: 'str', value, line: startLine});
+      continue;
+    }
+    // Char literal or lifetime
+    if (ch === "'") {
+      if (raw[i + 1] === '\\') {
+        i += 2;
+        while (i < n && raw[i] !== "'" && raw[i] !== '\n') i += 1;
+        if (raw[i] === "'") i += 1;
+        tokens.push({type: 'other', value: "'", line});
+        continue;
+      }
+      // Check single-char literal like '"' or 'x'
+      if (i + 2 < n && raw[i + 2] === "'") {
+        i += 3;
+        tokens.push({type: 'other', value: "'", line});
+        continue;
+      }
+      i += 1;
+      tokens.push({type: 'other', value: "'", line});
+      continue;
+    }
+    if (isIdentStart(ch)) {
+      const startLine = line;
+      let j = i + 1;
+      while (j < n && isIdentCont(raw[j])) j += 1;
+      tokens.push({type: 'ident', value: raw.slice(i, j), line: startLine});
+      i = j;
+      continue;
+    }
+    tokens.push({type: 'punct', value: ch, line});
+    i += 1;
+  }
+  return tokens;
+}
+
+function extractRustCompileTimePaths(raw) {
+  const tokens = tokenizeRustSourceForPaths(raw);
+  const results = [];
+  const INCLUDE_MACROS = new Set(['include', 'include_str', 'include_bytes']);
+
+  for (let i = 0; i < tokens.length; i += 1) {
+    const t = tokens[i];
+    // #[path = "..."] or #![path = "..."]
+    if (t.type === 'punct' && t.value === '#') {
+      let k = i + 1;
+      if (tokens[k]?.type === 'punct' && tokens[k].value === '!') k += 1;
+      if (
+        tokens[k]?.type === 'punct' &&
+        tokens[k].value === '[' &&
+        tokens[k + 1]?.type === 'ident' &&
+        tokens[k + 1].value === 'path' &&
+        tokens[k + 2]?.type === 'punct' &&
+        tokens[k + 2].value === '=' &&
+        tokens[k + 3]?.type === 'str' &&
+        tokens[k + 4]?.type === 'punct' &&
+        tokens[k + 4].value === ']'
+      ) {
+        results.push({
+          kind: '#[path]',
+          line: tokens[k + 3].line,
+          base: 'file',
+          rawPath: tokens[k + 3].value,
+        });
+        i = k + 4;
+        continue;
+      }
+    }
+
+    // include!(...) / include_str!(...) / include_bytes!(...)
+    if (
+      t.type === 'ident' &&
+      INCLUDE_MACROS.has(t.value) &&
+      tokens[i + 1]?.type === 'punct' &&
+      tokens[i + 1].value === '!' &&
+      tokens[i + 2]?.type === 'punct' &&
+      (tokens[i + 2].value === '(' || tokens[i + 2].value === '[' || tokens[i + 2].value === '{')
+    ) {
+      const macroName = `${t.value}!`;
+      const open = tokens[i + 2].value;
+      const close = open === '(' ? ')' : open === '[' ? ']' : '}';
+      let depth = 1;
+      let j = i + 3;
+      const inner = [];
+      while (j < tokens.length && depth > 0) {
+        if (tokens[j].type === 'punct' && tokens[j].value === open) depth += 1;
+        else if (tokens[j].type === 'punct' && tokens[j].value === close) {
+          depth -= 1;
+          if (depth === 0) break;
+        }
+        inner.push(tokens[j]);
+        j += 1;
+      }
+      if (inner.length === 1 && inner[0].type === 'str') {
+        results.push({kind: macroName, line: inner[0].line, base: 'file', rawPath: inner[0].value});
+      } else if (
+        inner.length >= 4 &&
+        inner[0].type === 'ident' &&
+        inner[0].value === 'concat' &&
+        inner[1].type === 'punct' &&
+        inner[1].value === '!' &&
+        inner[2].type === 'punct' &&
+        inner[2].value === '('
+      ) {
+        // Parse comma-separated arguments inside concat!(...)
+        const concatInner = inner.slice(3, inner[inner.length - 1]?.value === ')' ? -1 : inner.length);
+        const args = [];
+        let cur = [];
+        let cDepth = 0;
+        for (const tok of concatInner) {
+          if (tok.type === 'punct' && (tok.value === '(' || tok.value === '[' || tok.value === '{')) cDepth += 1;
+          else if (tok.type === 'punct' && (tok.value === ')' || tok.value === ']' || tok.value === '}')) cDepth -= 1;
+          if (tok.type === 'punct' && tok.value === ',' && cDepth === 0) {
+            if (cur.length > 0) args.push(cur);
+            cur = [];
+          } else {
+            cur.push(tok);
+          }
+        }
+        if (cur.length > 0) args.push(cur);
+        const isManifestDirArg = arg =>
+          arg.length === 5 &&
+          arg[0].type === 'ident' &&
+          arg[0].value === 'env' &&
+          arg[1].type === 'punct' &&
+          arg[1].value === '!' &&
+          arg[2].type === 'punct' &&
+          arg[2].value === '(' &&
+          arg[3].type === 'str' &&
+          arg[3].value === 'CARGO_MANIFEST_DIR' &&
+          arg[4].type === 'punct' &&
+          arg[4].value === ')';
+        if (args.length >= 2 && isManifestDirArg(args[0]) && args.slice(1).every(a => a.length === 1 && a[0].type === 'str')) {
+          results.push({
+            kind: macroName,
+            line: inner[0].line,
+            base: 'manifest',
+            rawPath: args.slice(1).map(a => a[0].value).join(''),
+          });
+        } else if (args.length >= 1 && args.every(a => a.length === 1 && a[0].type === 'str')) {
+          results.push({
+            kind: macroName,
+            line: inner[0].line,
+            base: 'file',
+            rawPath: args.map(a => a[0].value).join(''),
+          });
+        }
+      }
+      i = j;
+    }
+  }
+  return results;
+}
+
+function walkRustFiles(relDir, out = []) {
+  if (!exists(relDir)) return out;
+  for (const entry of fs.readdirSync(abs(relDir), {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
+    const relPath = `${relDir}/${entry.name}`;
+    if (entry.isDirectory()) {
+      if (
+        entry.name === 'target' ||
+        entry.name === 'vendor' ||
+        entry.name === 'node_modules' ||
+        entry.name === '.tmp' ||
+        entry.name === 'dist'
+      ) {
+        continue;
+      }
+      walkRustFiles(relPath, out);
+    } else if (entry.isFile() && entry.name.endsWith('.rs')) {
+      out.push(relPath);
+    }
+  }
+  return out;
+}
+
+function validateRustCompileTimePaths(check) {
+  const manifestDir = abs('app');
+  for (const relRs of walkRustFiles('app')) {
+    const fileDir = path.dirname(abs(relRs));
+    const entries = extractRustCompileTimePaths(read(relRs));
+    for (const {kind, line, base, rawPath} of entries) {
+      const baseDir = base === 'manifest' ? manifestDir : fileDir;
+      validateBuildTimeRepoPath(`${relRs}:${line}: ${kind}`, rawPath, baseDir, check, base === 'manifest');
+    }
+  }
+}
+
+
 function validateOpenSpecConfig(check) {
   const configPath = 'openspec/config.yaml';
   check(exists(configPath), `缺少 ${configPath}`);
@@ -1582,6 +2035,8 @@ function main() {
   };
 
   validateOpenSpecConfig(check);
+  validateCargoManifestPaths(check);
+  validateRustCompileTimePaths(check);
   const durableCaseOwners = collectDurableCaseOwners();
 
   if (options.change) {

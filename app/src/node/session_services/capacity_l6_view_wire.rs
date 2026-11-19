@@ -185,9 +185,7 @@ async fn capacity_l6_drain_view(
         }
     })
     .await;
-    match timed {
-        Ok(inner) => inner,
-        Err(_) => {
+    timed.unwrap_or_else(|_| {
             let p = packets.load(std::sync::atomic::Ordering::Relaxed);
             let k = last_raw_kind.load(std::sync::atomic::Ordering::Relaxed);
             let r = records_count.load(std::sync::atomic::Ordering::Relaxed);
@@ -200,9 +198,8 @@ async fn capacity_l6_drain_view(
                 trace.join(";")
             };
             let msg = format!("view_snapshot_deadline_elapsed_p{p}_k{k}_r{r}_{sample}");
-            Err(Box::leak(msg.into_boxed_str()))
-        }
-    }
+        Err(Box::leak(msg.into_boxed_str()))
+    })
 }
 
 #[test]

@@ -531,6 +531,25 @@ struct Historical6Snapshot {
 fn historical6_identifier(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
+fn historical6_definition_is_retired(encoded: &[u8]) -> bool {
+    let mut offset = 8usize;
+    let mut is_retired = false;
+    for col in 0..4 {
+        let len = usize::try_from(u64::from_be_bytes(
+            encoded[offset + 1..offset + 9].try_into().unwrap(),
+        ))
+        .unwrap();
+        let bytes = &encoded[offset + 9..offset + 9 + len];
+        if (col == 2 || col == 3)
+            && let Ok(text) = std::str::from_utf8(bytes)
+            && super::super::schema::is_retired_legacy_object(text)
+        {
+            is_retired = true;
+        }
+        offset += 9 + len;
+    }
+    is_retired
+}
 fn historical6_encode_row(row: &sqlx::sqlite::SqliteRow) -> Vec<u8> {
     use sqlx::{Row, TypeInfo, ValueRef};
     let mut encoded = Vec::new();
@@ -899,9 +918,18 @@ async fn historical6_validate_upgraded_storage(
     assert_eq!(migrated.meta_version, crate::storage::SCHEMA_VERSION);
     assert_eq!(migrated.key_digest, seeded.key_digest);
     for definition in &seeded.definitions {
-        assert!(migrated.definitions.contains(definition));
+        if historical6_definition_is_retired(definition) {
+            assert!(!migrated.definitions.contains(definition));
+        } else {
+            assert!(migrated.definitions.contains(definition));
+        }
     }
     for (name, table) in &seeded.tables {
+        let bare = name.strip_prefix("main.").unwrap_or(name);
+        if super::super::schema::is_retired_legacy_object(bare) {
+            assert!(!migrated.tables.contains_key(name));
+            continue;
+        }
         assert!(
             &migrated.tables[name] == table,
             "historical table changed: {name}"

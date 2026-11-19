@@ -220,10 +220,29 @@ async fn cl004_reg01_all_pinned_zero_to_four_upgrade_to_five_without_any_old_fac
     for version in 0..=4 {
         let area = Area::new();
         fixture(&area, version).await;
-        let before = snapshot(&area, None).await;
-        let names: Vec<_> = before.defs.keys().cloned().collect();
+        let mut before = snapshot(&area, None).await;
+        let names: Vec<_> = before
+            .defs
+            .keys()
+            .filter(|name| !super::is_retired_legacy_object(name))
+            .cloned()
+            .collect();
+        before
+            .defs
+            .retain(|name, _| !super::is_retired_legacy_object(name));
+        before
+            .rows
+            .retain(|name, _| !super::is_retired_legacy_object(name));
         migrate(&area).await;
         verify_five(&area).await;
+        let current_snapshot = snapshot(&area, None).await;
+        assert!(
+            !current_snapshot
+                .defs
+                .keys()
+                .chain(current_snapshot.rows.keys())
+                .any(|name| super::is_retired_legacy_object(name))
+        );
         assert_eq!(snapshot(&area, Some(&names)).await, before);
         let upgraded = snapshot(&area, None).await;
         migrate(&area).await;
@@ -295,8 +314,19 @@ async fn cl004_reg02_real_commit_unknown_is_readable_from_second_connection_at_f
     for version in 0..=4 {
         let area = Area::new();
         fixture(&area, version).await;
-        let before = snapshot(&area, None).await;
-        let names: Vec<_> = before.defs.keys().cloned().collect();
+        let mut before = snapshot(&area, None).await;
+        let names: Vec<_> = before
+            .defs
+            .keys()
+            .filter(|name| !super::is_retired_legacy_object(name))
+            .cloned()
+            .collect();
+        before
+            .defs
+            .retain(|name, _| !super::is_retired_legacy_object(name));
+        before
+            .rows
+            .retain(|name, _| !super::is_retired_legacy_object(name));
         let p = pool(&area.db()).await;
         assert!(
             schema::initialize_for_test(&p, MigrationFault::CommitUnknown)

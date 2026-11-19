@@ -41,7 +41,7 @@ mod audit;
 pub(super) mod closure;
 mod rows;
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
-pub(crate) mod test_control;
+pub mod test_control;
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
 mod test_migration;
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
@@ -169,7 +169,6 @@ impl SqliteNativeDispatch {
         #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
         if let Some(context) = test_control::current_original_context() {
             let point = match context.tag.kind {
-                ApprovalSqlOperation::Resolve => ApprovalCut::ReconcileBeforeBegin,
                 ApprovalSqlOperation::Observe => ApprovalCut::RequestBeforeBegin,
                 ApprovalSqlOperation::Register => ApprovalCut::RegisterBeforeBegin,
                 ApprovalSqlOperation::Decide => ApprovalCut::DecideBeforeBegin,

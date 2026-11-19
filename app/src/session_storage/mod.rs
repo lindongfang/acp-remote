@@ -1,14 +1,12 @@
-//! Management-only storage. Historical body writers are compiled only in tests.
+//! Management-only storage.
 #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
-pub(crate) mod approval_owner;
+pub mod approval_owner;
 #[cfg(not(all(test, feature = "approval-owner-acceptance-fixtures")))]
 mod approval_owner;
 mod approval_owner_schema;
 mod automatic_capacity_release;
 mod automatic_capacity_release_schema;
 mod catalog_sql;
-#[cfg(test)]
-mod legacy;
 pub(crate) mod management_audit;
 mod management_audit_budget;
 mod management_audit_schema;
@@ -43,8 +41,6 @@ pub(crate) use registry_connection_owner::ConnectionCloseStatus;
 pub mod request_registry;
 pub(crate) mod schema;
 pub(crate) mod sqlite_lifecycle;
-#[cfg(test)]
-pub use legacy::{SessionStore, approvals, history};
 
 #[cfg(windows)]
 pub(crate) fn node_catalog_repository(
@@ -101,3 +97,6 @@ pub(crate) enum AcquisitionCloseProgress {
 
 #[cfg(test)]
 pub(crate) mod schema9_namespace_test_hook;
+
+#[cfg(test)]
+mod tests;

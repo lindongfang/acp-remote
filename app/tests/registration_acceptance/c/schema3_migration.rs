@@ -232,10 +232,29 @@ async fn cl004_pinned_schema1_and_schema2_upgrade_without_loss_and_reopen() {
     for v in [1, 2] {
         let a = Area::new();
         fixture(&a, v).await;
-        let before = snapshot(&a, None).await;
-        let names: Vec<String> = before.definitions.keys().cloned().collect();
+        let mut before = snapshot(&a, None).await;
+        let names: Vec<String> = before
+            .definitions
+            .keys()
+            .filter(|name| !crate::session_storage::schema::is_retired_legacy_object(name))
+            .cloned()
+            .collect();
+        before
+            .definitions
+            .retain(|name, _| !crate::session_storage::schema::is_retired_legacy_object(name));
+        before
+            .rows
+            .retain(|name, _| !crate::session_storage::schema::is_retired_legacy_object(name));
         let s = Storage::open(&a.db()).await.unwrap();
         s.close().await;
+        let current_snapshot = snapshot(&a, None).await;
+        assert!(
+            !current_snapshot
+                .definitions
+                .keys()
+                .chain(current_snapshot.rows.keys())
+                .any(|name| crate::session_storage::schema::is_retired_legacy_object(name))
+        );
         assert_eq!(snapshot(&a, Some(&names)).await, before);
         let mut c = connect(&a.db()).await;
         assert_eq!(

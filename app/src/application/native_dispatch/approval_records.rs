@@ -381,10 +381,6 @@ impl<P: NativeApprovalPort> VerifiedApprovalAssociation<P> {
             .load(super::Ordering::SeqCst)
     }
 
-    #[cfg(all(test, feature = "approval-owner-acceptance-fixtures"))]
-    pub(crate) fn instance_for_approval_test(&self) -> crate::domain::EntityId {
-        self.original.source.metadata().instance_id
-    }
     pub const fn metadata(&self) -> &ApprovalAssociationRecord {
         &self.metadata
     }

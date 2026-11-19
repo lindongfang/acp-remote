@@ -40,23 +40,21 @@ async fn capacity_l6_pre_send_recheck(
         "selection":f.selection_json(),"operation":{"kind":"create"}}),
     )
     .await?;
-    let operation = match registered["result"]["sourceOperationId"].as_str() {
-        Some(op) => op.to_owned(),
-        None => {
-            if registered["ok"] != true {
-                return Err(match registered["error"]["code"].as_str() {
-                    Some("session_capacity_full") => "boundary_new_capacity_full",
-                    Some("node_stopping") => "boundary_new_node_stopping",
-                    Some("invalid_configuration") => "boundary_new_invalid_configuration",
-                    Some("invalid_target") => "boundary_new_invalid_target",
-                    Some("rate_limit") => "boundary_new_rate_limit",
-                    Some("revoked") => "boundary_new_revoked",
-                    _ => "boundary_new_not_registered",
-                });
-            }
-            return Err("boundary_new_not_registered");
+    let Some(op) = registered["result"]["sourceOperationId"].as_str() else {
+        if registered["ok"] != true {
+            return Err(match registered["error"]["code"].as_str() {
+                Some("session_capacity_full") => "boundary_new_capacity_full",
+                Some("node_stopping") => "boundary_new_node_stopping",
+                Some("invalid_configuration") => "boundary_new_invalid_configuration",
+                Some("invalid_target") => "boundary_new_invalid_target",
+                Some("rate_limit") => "boundary_new_rate_limit",
+                Some("revoked") => "boundary_new_revoked",
+                _ => "boundary_new_not_registered",
+            });
         }
+        return Err("boundary_new_not_registered");
     };
+    let operation = op.to_owned();
     let pool = capacity_l6_clock_pool(f)?;
     let native = f
         .node

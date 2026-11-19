@@ -67,8 +67,18 @@ async fn session_tree_schema14_preserves_historical13_and_adds_no_facts() {
     .await
     .expect("old DDL snapshot");
     schema::initialize(&pool).await.expect("additive migration");
-    assert_eq!(head(&pool).await, 14);
+    assert_eq!(head(&pool).await, crate::storage::SCHEMA_VERSION);
     for (name, definition) in before {
+        if schema::is_retired_legacy_object(&name) {
+            let retired: i64 =
+                sqlx::query_scalar("SELECT COUNT(*) FROM main.sqlite_schema WHERE name=?")
+                    .bind(&name)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("retired check");
+            assert_eq!(retired, 0, "retired object {name} should be removed");
+            continue;
+        }
         let after: String = sqlx::query_scalar("SELECT sql FROM main.sqlite_schema WHERE name=?")
             .bind(name)
             .fetch_one(&pool)
@@ -112,7 +122,7 @@ async fn session_tree_schema14_necessary_boundaries_roll_back() {
         schema::initialize(&pool)
             .await
             .expect("same database retry");
-        assert_eq!(head(&pool).await, 14);
+        assert_eq!(head(&pool).await, crate::storage::SCHEMA_VERSION);
         pool.close().await;
     }
     let pool = pool().await;
@@ -122,7 +132,7 @@ async fn session_tree_schema14_necessary_boundaries_roll_back() {
             .await
             .is_err()
     );
-    assert_eq!(head(&pool).await, 14);
+    assert_eq!(head(&pool).await, crate::storage::SCHEMA_VERSION);
     schema::initialize(&pool)
         .await
         .expect("actual committed version revalidated");
@@ -146,7 +156,7 @@ async fn session_tree_schema14_rejects_shadow_triggers_indexes_and_layout_change
             .await
             .expect("owned malformed layout");
         assert!(schema::initialize(&pool).await.is_err(), "{statement}");
-        assert_eq!(head(&pool).await, 14);
+        assert_eq!(head(&pool).await, crate::storage::SCHEMA_VERSION);
         pool.close().await;
     }
 }
@@ -170,7 +180,11 @@ async fn session_tree_schema14_checks_foreign_keys_and_empty_identity() {
         .execute(&mut *connection)
         .await
         .expect("restore");
-    assert!(validate(&mut connection, 14).await.is_err());
+    assert!(
+        validate(&mut connection, crate::storage::SCHEMA_VERSION)
+            .await
+            .is_err()
+    );
     drop(connection);
     pool.close().await;
 }

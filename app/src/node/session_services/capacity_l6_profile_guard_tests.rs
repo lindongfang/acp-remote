@@ -182,16 +182,16 @@ mod capacity_l6_identity_contract {
         let home = c.dedicated_home.canonicalize().unwrap();
         let appdata = area.directory("external-auth-home/appdata");
         let local = area.directory("external-auth-home/localappdata");
-        let temp = area.directory("external-auth-home/temp");
-        let tmp = area.directory("external-auth-home/tmp");
+        let env_temp = area.directory("external-auth-home/temp");
+        let short_tmp = area.directory("external-auth-home/tmp");
         let base = vec![
             entry("HOME", &c.dedicated_home.to_string_lossy()),
             entry("USERPROFILE", &c.dedicated_home.to_string_lossy()),
             entry("CODEX_HOME", &c.dedicated_codex_home.to_string_lossy()),
             entry("APPDATA", &appdata.to_string_lossy()),
             entry("LOCALAPPDATA", &local.to_string_lossy()),
-            entry("TEMP", &temp.to_string_lossy()),
-            entry("TMP", &tmp.to_string_lossy()),
+            entry("TEMP", &env_temp.to_string_lossy()),
+            entry("TMP", &short_tmp.to_string_lossy()),
         ];
 
         for mode in ["read-only", "workspace-write"] {

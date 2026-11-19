@@ -47,7 +47,7 @@ zeroize = "1.9.0"
 
 [[bin]]
 name = "session_capacity_acceptance_peer"
-path = "../testing/runs/deliver-session-capacity/tester/2026-11-16-request-runtime/capacity_peer.rs"
+path = "dev-fixtures/session_capacity_acceptance_peer.rs"
 required-features = ["native-dispatch-dev-fixtures"]
 test = false
 bench = false

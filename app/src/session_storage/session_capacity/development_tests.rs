@@ -708,10 +708,24 @@ async fn exact_historical_schema11_preserves_fifty_one_resources_and_rejects_new
         "SELECT b.load_epoch,b.instance_id,b.runtime_epoch,b.lifecycle,t.native_id FROM node_native_resource_bindings b JOIN product_targets t ON t.target_id=b.target_id ORDER BY b.load_epoch",
     ).fetch_all(storage.pool_for_test()).await.expect("preserved original resources");
     assert_eq!(after, original);
+    let retired_remaining: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema")
+        .fetch_all(storage.pool_for_test())
+        .await
+        .expect("schema objects");
+    assert!(
+        !retired_remaining
+            .iter()
+            .any(|name| crate::session_storage::schema::is_retired_legacy_object(name)),
+        "retired legacy objects must be absent at v15"
+    );
+    let expected_old_layout: Vec<(String, Option<String>)> = old_layout
+        .into_iter()
+        .filter(|(name, _)| !crate::session_storage::schema::is_retired_legacy_object(name))
+        .collect();
     let retained_layout: Vec<(String, Option<String>)> = sqlx::query_as(
         "SELECT name,sql FROM sqlite_schema WHERE name NOT LIKE 'node_session_capacity%' AND name NOT LIKE 'sqlite_autoindex_node_session_capacity%' AND name NOT LIKE 'node_session_automatic_%' AND name NOT LIKE 'sqlite_autoindex_node_session_automatic_%' AND name NOT IN ('node_session_parents','sqlite_autoindex_node_session_parents_1') ORDER BY name",
     ).fetch_all(storage.pool_for_test()).await.expect("old DDL unchanged");
-    assert_eq!(retained_layout, old_layout);
+    assert_eq!(retained_layout, expected_old_layout);
     let recovery: (i64, i64, i64) = sqlx::query_as(
         "SELECT COUNT(*),SUM(root_verified),(SELECT COUNT(*) FROM node_session_capacity_releases) FROM node_session_capacity",
     ).fetch_one(storage.pool_for_test()).await.expect("recovered conservative capacities");
@@ -806,6 +820,9 @@ async fn only_zero_create_abandons_and_migration_recovers_more_than_fifty_withou
         .execute(f.storage.pool_for_test())
         .await
         .expect("old metadata");
+    schema::install_legacy_session_for_test(f.storage.pool_for_test())
+        .await
+        .expect("legacy session tables for v11");
     schema::initialize(f.storage.pool_for_test())
         .await
         .expect("recover exact old operations");

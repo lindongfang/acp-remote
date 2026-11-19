@@ -25,9 +25,20 @@ async fn exact_schema6_is_additive_and_validates_on_second_open() {
     let indexes:i64=sqlx::query_scalar("SELECT count(*) FROM sqlite_schema WHERE type='index' AND sql IS NOT NULL AND name LIKE 'node_native_%'").fetch_one(&pool).await.expect("indexes");
     assert_eq!(indexes, 4);
     assert_eq!(native_dispatch_schema::DEFINITIONS.len(), 14);
-    // The old private body tables remain in place; nothing migrates their bodies into new tables.
-    let old:i64=sqlx::query_scalar("SELECT count(*) FROM sqlite_schema WHERE name IN ('content_objects','conversation_items','approvals','node_request_registrations','product_resources')").fetch_one(&pool).await.expect("old layouts");
-    assert_eq!(old, 5);
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_schema WHERE name IN ('node_request_registrations','product_resources')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("active layouts");
+    assert_eq!(active, 2);
+    let retired: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_schema WHERE name IN ('content_objects','conversation_items','approvals')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("retired layouts absent");
+    assert_eq!(retired, 0);
     schema::initialize(&pool)
         .await
         .expect("exact reopen validation");

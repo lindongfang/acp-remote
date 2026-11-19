@@ -29,7 +29,8 @@ async fn exact_seven() -> SqlitePool {
         .expect("begin fixture");
     for definition in schema::CORE
         .iter()
-        .chain(schema::SESSION)
+        .chain(schema::CATALOG_TABLES)
+        .chain(schema::LEGACY_SESSION_DEFINITIONS)
         .chain(product_schema::DEFINITIONS)
         .chain(product_schema::DELIVERY_DEFINITIONS)
         .chain(registration_schema::DEFINITIONS)
@@ -123,12 +124,43 @@ async fn old_values_preserved(pool: &SqlitePool) {
     assert!(body == b"abc", "legacy body remains original");
 }
 
+async fn post_v15_values_preserved(pool: &SqlitePool) {
+    let row = sqlx::query(
+        "SELECT status,auth_generation FROM main.clients WHERE client_id='synthetic-client'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("original client");
+    assert_eq!(row.get::<String, _>("status"), "revoked");
+    assert_eq!(row.get::<i64, _>("auth_generation"), 7);
+    let harness: String =
+        sqlx::query_scalar("SELECT name FROM main.harnesses WHERE harness_id='synthetic-harness'")
+            .fetch_one(pool)
+            .await
+            .expect("original harness");
+    assert_eq!(harness, "synthetic");
+    let workspace: String = sqlx::query_scalar(
+        "SELECT canonical_path FROM main.workspaces WHERE workspace_id='synthetic-workspace'",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("original workspace");
+    assert_eq!(workspace, "synthetic-root");
+    let remaining_legacy: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM main.sqlite_schema WHERE name IN ('sessions','content_objects')",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("legacy absent");
+    assert_eq!(remaining_legacy, 0);
+}
+
 #[tokio::test]
 async fn approval_schema8_fresh_database_and_metadata_empty_reopen_are_valid() {
     let pool = empty_pool().await;
     schema::initialize(&pool)
         .await
-        .expect("actual fresh0 through9");
+        .expect("actual fresh0 through current");
     let version: i64 = sqlx::query_scalar("PRAGMA main.user_version")
         .fetch_one(&pool)
         .await
@@ -160,6 +192,16 @@ async fn approval_schema8_upgrades_exact_seven_without_rewriting_old_definitions
         )
     );
     let after = old_definitions(&pool).await;
+    assert!(
+        !after
+            .iter()
+            .any(|(name, _)| schema::is_retired_legacy_object(name)),
+        "retired legacy objects must be absent at v15"
+    );
+    let expected_before: Vec<_> = before
+        .into_iter()
+        .filter(|(name, _)| !schema::is_retired_legacy_object(name))
+        .collect();
     let allowed_added_names = [
         "node_catalog_commands",
         "node_launch_profiles",
@@ -201,8 +243,8 @@ async fn approval_schema8_upgrades_exact_seven_without_rewriting_old_definitions
         .cloned()
         .collect();
     assert_eq!(
-        retained_old, before,
-        "every original schema7 definition stays exact"
+        retained_old, expected_before,
+        "every non-retired schema7 definition stays exact"
     );
     let added_objects: Vec<(String, String, String, bool)> = sqlx::query_as(
         "SELECT name,type,tbl_name,sql IS NOT NULL FROM main.sqlite_schema WHERE tbl_name IN ('node_catalog_commands','node_launch_profiles','node_target_launch_selection') ORDER BY name",
@@ -265,7 +307,7 @@ async fn approval_schema8_upgrades_exact_seven_without_rewriting_old_definitions
         added_objects, expected_added_objects,
         "only fixed three tables and their five automatic indexes are added"
     );
-    old_values_preserved(&pool).await;
+    post_v15_values_preserved(&pool).await;
     let count:i64 = sqlx::query_scalar("SELECT count(*) FROM main.sqlite_schema WHERE name GLOB 'node_approval_*' AND sql IS NOT NULL")
         .fetch_one(&pool).await.expect("objects");
     assert_eq!(count, 12);
@@ -333,7 +375,7 @@ async fn approval_schema8_commit_foreign_key_error_is_actual787_and_report_loss_
     schema::initialize(&pool)
         .await
         .expect("committed current schema remains valid");
-    old_values_preserved(&pool).await;
+    post_v15_values_preserved(&pool).await;
     pool.close().await;
 }
 
@@ -367,7 +409,7 @@ async fn approval_schema8_required_layout_and_same_connection_temp_shadow_fail_c
         schema::initialize(&pool).await,
         Err(StorageError::UnrecognizedSchema)
     ));
-    old_values_preserved(&pool).await;
+    post_v15_values_preserved(&pool).await;
     pool.close().await;
 }
 
@@ -391,7 +433,7 @@ async fn approval_schema8_optional_audit_layout_is_distinct_from_necessary_appro
         Err(crate::domain::management_audit::AuditStoreError::Layout)
     ));
     drop(connection);
-    old_values_preserved(&pool).await;
+    post_v15_values_preserved(&pool).await;
     pool.close().await;
 }
 
@@ -426,6 +468,6 @@ async fn approval_schema8_invalid_ordinal_has_no_effect_and_future_version_is_no
         Err(StorageError::UnknownSchema(actual)) if actual == first_unknown
     ));
     assert_eq!(heads(&pool).await, (first_unknown, first_unknown));
-    old_values_preserved(&pool).await;
+    post_v15_values_preserved(&pool).await;
     pool.close().await;
 }
