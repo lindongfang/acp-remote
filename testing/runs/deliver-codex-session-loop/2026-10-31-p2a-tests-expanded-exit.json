@@ -1,5 +1,0 @@
-﻿{
-    "command":  "cargo test --offline --locked --manifest-path p2a-probe/Cargo.toml -- --nocapture",
-    "exit":  0,
-    "utc":  "2026-10-31T02:36:31.1144949Z"
-}

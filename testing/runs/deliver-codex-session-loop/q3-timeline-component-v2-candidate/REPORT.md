@@ -1,9 +1,0 @@
-# Timeline component developer candidate v2
-
-Isolated only, main remains unmounted. Five production paths (5 exact), two old paths mechanically share the existing caller-record boundary. Seven added sources total; original 320 Web inputs protect all other318 bytes. Root613 inputs unchanged. v1 dbb3a50c frozen source327 unchanged, v2 only timeline.ts/timeline.css/browser fixture differ.
-
-Actual commands: npm.cmd run check exit 0; npm.cmd test -- --reporter=dot exit 0; npm.cmd run build exit 0.22 files /495 tests; original490 retained. Actual local-built Edge developer DOM28 assertions, six screenshots / three viewports / both themes / reduced motion. Developer evidence is not independent acceptance. Developer real browser200% zoom not executed; component body enlargement is explicitly distinct. Original tester has separately proved a fresh-profile real browser zoom tool path, not this candidate acceptance yet. No real Harness/WSS/Native/management control.
-
-Fixes independently confirmed v1 TL-CODE001(noncontent usesprimary),002(titleLF/TAB visible) and003(embeddedInspector44CSSpx specificity); original tester must close each on same fixed version. v1 source/first-red assets remain untouched. Message pure contiguous append grouping follows v4 fixed engineering2a613c0d and original independent M1–M6 a841cf32 with reviewer9dcfdb47 coding gate. Only message/content/evidence pure-singlepart/noextra/contiguous+append joins; gaps/unknown/extra/multipleparts break, tools neverjoin; no raw/store/refsReady changes.
-
-Original v1 developer492/3 wrong source API tests and sandbox browser preassert failure remain in v1 REPORT. No older failure is overwritten or reclassified as a v2 success. Original engineering gates4928ae49/bd087c75 still scope this component. Formal TL01–10/M1–M6/three product issues and delivery review remain pending.

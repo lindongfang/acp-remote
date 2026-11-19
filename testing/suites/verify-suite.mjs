@@ -69,6 +69,16 @@ function walkMarkdownFiles(relDir, out = []) {
   for (const entry of fs.readdirSync(abs(relDir), {withFileTypes: true}).sort((a, b) => a.name.localeCompare(b.name))) {
     const relPath = `${relDir}/${entry.name}`;
     if (entry.isDirectory()) {
+      if (
+        entry.name === 'node_modules' ||
+        entry.name === 'target' ||
+        entry.name === 'dist' ||
+        entry.name === '.tmp' ||
+        entry.name === '.worktrees' ||
+        entry.name === '.target-wt'
+      ) {
+        continue;
+      }
       walkMarkdownFiles(relPath, out);
     } else if (entry.isFile() && entry.name.endsWith('.md')) {
       out.push(relPath);
@@ -724,19 +734,15 @@ function validateOpenSpecConfig(check) {
 }
 
 function validateRepoDocsLinks(check) {
-  const topDocs = ['README.md', 'AGENTS.md', 'LESSONS.md'];
+  const topDocs = ['README.md', 'AGENTS.md'];
   for (const docPath of topDocs) {
     validateMarkdownRelativeLinks(docPath, check);
   }
-  const exemptDocs = LEGACY_HYGIENE_EXEMPT_CHANGES.has('deliver-session-capacity')
-    ? new Set([
-        'docs/implementation/session-capacity.md',
-        'docs/implementation/session-capacity-web.md',
-      ])
-    : new Set();
-  for (const relDoc of walkMarkdownFiles('docs')) {
-    if (exemptDocs.has(relDoc)) continue;
-    validateMarkdownRelativeLinks(relDoc, check);
+  const docRoots = ['docs', 'app', 'clients', 'testing/tools', 'testing/probes', '.github'];
+  for (const dir of docRoots) {
+    for (const relDoc of walkMarkdownFiles(dir)) {
+      validateMarkdownRelativeLinks(relDoc, check);
+    }
   }
 }
 

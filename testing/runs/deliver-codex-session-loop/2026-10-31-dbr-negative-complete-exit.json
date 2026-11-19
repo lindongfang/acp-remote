@@ -1,7 +1,0 @@
-﻿{
-    "positiveSeedExit":  0,
-    "negativeCases":  15,
-    "refusals":  15,
-    "restoredPositiveExit":  0,
-    "note":  "flattened PowerShell array only; individual compiler logs unchanged"
-}

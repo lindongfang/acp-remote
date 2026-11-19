@@ -1,6 +1,0 @@
-﻿{
-    "exitCode":  0,
-    "command":  "cargo test --manifest-path app/Cargo.toml --lib --locked --offline input_body_open_streams_original_queue_bytes_only_with_read_credit -- --nocapture --test-threads=1",
-    "target":  "D:\\Project\\acp-remote\\.tmp\\wp4-regression-v16-target",
-    "incremental":  false
-}

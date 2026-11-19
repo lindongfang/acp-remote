@@ -14,4 +14,4 @@ SessionSetup 要求有版本和来源的完整 cwd/MCP/additionalDirectories 快
 
 `view_observations` 与 `tool_projection` 为旧可选预算显示适配器。公开入口必须真实 Received、核相同连接来源；它们的 ViewWindows/history/anchor/key 预算尚未整体消除，不能成为真实 IO 必经门槛，也不声称长键完整历史投影。开发旧同步单元仅验证同生产私有数据算法/旧布局和计费；新增真实客户端用例另验公开品牌，测试不提供 fake Received。
 
-工程合同见当前 change 的 acp-runtime revision2 及 empty 构造器补充；独立验收候选及最终固定源码另记。协议夹具和自有 PowerShell child 的真实管道均不是实际 Harness、Windows Job 树、必要派发账本、持久审批或 Node/WSS 集成的通过证明。
+对外约束见 [ACP 平台约束规格](../../../../openspec/specs/acp-platform-constraints/spec.md)，详细内部契约见归档 [public-acp-runtime-contract.md](../../../../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/acp-runtime/revision2/public-acp-runtime-contract.md) 与 [empty-constructor.md](../../../../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/acp-runtime/revision2-supplements/empty-constructor.md)。协议夹具和受控子进程的真实管道仅验证本模块协议与 IO 收敛边界，不替代真实 Harness、Windows Job 进程树、派发账本、持久审批或 Node/WSS 集成验证。

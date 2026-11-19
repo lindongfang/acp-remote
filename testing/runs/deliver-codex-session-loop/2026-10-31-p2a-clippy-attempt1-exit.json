@@ -1,5 +1,0 @@
-﻿{
-    "command":  "cargo clippy --offline --locked --manifest-path p2a-probe/Cargo.toml --all-targets -- -D warnings",
-    "exit":  101,
-    "utc":  "2026-10-31T02:37:36.9014473Z"
-}

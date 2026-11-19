@@ -1,6 +1,0 @@
-﻿{
-    "command":  "cargo clippy --manifest-path C:/Users/jack/.codex/visualizations/2026/10/30/01a18dc1-45b2-7f82-981e-964264221cef/deliver-codex-session-loop-tester/view-budget-probe/Cargo.toml --locked --offline --all-targets -- -D warnings",
-    "exit":  0,
-    "log":  "view-budget-probe/clippy-exit-recorded.log",
-    "incremental":  "0"
-}

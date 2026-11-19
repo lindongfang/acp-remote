@@ -1,4 +1,0 @@
-﻿{
-    "command":  "cargo test --manifest-path app/Cargo.toml --locked --offline --lib adapters::acp:: -- --nocapture",
-    "exit":  0
-}

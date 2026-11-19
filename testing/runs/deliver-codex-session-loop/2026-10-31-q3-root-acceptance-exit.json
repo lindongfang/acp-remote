@@ -1,8 +1,0 @@
-{
-  "source_manifest": "2026-10-31-q3-queue-integrated-source.json",
-  "source_manifest_sha256": "c5ed8b088da766d9289ad5fd7144965205d85c3a131b2ee6fb1f3e986b82cc7e",
-  "record_basis": "Recorded from the completed primary exec tool calls; no rerun or invented raw exit log",
-  "shared_input_queue_acceptance": {"exit_code": 0, "passed": 39, "failed": 0, "ignored": 0},
-  "cargo_fmt_check": {"exit_code": 0},
-  "cargo_clippy_all_targets_locked_deny_warnings": {"exit_code": 0}
-}
