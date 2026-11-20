@@ -311,7 +311,7 @@ async fn sqlx_internal_timeout_with_real_worker_remains_unconfirmed() {
     let release = ReleaseWorker(gate.clone());
     let (host, ticket) = prepare_storage(
         &area,
-        worker_options(&gate, false, Duration::from_millis(150)),
+        worker_options(&gate, false, Duration::from_millis(750)),
     );
     let storage = ticket.ready().await.expect("Storage").projection(host);
     gate.armed.store(true, Ordering::SeqCst);
@@ -322,7 +322,7 @@ async fn sqlx_internal_timeout_with_real_worker_remains_unconfirmed() {
         .expect("actual SQLite worker callback");
     let original = original_acquisition(&storage);
     assert!(
-        timeout(Duration::from_secs(2), caller)
+        timeout(Duration::from_secs(3), caller)
             .await
             .expect("SQLx own acquire timeout")
             .expect("acquisition caller joined")

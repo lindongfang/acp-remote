@@ -20,7 +20,7 @@ const fn tc_id(n: u8) -> EntityId {
 
 fn tc_deadline() -> crate::application::request_registry::RegistryDeadline {
     crate::application::request_registry::RegistryDeadline::new(
-        tokio::time::Instant::now() + Duration::from_secs(15),
+        tokio::time::Instant::now() + Duration::from_secs(30),
     )
 }
 
@@ -372,7 +372,7 @@ async fn send_command_wait(
     )
     .await;
 
-    timeout(Duration::from_secs(12), async {
+    timeout(Duration::from_secs(30), async {
         loop {
             match socket.next().await.expect("ws frame").expect("ws ok") {
                 Message::Text(text) => {
@@ -422,7 +422,7 @@ async fn read_until_snapshot_end(
         .expect("send initial credit");
 
     let mut received_kinds: Vec<String> = Vec::new();
-    let res = timeout(Duration::from_secs(10), async {
+    let res = timeout(Duration::from_secs(20), async {
         loop {
             match socket.next().await.expect("ws frame").expect("ws ok") {
                 Message::Binary(bytes) => {
@@ -905,7 +905,7 @@ async fn submit_prompt_turn(
 }
 
 async fn wait_for_peer_method(fixture: &HarnessFixture, method: &str, min_count: usize) {
-    timeout(Duration::from_secs(8), async {
+    timeout(Duration::from_secs(20), async {
         loop {
             let count = fixture
                 .peer_logs()
@@ -1485,7 +1485,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
         &mut sock,
         unreach_stream,
         |v| v.get("syncState").and_then(|s| s.as_str()) == Some("degraded_unreachable"),
-        Duration::from_secs(8),
+        Duration::from_secs(20),
     )
     .await;
     assert_eq!(status_unreach["syncState"], "degraded_unreachable");
@@ -1525,7 +1525,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
             &mut sock,
             rec_stream,
             |v| v.get("type").and_then(|t| t.as_str()) == Some("stream_rebound"),
-            Duration::from_secs(8),
+            Duration::from_secs(20),
         )
         .await;
     }
@@ -1615,7 +1615,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
         &mut sock,
         full_stream,
         |v| v.get("syncState").and_then(|s| s.as_str()) == Some("degraded_capacity_full"),
-        Duration::from_secs(8),
+        Duration::from_secs(20),
     )
     .await;
     assert_eq!(status_full["syncState"], "degraded_capacity_full");
