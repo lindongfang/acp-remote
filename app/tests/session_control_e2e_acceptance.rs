@@ -275,3 +275,133 @@ async fn sct_016_real_binary_dual_browser_takeover_and_restart_e2e() {
         root_check.display()
     );
 }
+
+fn prepare_real_codex_env(repo: &Path, temp_root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let codex_adapter = repo.join(
+        r"testing\probes\codex-session-loop\node_modules\@agentclientprotocol\codex-acp\dist\index.js",
+    );
+    assert!(
+        codex_adapter.is_file(),
+        "missing codex-acp adapter at {}",
+        codex_adapter.display()
+    );
+    let codex_path = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .map(|base| base.join(r"Programs\OpenAI\Codex\bin\codex.exe"))
+        .filter(|path| path.is_file())
+        .expect(
+            "missing local codex.exe under %LOCALAPPDATA%\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+        );
+    let user_auth = std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .map(|home| home.join(".codex").join("auth.json"))
+        .filter(|path| path.is_file())
+        .expect("missing ~/.codex/auth.json for real Codex verification");
+    let codex_home = temp_root.join("codex-home");
+    fs::create_dir_all(&codex_home).unwrap();
+    fs::copy(&user_auth, codex_home.join("auth.json")).expect("copy isolated auth.json");
+    (codex_adapter, codex_path, codex_home)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "PV4 L6 real Codex E2E: requires local codex.exe, codex-acp, and user auth.json"]
+async fn sct_016_real_codex_harness_dual_browser_takeover_and_restart_e2e() {
+    let repo = repo_root();
+    let area = setup_temp_e2e_area();
+    let (codex_adapter, codex_path, codex_home) = prepare_real_codex_env(&repo, &area.temp_root);
+    let bin = PathBuf::from(env!("CARGO_BIN_EXE_acp-remote"));
+    assert!(
+        bin.is_file(),
+        "missing acp-remote binary at {}",
+        bin.display()
+    );
+
+    let mut guard = E2eCleanupGuard {
+        root: area.temp_root.clone(),
+        ipc_address: area.ipc_addr.clone(),
+        node_child: Some(spawn_daemon(&bin, &area.config_path)),
+        driver_child: None,
+    };
+    wait_node_ready(&area.ipc_addr).await;
+
+    let evidence_out = repo
+        .join("testing/runs/deliver-session-control-takeover/coder/sct-016-real-codex-e2e.json");
+    if let Some(parent) = evidence_out.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    let driver_cfg_path = area.temp_root.join("driver-config.json");
+    let driver_script = repo.join("clients/web/tests/e2e/sct-016-browser-driver.mjs");
+    fs::write(
+        &driver_cfg_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "origin": area.origin,
+            "workspaceDir": area.workspace_dir,
+            "realCodexMode": true,
+            "codexAdapter": codex_adapter,
+            "codexHome": codex_home,
+            "codexPath": codex_path,
+            "workDir": area.work_dir,
+            "evidenceOut": evidence_out,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    guard.driver_child = Some(
+        Command::new("node")
+            .arg(&driver_script)
+            .arg("--config")
+            .arg(&driver_cfg_path)
+            .current_dir(&repo)
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("spawn Playwright sct-016 real Codex browser driver"),
+    );
+
+    pair_one_client(&area.ipc_addr, &area.work_dir.join("pairing-a.json")).await;
+    wait_file_present(&area.work_dir.join("pair-a-done.json"), 60).await;
+    pair_one_client(&area.ipc_addr, &area.work_dir.join("pairing-b.json")).await;
+
+    wait_file_present(&area.work_dir.join("request-restart.json"), 180).await;
+    ipc::stop(&area.ipc_addr)
+        .await
+        .expect("ipc stop before restart");
+    if let Some(mut first_node) = guard.node_child.take() {
+        let status = tokio::task::block_in_place(|| first_node.wait()).expect("wait first daemon");
+        assert!(status.success(), "first daemon exit status: {status}");
+    }
+    guard.node_child = Some(spawn_daemon(&bin, &area.config_path));
+    wait_node_ready(&area.ipc_addr).await;
+    fs::write(area.work_dir.join("restart-done.json"), b"{}").unwrap();
+
+    let mut driver = guard.driver_child.take().unwrap();
+    let driver_status = tokio::task::block_in_place(|| driver.wait()).expect("wait browser driver");
+    assert!(
+        driver_status.success(),
+        "real Codex browser driver failed: {driver_status}"
+    );
+
+    let mut report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&evidence_out).expect("read real codex e2e evidence"))
+            .unwrap();
+    report["realCodexHarness"] = serde_json::json!({
+        "status": "passed",
+        "adapter": "@agentclientprotocol/codex-acp",
+        "isolatedCodexHome": true
+    });
+    fs::write(&evidence_out, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+
+    ipc::stop(&area.ipc_addr).await.expect("ipc stop after E2E");
+    if let Some(mut second_node) = guard.node_child.take() {
+        let status =
+            tokio::task::block_in_place(|| second_node.wait()).expect("wait second daemon");
+        assert!(status.success(), "second daemon exit status: {status}");
+    }
+    let root_check = area.temp_root.clone();
+    drop(guard);
+    assert!(
+        !root_check.exists(),
+        "temp root (including isolated codex-home) must be removed: {}",
+        root_check.display()
+    );
+}

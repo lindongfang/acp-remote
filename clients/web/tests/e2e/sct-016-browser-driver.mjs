@@ -72,7 +72,9 @@ const cfg = JSON.parse(readFileSync(configPath, "utf8"));
 const playwrightEntry = cfg.playwrightEntry || DEFAULT_PLAYWRIGHT;
 const edgeExecutable = cfg.edgeExecutable || DEFAULT_EDGE;
 mkdirSync(cfg.workDir, { recursive: true });
-mkdirSync(cfg.peerStateDir, { recursive: true });
+if (cfg.peerStateDir) {
+  mkdirSync(cfg.peerStateDir, { recursive: true });
+}
 
 let browser;
 let contextA;
@@ -111,16 +113,23 @@ try {
   await pairClient(pageB, cfg.origin, pairB.code, "Laptop B");
   evidence.steps.pairing = "passed";
 
-  // Setup Workspace, Controlled ACP V2 Harness, Source Session S1 & Target T1 on Page A
+  // Setup Workspace, Controlled ACP V2 or Real Codex Harness, Source Session S1 & Target T1 on Page A
   await pageA.locator("#catalog-workspace-path").fill(cfg.workspaceDir);
   await pageA.locator('button:has-text("登记工作目录")').click();
   await pageA.locator('button:has-text("填入 Target / Source 表单")').waitFor({ state: "visible", timeout: 20_000 });
   await pageA.locator('button:has-text("填入 Target / Source 表单")').click();
 
-  await pageA.locator("#catalog-harness-name").fill("Controlled ACP V2");
+  await pageA.locator("#catalog-harness-name").fill(cfg.realCodexMode ? "Real Codex ACP V2" : "Controlled ACP V2");
   await pageA.locator("#catalog-source-name").fill("E2E Source");
   await pageA.locator("#catalog-launch-executable").fill(process.execPath);
-  await pageA.locator("#catalog-launch-args").fill(`${cfg.peerScript}\n--state-dir\n${cfg.peerStateDir}`);
+  await pageA.locator("#catalog-launch-args").fill(
+    cfg.realCodexMode ? cfg.codexAdapter : `${cfg.peerScript}\n--state-dir\n${cfg.peerStateDir}`,
+  );
+  if (cfg.realCodexMode) {
+    await pageA.locator("#catalog-launch-env").fill(
+      `CODEX_HOME=${cfg.codexHome}\nCODEX_PATH=${cfg.codexPath}\nNO_BROWSER=1\nINITIAL_AGENT_MODE=read-only`,
+    );
+  }
   await pageA.locator("#catalog-recipe-wire").selectOption("2");
   await pageA.locator('button:has-text("上传并安装 Harness")').click();
   await pageA.locator('button:has-text("填入 Harness/Profile")').first().waitFor({ state: "visible", timeout: 20_000 });
@@ -129,13 +138,17 @@ try {
   await pageA.locator('section[data-panel="source-session"] button:has-text("登记新建")').click();
   await pageA.locator('section[data-panel="source-session"] button:has-text("执行操作")').waitFor({ state: "visible", timeout: 20_000 });
   await pageA.locator('section[data-panel="source-session"] button:has-text("执行操作")').click();
-  await pageA.locator('section[data-panel="source-session"] button:has-text("读取结果")').waitFor({ state: "visible", timeout: 25_000 });
+  await pageA.locator('section[data-panel="source-session"] button:has-text("读取结果")').waitFor({ state: "visible", timeout: 35_000 });
   await pageA.locator('section[data-panel="source-session"] button:has-text("读取结果")').click();
 
   const createdNativeEl = pageA.locator('.detail-block:has(.detail-label:text-is("已创建原生会话 ID")) code');
   await createdNativeEl.waitFor({ state: "visible", timeout: 20_000 });
   const nativeSessionId = (await createdNativeEl.textContent())?.trim() ?? "";
-  assert(nativeSessionId.startsWith("e2e-acp-session-"), `unexpected nativeSessionId: ${nativeSessionId}`);
+  if (cfg.realCodexMode) {
+    assert(nativeSessionId.length > 0, `empty nativeSessionId for real codex`);
+  } else {
+    assert(nativeSessionId.startsWith("e2e-acp-session-"), `unexpected nativeSessionId: ${nativeSessionId}`);
+  }
 
   await pageA.locator("#catalog-target-native-id").fill(nativeSessionId);
   await pageA.locator('button:has-text("登记并绑定 Target")').click();
@@ -149,6 +162,56 @@ try {
   await waitBanner(pageA, "self", "1", "当前由本设备接管 · 代际 1");
   assert(await pageA.locator('button:has-text("释放控制权")').first().isEnabled(), "release button enabled on A");
 
+  if (cfg.realCodexMode) {
+    // Real Codex Harness Substep 1: A submits real prompt, B observes readonly
+    await pageA.locator("#session-input-body").fill("Concatenate CODEX_REAL and ALPHA with an underscore and reply with only that token.");
+    await pageA.locator('button:has-text("上传并提交")').click();
+    await pageA.waitForFunction(
+      () => (document.body.textContent ?? "").includes("CODEX_REAL_ALPHA"),
+      null,
+      { timeout: 90_000 },
+    );
+
+    await pageB.locator("#session-target-id").fill(targetId);
+    await pageB.locator('button:has-text("读取会话队列")').click();
+    await pageB.locator('button:has-text("打开共享视图")').first().click();
+    await waitBanner(pageB, "other", "1", "只读观察 · 当前由 Desktop A 接管");
+    assert(await pageB.locator('button:has-text("上传并提交")').isDisabled(), "submit disabled on B");
+    assert(await pageB.locator('button:has-text("顶号接管会话")').first().isEnabled(), "preempt button enabled on B");
+    await pageB.locator("#session-input-body").focus();
+    await pageB.locator("#session-input-body").fill("readonly focus check");
+    evidence.steps.substep1 = { targetId, nativeSessionId, status: "passed" };
+
+    // Real Codex Harness Substep 2: Preserve A draft/selection across B preemption + B real prompt
+    await pageA.evaluate(() => {
+      const el = document.querySelector("#session-input-body");
+      if (!el) throw new Error("missing #session-input-body on A");
+      el.focus();
+      el.value = "unsent draft hello world";
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      el.setSelectionRange(7, 12);
+    });
+    await pageB.locator('button:has-text("顶号接管会话")').first().click();
+    await waitBanner(pageB, "self", "2", "当前由本设备接管 · 代际 2");
+    await waitBanner(pageA, "other", "2", "只读观察 · 当前由 Laptop B 接管");
+    assert(await pageA.locator('button:has-text("上传并提交")').isDisabled(), "submit disabled on A after preemption");
+    const draftA = await pageA.evaluate(() => {
+      const el = document.querySelector("#session-input-body");
+      return el ? { value: el.value, start: el.selectionStart, end: el.selectionEnd } : null;
+    });
+    assert(
+      draftA && draftA.value === "unsent draft hello world" && draftA.start === 7 && draftA.end === 12,
+      `draft/selection lost on A: ${JSON.stringify(draftA)}`,
+    );
+    await pageB.locator("#session-input-body").fill("Concatenate CODEX_REAL and BETA with an underscore and reply with only that token.");
+    await pageB.locator('button:has-text("上传并提交")').click();
+    await pageB.waitForFunction(
+      () => (document.body.textContent ?? "").includes("CODEX_REAL_BETA"),
+      null,
+      { timeout: 90_000 },
+    );
+    evidence.steps.substep2 = { draftA, realCodexReplies: ["CODEX_REAL_ALPHA", "CODEX_REAL_BETA"], status: "passed" };
+  } else {
   // Substep 1: hold prompt + emit approval; submit P1 & queued P2 on A; B observes readonly
   writeFileSync(path.join(cfg.peerStateDir, "hold-prompt"), "1", "utf8");
   writeFileSync(path.join(cfg.peerStateDir, "emit-approval"), "1", "utf8");
@@ -253,6 +316,7 @@ try {
   assert(reply?.result?.outcome?.optionId === "allow-once", `unexpected peer approval reply: ${JSON.stringify(reply)}`);
   rmSync(path.join(cfg.peerStateDir, "hold-prompt"), { force: true });
   evidence.steps.substep2 = { draftA, approvalReply: reply.result.outcome, status: "passed" };
+  }
 
   // Substep 3: Active release -> uncontrolled epoch 3 -> node restart -> epoch 0
   await pageB.locator('button:has-text("释放控制权")').first().click();
@@ -283,10 +347,13 @@ try {
   evidence.statusLinesA = await contextA?.pages()?.[0]?.evaluate(() => [...document.querySelectorAll(".status-line")].map((x) => x.textContent)).catch(() => []);
   evidence.statusLinesB = await contextB?.pages()?.[0]?.evaluate(() => [...document.querySelectorAll(".status-line")].map((x) => x.textContent)).catch(() => []);
   evidence.bodySnippetA = await contextA?.pages()?.[0]?.evaluate(() => (document.body.textContent ?? "").slice(0, 1200)).catch(() => "");
+  evidence.bodyTailA = await contextA?.pages()?.[0]?.evaluate(() => (document.body.textContent ?? "").slice(-1500)).catch(() => "");
   evidence.bodySnippetB = await contextB?.pages()?.[0]?.evaluate(() => (document.body.textContent ?? "").slice(0, 1200)).catch(() => "");
-  evidence.peerEvents = existsSync(path.join(cfg.peerStateDir, "peer-events.ndjson"))
-    ? readFileSync(path.join(cfg.peerStateDir, "peer-events.ndjson"), "utf8")
-    : "";
+  evidence.bodyTailB = await contextB?.pages()?.[0]?.evaluate(() => (document.body.textContent ?? "").slice(-1500)).catch(() => "");
+  evidence.peerEvents =
+    cfg.peerStateDir && existsSync(path.join(cfg.peerStateDir, "peer-events.ndjson"))
+      ? readFileSync(path.join(cfg.peerStateDir, "peer-events.ndjson"), "utf8")
+      : "";
   throw err;
 } finally {
   await contextA?.close().catch(() => {});
