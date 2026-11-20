@@ -606,10 +606,7 @@ fn isolated_history_codex_home(root: &Path) -> PathBuf {
     home
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "HN-028: requires installed authenticated Codex and codex-acp"]
-async fn hn_028_real_history_navigation() {
-    let repo = repo_root();
+fn history_codex_executables(repo: &Path) -> (PathBuf, PathBuf) {
     let adapter = std::env::var_os("HN_CODEX_ADAPTER").map_or_else(||repo.join(
         "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/codex-acp/dist/index.js"),
         PathBuf::from);
@@ -624,6 +621,14 @@ async fn hn_028_real_history_navigation() {
         adapter.is_file() && codex.is_file(),
         "not-run: missing real adapter or executable"
     );
+    (adapter, codex)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-028: requires installed authenticated Codex and codex-acp"]
+async fn hn_028_real_history_navigation() {
+    let repo = repo_root();
+    let (adapter, codex) = history_codex_executables(&repo);
     let area = setup_temp_e2e_area();
     let bin = Path::new(env!("CARGO_BIN_EXE_acp-remote"));
     let mut guard = E2eCleanupGuard {
