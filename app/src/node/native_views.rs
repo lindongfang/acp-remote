@@ -101,12 +101,23 @@ trait NativeViewAdmission: Send + Sync {
         coordinator: Arc<TranscriptCacheCoordinator>,
     ) -> BoxReadFuture<'_, ()>;
 }
+enum SocketReadPurpose {
+    Open,
+    History(Option<NativeSessionKey>),
+}
 trait SocketNativeViewAdmission: Send + Sync {
+    fn history_replay_allowed(&self, key: &NativeSessionKey) -> Result<bool, ViewError>;
+    fn history_child<'a>(
+        &'a self,
+        parent: &'a NativeSessionKey,
+        child: &'a str,
+    ) -> BoxReadFuture<'a, Result<NativeSessionKey, ViewError>>;
     fn admit_socket<'a>(
         &'a self,
         client: &'a SocketViewClient,
         target: EntityId,
         reason: ReadReason,
+        purpose: SocketReadPurpose,
     ) -> BoxReadFuture<'a, Result<AdmittedSocketNativeView, ViewError>>;
     fn admit_socket_source<'a>(
         &'a self,
@@ -162,8 +173,9 @@ pub struct NativeLocalViewRead {
     reader: Arc<AcpReadService>,
     cached: Option<CachedViewHandle>,
 }
+pub(crate) mod history;
 #[derive(Clone)]
-enum SocketRebindTarget {
+pub(crate) enum SocketRebindTarget {
     Target(EntityId),
     Source {
         selection: SourceLaunchSelection,
@@ -181,6 +193,7 @@ enum SocketReadBacking {
     },
 }
 pub struct NativeSocketViewRead {
+    history: Option<history::BoundHistory>,
     read: OpenedView,
     reader: Arc<AcpSocketReadService>,
     backing: SocketReadBacking,
@@ -481,6 +494,7 @@ async fn try_open_live_socket_read(
             Some(NativeSocketViewRead {
                 read,
                 reader: Arc::clone(&live.reader),
+                history: None,
                 backing: SocketReadBacking::Live(Some(status)),
             }),
             is_loaded,
@@ -696,11 +710,17 @@ where
     L::Owned: OwnedNativeSource<Streams = AcpStreams>,
     G: ReadConfigurationPort<LaunchPlan = L::Plan, Setup = SetupSnapshot>,
 {
+    fn history_replay_allowed(&self, key: &NativeSessionKey) -> Result<bool, ViewError> {
+        self.native
+            .history_replay_allowed(key)
+            .map_err(dispatch_error)
+    }
     fn admit_socket<'a>(
         &'a self,
         client: &'a SocketViewClient,
         target: EntityId,
         reason: ReadReason,
+        purpose: SocketReadPurpose,
     ) -> BoxReadFuture<'a, Result<AdmittedSocketNativeView, ViewError>> {
         Box::pin(async move {
             let (actor, gate) = self.authority.current_actor_guard(client).await?;
@@ -710,10 +730,13 @@ where
                 .prepare_native_read(&actor, target, reason)
                 .await
                 .map_err(registry_error)?;
-            let acquisition = self
-                .native
-                .acquire_read_source(proof, reason)
-                .map_err(dispatch_error)?;
+            let acquisition = match purpose {
+                SocketReadPurpose::History(child) => {
+                    self.native.acquire_history_replay(proof, child)
+                }
+                SocketReadPurpose::Open => self.native.acquire_read_source(proof, reason),
+            }
+            .map_err(dispatch_error)?;
             let capability = acquisition.source_capability().await?;
             crate::adapters::acp::native_views::admit_replay_capacity(&capability).await?;
             self.authority.register_native_source(&capability)?;
@@ -724,6 +747,14 @@ where
             })?;
             let views = attachment.views()?;
             let reader = attachment.socket_reader(&capability, &self.authority)?;
+            if capability.is_source_only()
+                && matches!(
+                    views.core.target(capability.native()),
+                    Err(ViewError::InvalidTarget)
+                )
+            {
+                attachment.ensure_external_target(capability.native().clone())?;
+            }
             drop(attachment);
             loop {
                 let changed = views.core.changed.notified();
@@ -818,6 +849,21 @@ where
                 target: capability.native().clone(),
                 reader,
             })
+        })
+    }
+    fn history_child<'a>(
+        &'a self,
+        parent: &'a NativeSessionKey,
+        child: &'a str,
+    ) -> BoxReadFuture<'a, Result<NativeSessionKey, ViewError>> {
+        Box::pin(async move {
+            self.native
+                .verify_history_child(parent, child)
+                .await
+                .map_err(|error| match error {
+                    DispatchError::SessionTreeUnverified => ViewError::InvalidTarget,
+                    other => dispatch_error(other),
+                })
         })
     }
     fn verify_cold_target<'a>(
@@ -1343,7 +1389,7 @@ impl NodeNativeViewsService {
                     let profile = snapshot.session.capability_profile;
                     let (status, needs_probe) = prepare_cold_status(tc, &snapshot.session, reason);
                     let (read, reader, handle) = tc
-                        .open_cached_socket_view(&key, client, authority, snapshot, status)
+                        .open_cached_socket_view(&key, client, authority, snapshot, status, false)
                         .await?;
                     if needs_probe {
                         let probe_admission = Arc::clone(admission);
@@ -1366,6 +1412,7 @@ impl NodeNativeViewsService {
                     return Ok(NativeSocketViewRead {
                         read,
                         reader,
+                        history: None,
                         backing: SocketReadBacking::Cached {
                             handle,
                             authority: Arc::clone(authority),
@@ -1377,7 +1424,9 @@ impl NodeNativeViewsService {
                 }
             }
         }
-        let admitted = admission.admit_socket(client, target, reason).await?;
+        let admitted = admission
+            .admit_socket(client, target, reason, SocketReadPurpose::Open)
+            .await?;
         self.finish_live_socket_read(client, admitted, reason).await
     }
     /// Opens an authenticated read-only view for an external native session without a target.
@@ -1416,7 +1465,7 @@ impl NodeNativeViewsService {
                     let profile = snapshot.session.capability_profile;
                     let (status, needs_probe) = prepare_cold_status(tc, &snapshot.session, reason);
                     let (read, reader, handle) = tc
-                        .open_cached_socket_view(&key, client, authority, snapshot, status)
+                        .open_cached_socket_view(&key, client, authority, snapshot, status, false)
                         .await?;
                     let rebind_target = SocketRebindTarget::Source {
                         selection: selection.clone(),
@@ -1444,6 +1493,7 @@ impl NodeNativeViewsService {
                     return Ok(NativeSocketViewRead {
                         read,
                         reader,
+                        history: None,
                         backing: SocketReadBacking::Cached {
                             handle,
                             authority: Arc::clone(authority),
@@ -1478,6 +1528,7 @@ impl NodeNativeViewsService {
         Ok(NativeSocketViewRead {
             read,
             reader: admitted.reader,
+            history: None,
             backing: SocketReadBacking::Live(live_status),
         })
     }
@@ -1627,6 +1678,13 @@ impl NativeSocketViewRead {
         client: &SocketViewClient,
     ) -> Result<OriginalReadProgress, ViewError> {
         match &self.backing {
+            _ if self
+                .history
+                .as_ref()
+                .is_some_and(|h| h.request.open.is_none()) =>
+            {
+                Err(ViewError::InvalidStage)
+            }
             SocketReadBacking::Live(_) => {
                 self.reader.wait_original_progress(client, &self.read).await
             }
@@ -1698,6 +1756,31 @@ impl NativeSocketViewRead {
     /// # Errors
     /// Rebinds this completed original read onto its published replay-complete generation.
     pub async fn rebind_same_read(&self, client: &SocketViewClient) -> Result<Self, ViewError> {
+        if self
+            .history
+            .as_ref()
+            .is_some_and(|h| h.request.open.is_none())
+        {
+            return Err(ViewError::InvalidStage);
+        }
+        let mut next = self.rebind_original(client).await?;
+        if let Some(bound) = &self.history {
+            next = bound
+                .request
+                .clone()
+                .select_live(client, next, &bound.key, &bound.tc, "live")
+                .await
+                .map_err(|e| match e {
+                    history::HistoryError::View(e) => e,
+                    history::HistoryError::Page(_) => ViewError::StaleCursor,
+                })?;
+        }
+        Ok(next)
+    }
+    pub(crate) fn page_metadata(&self) -> Option<&serde_json::Value> {
+        self.history.as_ref().map(|h| &h.metadata)
+    }
+    async fn rebind_original(&self, client: &SocketViewClient) -> Result<Self, ViewError> {
         match &self.backing {
             SocketReadBacking::Live(status) => {
                 let rebound = self.reader.rebind_same_read(client, &self.read).await?;
@@ -1714,6 +1797,7 @@ impl NativeSocketViewRead {
                 Ok(Self {
                     read,
                     reader: Arc::clone(&self.reader),
+                    history: None,
                     backing: SocketReadBacking::Live(next_status),
                 })
             }
@@ -1739,13 +1823,19 @@ impl NativeSocketViewRead {
                     return Ok(Self {
                         read,
                         reader: live.reader,
+                        history: None,
                         backing: SocketReadBacking::Live(Some(status)),
                     });
                 }
                 let (reader, live_target) = match target {
                     SocketRebindTarget::Target(target_id) => {
                         let admitted = admission
-                            .admit_socket(client, *target_id, ReadReason::ExplicitRefresh)
+                            .admit_socket(
+                                client,
+                                *target_id,
+                                ReadReason::ExplicitRefresh,
+                                SocketReadPurpose::Open,
+                            )
                             .await?;
                         (admitted.reader, admitted.target)
                     }
@@ -1771,6 +1861,7 @@ impl NativeSocketViewRead {
                 Ok(Self {
                     read,
                     reader,
+                    history: None,
                     backing: SocketReadBacking::Live(Some(status)),
                 })
             }

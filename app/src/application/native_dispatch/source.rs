@@ -300,6 +300,7 @@ where
     pub(super) async fn ensure_target_replay_read(
         self: &Arc<Self>,
         proof: crate::application::queue_owner::ReadTargetProof,
+        child: Option<super::NativeSessionKey>,
         read: Arc<super::read_source::ReadAcquisitionState<P>>,
     ) -> Result<(Arc<SourceSlot<P, L>>, Arc<super::SourceReadCapability<P>>), DispatchError>
     where
@@ -317,10 +318,16 @@ where
         }
         let path = self
             .repository
-            .resolve_session_tree(proof.native(), &self.deadline()?)
+            .resolve_session_tree(
+                child.as_ref().unwrap_or_else(|| proof.native()),
+                &self.deadline()?,
+            )
             .await?;
+        if child.is_some() && !path.ancestors.contains(proof.native()) {
+            return Err(DispatchError::SessionTreeUnverified);
+        }
         if !path.ancestors.is_empty() {
-            let subject = proof.native().clone();
+            let subject = child.unwrap_or_else(|| proof.native().clone());
             let queue = self.queue.clone();
             return self
                 .ensure_child_read(

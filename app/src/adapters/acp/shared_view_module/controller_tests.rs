@@ -1162,7 +1162,7 @@ async fn shared_view_real_remote_failure_keeps_old_h_failed_and_live_segments_th
                     );
                 }
             }
-            RecordKind::SnapshotEnd => {}
+            RecordKind::SnapshotEnd | RecordKind::TurnStart => {}
         }
         transfer
             .credit(packet)

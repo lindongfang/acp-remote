@@ -95,6 +95,18 @@ impl CursorScope {
         wire: &str,
         public_key: &[u8],
     ) -> Result<u64, PageError> {
+        let (stored, anchor) = self.authenticate(wire, public_key)?;
+        if stored != generation {
+            return Err(PageError::StaleCursor);
+        }
+        Ok(anchor)
+    }
+    /// Checks the signature and the complete request scope before looking up a generation.
+    pub(crate) fn authenticate(
+        self,
+        wire: &str,
+        public_key: &[u8],
+    ) -> Result<(Generation, u64), PageError> {
         if wire.len() != WIRE.div_ceil(3) * 4 {
             return Err(PageError::InvalidCursor);
         }
@@ -129,10 +141,14 @@ impl CursorScope {
         {
             return Err(PageError::InvalidCursor);
         }
-        let (kind, token) = generation.parts();
-        if payload[18] != kind || payload[19..35] != token {
-            return Err(PageError::StaleCursor);
-        }
-        Ok(anchor)
+        let token = payload[19..35]
+            .try_into()
+            .map_err(|_| PageError::InvalidCursor)?;
+        let stored = if payload[18] == 1 {
+            Generation::Cache(token)
+        } else {
+            Generation::Live(token)
+        };
+        Ok((stored, anchor))
     }
 }

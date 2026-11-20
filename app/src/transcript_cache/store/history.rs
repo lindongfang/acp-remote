@@ -37,6 +37,7 @@ pub struct CachedPage {
     pub boundaries: Vec<(u64, u64)>,
     /// Later same-tool patches retained for the projected state of anchors on this page.
     pub tool_updates: Vec<CachedRawRecord>,
+    pub prior_tool_anchors: Vec<CachedRawRecord>,
 }
 
 const SESSION:&str="SELECT active_generation,protocol_version,content_digest,last_updated_at_ms,last_synced_at_ms,
@@ -44,6 +45,31 @@ const SESSION:&str="SELECT active_generation,protocol_version,content_digest,las
     FROM transcript_sessions WHERE source_id=? AND native_session_id=?";
 
 impl TranscriptCacheStore {
+    /// Returns the token only when the live transcript matches the authoritative snapshot.
+    pub(crate) async fn matching_generation(
+        &self,
+        key: &NativeSessionKey,
+        digest: [u8; 32],
+    ) -> Result<Option<[u8; 16]>, TranscriptCacheError> {
+        let Some((pool, _)) = self.open_handles().await else {
+            return Ok(None);
+        };
+        let row = sqlx::query(SESSION)
+            .bind(entity_id_to_bytes(key.source().0)?.as_slice())
+            .bind(key.native_id())
+            .fetch_optional(&pool)
+            .await?;
+        let Some(row) = row else { return Ok(None) };
+        let session = parse_session_row(key.clone(), &row)?;
+        if session.content_digest != digest || self.is_snapshot_expired(&session) {
+            return Ok(None);
+        }
+        let token: Vec<u8> = row.try_get("generation_token")?;
+        let token = token.try_into().map_err(|_| {
+            TranscriptCacheError::CorruptDatabase("invalid history generation".into())
+        })?;
+        Ok(Some(token))
+    }
     /// Resolves and validates coordinates against the generation pinned by this read transaction.
     /// An ordinary open may request the complete unprovable view by returning `None`.
     ///
@@ -142,7 +168,7 @@ impl TranscriptCacheStore {
             generation: row.try_get("active_generation")?,
         };
         let (boundaries, start, end) = page_boundaries(&mut tx, &keys, range, total).await?;
-        let (records, tool_updates) =
+        let (records, tool_updates, prior_tool_anchors) =
             page_records(&mut tx, &keys, session.protocol_version, start, end).await?;
         tx.commit().await?;
         Ok(Some(CachedPage {
@@ -152,6 +178,7 @@ impl TranscriptCacheStore {
             range,
             boundaries,
             tool_updates,
+            prior_tool_anchors,
         }))
     }
 }
@@ -224,7 +251,14 @@ async fn page_records(
     version: crate::adapters::acp::Version,
     start: i64,
     end: i64,
-) -> Result<(Vec<CachedRawRecord>, Vec<CachedRawRecord>), TranscriptCacheError> {
+) -> Result<
+    (
+        Vec<CachedRawRecord>,
+        Vec<CachedRawRecord>,
+        Vec<CachedRawRecord>,
+    ),
+    TranscriptCacheError,
+> {
     let projector = AcpViewProjector::for_version(version);
     let mut tools = HashSet::new();
     let mut records = Vec::new();
@@ -237,7 +271,7 @@ async fn page_records(
         }
         for rec in chunk {
             after = checked_ordinal(rec.ordinal)?;
-            if end < i64::MAX {
+            if start > 1 || end < i64::MAX {
                 let env = projector.inspect(&rec.raw);
                 if let Some(ContentIdentity::Tool(id)) = env.identity {
                     tools.insert((env.session, id));
@@ -246,7 +280,26 @@ async fn page_records(
             records.push(rec);
         }
     }
-    while !tools.is_empty() {
+    // Seed an earlier tool identity in the private projector so an in-page patch
+    // retains its original anchor. The reader skips these seed records and anchors.
+    let mut prior_tool_anchors = Vec::new();
+    let mut before = 0;
+    while start > 1 && !tools.is_empty() {
+        let chunk = read_chunk(tx, keys, before, start - 1).await?;
+        if chunk.is_empty() {
+            break;
+        }
+        for rec in chunk {
+            before = checked_ordinal(rec.ordinal)?;
+            let env = projector.inspect(&rec.raw);
+            if let Some(ContentIdentity::Tool(id)) = env.identity
+                && tools.remove(&(env.session, id))
+            {
+                prior_tool_anchors.push(rec);
+            }
+        }
+    }
+    while end < i64::MAX && !tools.is_empty() {
         let chunk = read_chunk(tx, keys, after, i64::MAX).await?;
         if chunk.is_empty() {
             break;
@@ -261,5 +314,5 @@ async fn page_records(
             }
         }
     }
-    Ok((records, tool_updates))
+    Ok((records, tool_updates, prior_tool_anchors))
 }

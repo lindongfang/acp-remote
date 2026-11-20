@@ -15,6 +15,7 @@ pub enum RecordKind {
     ItemProjection,
     Status,
     SnapshotEnd,
+    TurnStart,
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum WireError {
@@ -168,6 +169,7 @@ impl TransferHeader {
             Some(RecordKind::ItemProjection) => 2,
             Some(RecordKind::Status) => 3,
             Some(RecordKind::SnapshotEnd) => 4,
+            Some(RecordKind::TurnStart) => 5,
         };
         out[64..68].copy_from_slice(&self.payload_length.to_be_bytes());
         out.extend_from_slice(payload);
@@ -206,6 +208,7 @@ impl TransferHeader {
             2 => Some(RecordKind::ItemProjection),
             3 => Some(RecordKind::Status),
             4 => Some(RecordKind::SnapshotEnd),
+            5 => Some(RecordKind::TurnStart),
             _ => return Err(WireError::Header),
         };
         let header = Self {

@@ -86,6 +86,15 @@ pub(super) struct CapacityActivity {
 }
 
 impl CapacityActivity {
+    pub(super) fn history_busy(&self, session: &str) -> bool {
+        let root = self.tree.root_for(session);
+        self.sessions.iter().any(|(id, s)| {
+            (id.as_ref() == session || root.is_some() && self.tree.root_for(id) == root)
+                && (s.work.foreground() == Coverage::Active
+                    || s.work.background() == Coverage::Active
+                    || s.tools.values().any(|active| *active))
+        })
+    }
     pub(super) fn created(&mut self, session: &str, wire: ProtocolVersion, now: Instant) {
         self.recognize(session);
         let activity = self

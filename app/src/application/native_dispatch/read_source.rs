@@ -317,6 +317,23 @@ where
     ) -> Result<(), DispatchError> {
         self.core.install_transcript_observer_inner(observer)
     }
+    pub(crate) async fn verify_history_child(
+        &self,
+        parent: &super::NativeSessionKey,
+        child: &str,
+    ) -> Result<super::NativeSessionKey, DispatchError> {
+        let key = super::NativeSessionKey::from_config(Some(parent.source().0), child)
+            .map_err(|_| DispatchError::SessionTreeUnverified)?;
+        let path = self
+            .core
+            .repository
+            .resolve_session_tree(&key, &self.core.deadline()?)
+            .await?;
+        if path.subject != key || !path.ancestors.contains(parent) {
+            return Err(DispatchError::SessionTreeUnverified);
+        }
+        Ok(key)
+    }
     #[must_use]
     pub(crate) fn is_session_slot_active(&self, key: &super::NativeSessionKey) -> bool {
         self.core.is_session_slot_active_inner(key)
@@ -370,9 +387,49 @@ where
         )?;
         Ok(NativeReadAcquisition { state })
     }
+    pub(crate) fn history_replay_allowed(
+        &self,
+        key: &super::NativeSessionKey,
+    ) -> Result<bool, DispatchError> {
+        if self
+            .core
+            .runs
+            .lock()
+            .map_err(|_| DispatchError::RequiredStateUnavailable)?
+            .contains_key(key)
+        {
+            return Ok(false);
+        }
+        let sources = self
+            .core
+            .sources
+            .lock()
+            .map_err(|_| DispatchError::RequiredStateUnavailable)?;
+        for source in sources.iter().filter(|s| {
+            s.plan.source_id == key.source().0 && !s.pre.authority.closed.load(Ordering::Acquire)
+        }) {
+            if source
+                .capacity_activity
+                .lock()
+                .map_err(|_| DispatchError::RequiredStateUnavailable)?
+                .history_busy(key.native_id())
+            {
+                return Ok(false);
+            }
+        }
+        drop(sources);
+        Ok(true)
+    }
     pub(crate) fn acquire_target_replay_read(
         &self,
         proof: ReadTargetProof,
+    ) -> Result<NativeReadAcquisition<P>, DispatchError> {
+        self.acquire_history_replay(proof, None)
+    }
+    pub(crate) fn acquire_history_replay(
+        &self,
+        proof: ReadTargetProof,
+        child: Option<super::NativeSessionKey>,
     ) -> Result<NativeReadAcquisition<P>, DispatchError> {
         self.core.running()?;
         self.core.queue.verify_read_target(&proof)?;
@@ -383,7 +440,7 @@ where
         self.core.tasks.spawn_guarded(
             async move {
                 let result = core
-                    .ensure_target_replay_read(proof, Arc::clone(&completed))
+                    .ensure_target_replay_read(proof, child, Arc::clone(&completed))
                     .await;
                 completed.finish(result.map(|_| ()));
             },

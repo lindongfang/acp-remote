@@ -32,6 +32,7 @@ use crate::{
 pub use coordinator::{
     CachedViewHandle, RevalidationOutcome, TranscriptCacheCoordinator, encode_cache_state_json,
 };
+pub(crate) use digest::IncrementalDigest;
 pub use digest::compute_content_digest;
 pub use store::{CachedPage, PageReadError, TranscriptCacheStore};
 pub use writer::TranscriptCacheWriter;

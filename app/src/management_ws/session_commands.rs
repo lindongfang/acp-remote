@@ -717,7 +717,7 @@ fn view_opened(request: Id128, read: &crate::node::NativeSocketViewRead) -> Valu
         obj.insert("continuable".to_owned(), Value::Bool(tc.continuable));
         obj.insert("cacheWarning".to_owned(), Value::Bool(tc.cache_warning));
     }
-    serde_json::json!({
+    let mut response = serde_json::json!({
         "v": 1,
         "type": "view.opened",
         "requestId": request,
@@ -726,7 +726,11 @@ fn view_opened(request: Id128, read: &crate::node::NativeSocketViewRead) -> Valu
         "snapshotRevision": descriptor.revision().as_u64().to_string(),
         "capabilities": {"opaqueChunks": 1},
         "status": status
-    })
+    });
+    if let Some(page) = read.page_metadata() {
+        response["page"] = page.clone();
+    }
+    response
 }
 #[cfg(windows)]
 fn view_close_result(
@@ -2563,13 +2567,113 @@ pub(super) fn start(
                 }));
                 return None;
             }
-            SessionAction::HistoryPage(_)
+            action @ (SessionAction::HistoryPage(_)
             | SessionAction::ViewOpen { page: Some(_), .. }
-            | SessionAction::ViewOpenSource { page: Some(_), .. } => {
-                return Some(CommandOutcome::Result(management_error(
-                    request,
-                    "unsupported_capability",
-                )));
+            | SessionAction::ViewOpenSource { page: Some(_), .. }) => {
+                use crate::node::native_views::{
+                    SocketRebindTarget,
+                    history::{HistoryError, HistoryRequest},
+                };
+                use session_protocol::{HistoryMode, HistoryPageInput, HistoryTarget};
+                let Some(services) = state.session_services.get().cloned() else {
+                    return Some(CommandOutcome::Result(management_error(
+                        request,
+                        "product_not_ready",
+                    )));
+                };
+                let (input, open) = match action {
+                    SessionAction::HistoryPage(input) => (input.clone(), None),
+                    SessionAction::ViewOpen {
+                        target_id,
+                        reason,
+                        page: Some(page),
+                    } => (
+                        HistoryPageInput {
+                            target: HistoryTarget::Target {
+                                target_id: *target_id,
+                            },
+                            mode: HistoryMode::First {},
+                            turns: page.turns,
+                            child: None,
+                        },
+                        Some(read_reason(*reason)),
+                    ),
+                    SessionAction::ViewOpenSource {
+                        selection,
+                        native_session_id,
+                        reason,
+                        page: Some(page),
+                    } => (
+                        HistoryPageInput {
+                            target: HistoryTarget::Source {
+                                selection: selection.clone(),
+                                native_session_id: native_session_id.clone(),
+                            },
+                            mode: HistoryMode::First {},
+                            turns: page.turns,
+                            child: None,
+                        },
+                        Some(read_reason(*reason)),
+                    ),
+                    _ => {
+                        return Some(CommandOutcome::Result(management_error(
+                            request,
+                            "invalid_request",
+                        )));
+                    }
+                };
+                let target = match &input.target {
+                    HistoryTarget::Target { target_id } => {
+                        SocketRebindTarget::Target(id(*target_id))
+                    }
+                    HistoryTarget::Source {
+                        selection,
+                        native_session_id,
+                    } => match build_source_selection(selection) {
+                        Ok(selection) => SocketRebindTarget::Source {
+                            selection,
+                            native_session_id: native_session_id.clone(),
+                        },
+                        Err(code) => {
+                            return Some(CommandOutcome::Result(management_error(request, code)));
+                        }
+                    },
+                };
+                let client = attachment.client.context.client();
+                let attachment = attachment.clone();
+                let outbound = outbound.clone();
+                let state = state.clone();
+                let actor = actor.clone();
+                pending.push(Box::pin(async move {
+                    let req = HistoryRequest {
+                        input,
+                        open,
+                        identity: state.identity.clone(),
+                    };
+                    let read = match services.views.history(&client, target, req).await {
+                        Ok(value) => value,
+                        Err(HistoryError::View(error)) => {
+                            return view_failure(&state, &actor, request, error).await;
+                        }
+                        Err(HistoryError::Page(error)) => {
+                            use crate::domain::history_page::PageError;
+                            let code = match error {
+                                PageError::InvalidRequest => "invalid_request",
+                                PageError::InvalidCursor => "invalid_cursor",
+                                PageError::StaleCursor => "stale_cursor",
+                                PageError::NotFound => "not_found",
+                                PageError::UnsupportedCapability => "unsupported_capability",
+                            };
+                            return CommandOutcome::Result(management_error(request, code));
+                        }
+                    };
+                    let response = view_opened(request, &read);
+                    match attachment.attach_view_read(read, &outbound) {
+                        Ok(()) => CommandOutcome::Result(management_success(request, &response)),
+                        Err(error) => view_failure(&state, &actor, request, error).await,
+                    }
+                }));
+                return None;
             }
             SessionAction::ViewOpen {
                 target_id,
