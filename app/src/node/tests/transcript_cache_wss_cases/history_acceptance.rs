@@ -1790,6 +1790,24 @@ async fn hn_014_cold_resume_over_25_interactive_turns() {
     Box::pin(check_original_view_append(true)).await;
 }
 
+struct ReplayReleaseFile(std::path::PathBuf);
+
+impl ReplayReleaseFile {
+    fn release(&self) -> std::io::Result<()> {
+        match std::fs::File::create_new(&self.0) {
+            Ok(_) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl Drop for ReplayReleaseFile {
+    fn drop(&mut self) {
+        let _ = self.release();
+    }
+}
+
 async fn follow_local_replay(
     f: &HarnessFixture,
     node: &NodeRuntime,
@@ -1802,8 +1820,8 @@ async fn follow_local_replay(
     use crate::application::shared_views::budget::ReadReason;
     use crate::domain::shared_view::ReadMode;
     use crate::node::native_views::NativeLocalReadProgress;
-    let gate = f.area.directory.join(gate_name);
-    configure(f, &serde_json::json!({"loadBarrierReleaseFile":gate}));
+    let gate = ReplayReleaseFile(f.area.directory.join(gate_name));
+    configure(f, &serde_json::json!({"loadBarrierReleaseFile":gate.0}));
     let views = &node.session_services.as_ref().unwrap().views;
     let policy = node.application_policy().unwrap();
     let actor = policy_actor(&policy, &root.key, &root.id, Id128::new([77; 16])).await;
@@ -1829,7 +1847,7 @@ async fn follow_local_replay(
     assert_ne!(original.descriptor().view_epoch(), meta.view_epoch());
     assert_eq!(follow.descriptor().read_epoch(), Some(meta.read_epoch()));
     assert!(original.inflight_original(&client).await.is_err());
-    std::fs::write(gate, b"done").unwrap();
+    gate.release().unwrap();
     timeout(Duration::from_secs(8), async {
         loop {
             let descriptor = follow.wait_change(&client).await.unwrap();
