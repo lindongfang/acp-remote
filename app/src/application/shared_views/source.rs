@@ -53,6 +53,7 @@ impl<R> Clone for TargetSnapshot<R> {
     }
 }
 pub(crate) struct TargetGeneration<R> {
+    pub replaced: tokio::sync::watch::Sender<bool>,
     pub send: OwnedDisplaySendView,
     pub snapshot: RwLock<Arc<TargetSnapshot<R>>>,
     pub custom_statuses: Mutex<AppendLog<super::segments::CustomStatusEvent>>,
@@ -387,6 +388,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SharedViewOwner<S, R
             segments: segments.snapshot()?,
         });
         let published = Arc::new(TargetGeneration {
+            replaced: tokio::sync::watch::channel(false).0,
             send: target_send,
             snapshot: RwLock::new(snapshot),
             custom_statuses: Mutex::new(AppendLog::new()?),
@@ -949,6 +951,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
             segments: segments.snapshot()?,
         });
         let published = Arc::new(TargetGeneration {
+            replaced: tokio::sync::watch::channel(false).0,
             send: match restored {
                 Some(restored) => restored.view(&self.core.send, descriptor.epoch)?,
                 None => match self.targets.get(key) {
@@ -1443,22 +1446,34 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
                 self.retired.push(candidate);
                 return Ok(());
             }
-            target.current.published.send.seal()?;
-            *target
-                .published
-                .current
-                .write()
-                .map_err(|_| ViewError::ReadFailure)? = Arc::clone(&candidate.published);
-            *target
-                .published
-                .candidate
-                .write()
-                .map_err(|_| ViewError::ReadFailure)? = std::sync::Weak::new();
+            Self::replace_generation(target, &candidate)?;
             let old = std::mem::replace(&mut target.current, candidate);
             self.retired.push(old);
             target.live = None;
         }
         Ok(())
+    }
+    fn replace_generation(
+        target: &TargetWorker<R>,
+        candidate: &GenerationWorker<R>,
+    ) -> Result<(), ViewError> {
+        let mut current = target
+            .published
+            .current
+            .write()
+            .map_err(|_| ViewError::ReadFailure)?;
+        let mut pending = target
+            .published
+            .candidate
+            .write()
+            .map_err(|_| ViewError::ReadFailure)?;
+        let old = &target.current.published;
+        // Publish and mark the old subscription before any sender can observe the sealed fence.
+        old.send.seal_with(|| {
+            *current = Arc::clone(&candidate.published);
+            *pending = std::sync::Weak::new();
+            old.replaced.send_replace(true);
+        })
     }
     fn confirm_current_replay(
         target: &TargetWorker<R>,

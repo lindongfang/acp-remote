@@ -360,6 +360,27 @@ impl SocketTransferStream {
         s.stale_rebind = Some(StaleRebindState::Emitted);
         Ok(())
     }
+    pub(crate) fn with_history_target(
+        &self,
+        client: &SocketViewClient,
+        key: &NativeSessionKey,
+        write: impl FnOnce() -> Result<(), ViewError>,
+    ) -> Result<(), ViewError> {
+        if !self.belongs_to(client) || !self.inner.source.native_matches(key) {
+            return Err(ViewError::InvalidClient);
+        }
+        self.inner
+            .context
+            .lifetime
+            .with_live(|| match self.inner.source.lock()? {
+                SourceGuard::Native { view, guard }
+                    if view.target_generation_current_in(&guard) =>
+                {
+                    write()
+                }
+                _ => Err(ViewError::SourceReleased),
+            })
+    }
     pub(crate) fn view_current(&self) -> Result<bool, ViewError> {
         self.inner.source.current()
     }

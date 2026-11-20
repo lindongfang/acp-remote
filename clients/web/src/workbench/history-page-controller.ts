@@ -11,6 +11,11 @@ interface Port {
   closeSessionView(streamId: string): Promise<unknown>;
   detachSessionStream(streamId: string): void;
 }
+interface HistoryRefresh {
+  open(): Promise<SessionViewOpened>;
+  promote(opened: SessionViewOpened, display: SessionViewDisplay): void;
+}
+
 export class HistoryPageController {
   readonly view: HistoryPageView;
   readonly element: HTMLElement;
@@ -21,10 +26,13 @@ export class HistoryPageController {
   #child?: HistoryPageController;
   #owned = false;
   #closed = false;
+  #invalid = false;
+  #staging?: SessionViewDisplay;
   constructor(private doc: Document, private target: HistoryRequest["target"], private port: Port,
     private transport: ViewDisplayTransport, private child?: string,
-    private reload?: (turns?: string) => void, private current = () => true, private retireInitial?: () => void) {
+    private reload?: (turns?: string) => void, private current = () => true, private retireInitial?: () => void, private refreshLatest?: HistoryRefresh) {
     this.view = new HistoryPageView(doc, direction => void this.navigate(direction), () => void this.first());
+    this.view.refresh.addEventListener("click", () => void this.refresh());
     this.element = this.view.element;
     if (child === undefined) this.childControls();
   }
@@ -68,8 +76,75 @@ export class HistoryPageController {
     this.view.show(opened.page, display.element);
   }
 
+  invalidate(id: string): void {
+    if (!this.#active || !this.current()) return;
+    if (id === this.#staging?.streamId) {
+      this.refreshFailed("刷新期间历史再次更新。");
+      return;
+    }
+    if (this.#invalid || this.#display?.streamId !== id || !this.#page?.liveTail) return;
+    ++this.#attempt;
+    this.#invalid = true;
+    this.view.invalidated();
+  }
+
+  private discardStaging(): void {
+    if (!this.#staging) return;
+    this.close(this.#staging.streamId);
+    this.#staging.dispose();
+    this.#staging = undefined;
+  }
+
+  private refreshFailed(reason: string): void {
+    ++this.#attempt;
+    this.discardStaging();
+    this.view.refresh.disabled = false;
+    this.view.invalidated(reason);
+  }
+
+  private async refresh(): Promise<void> {
+    const refresh = this.refreshLatest;
+    if (!this.#invalid || !this.#active || !this.current() || !refresh || this.view.refresh.disabled) return;
+    const attempt = ++this.#attempt;
+    const current = () => this.#active && this.current() && attempt === this.#attempt;
+    const failed = (reason: string) => {
+      if (!current() || !this.#invalid) return;
+      this.refreshFailed(reason);
+    };
+    this.view.refresh.disabled = true;
+    try {
+      const opened = await refresh.open();
+      if (!current()) { this.close(opened.streamId); return; }
+      if (!opened.page) { this.close(opened.streamId); throw new Error("节点未返回分页元数据"); }
+      let display: SessionViewDisplay;
+      try {
+        display = new SessionViewDisplay(this.doc, opened, {
+          ...this.transport,
+          turnStarted: turn => this.turnStarted(turn),
+          readFailed: failed,
+          reopenRequested: full => {
+            if (this.#display === display && this.#active && this.current()) this.transport.reopenRequested?.(full);
+          },
+          snapshotReady: () => {
+            if (!current() || this.#staging !== display) return;
+            this.#staging = undefined;
+            if (!this.#owned) this.retireInitial?.();
+            this.release();
+            this.#closed = false;
+            this.#invalid = false;
+            this.view.refresh.disabled = false;
+            this.attach(opened, display);
+            refresh.promote(opened, display);
+          },
+        });
+      } catch (error) { this.close(opened.streamId); throw error; }
+      this.#staging = display;
+      display.start();
+    } catch (error) { failed(managementErrorMessage(error)); }
+  }
+
   turnStarted(turn: string): void {
-    if (!this.#page?.liveTail || this.#owned) return;
+    if (!this.#page?.liveTail || this.#invalid) return;
     this.#page = { ...this.#page, lastTurn: turn, totalTurns: turn, firstTurn: this.#page.firstTurn ?? turn };
     this.view.describe(this.#page);
   }
@@ -87,7 +162,7 @@ export class HistoryPageController {
   }
 
   private async request(mode: HistoryRequest["mode"], coordinate?: string): Promise<void> {
-    if (!this.#active) return;
+    if (!this.#active || this.#invalid) return;
     const attempt = ++this.#attempt;
     let turns: string | undefined;
     try { if (this.view.turns.value) turns = historyTurns(this.view.turns.value); }
@@ -146,6 +221,11 @@ export class HistoryPageController {
     this.#owned = false;
   }
   accept(frame: ViewDataFrame): boolean {
+    if (this.#staging?.streamId === frame.streamId) {
+      if (this.current()) this.#staging.accept(frame);
+      return true;
+    }
+    if (this.#invalid && frame.streamId === this.#display?.streamId) return true;
     if (this.#child?.accept(frame)) return true;
     if (!this.#active || !this.#owned || frame.streamId !== this.#display?.streamId) return false;
     this.#display.accept(frame);
@@ -153,6 +233,8 @@ export class HistoryPageController {
   }
   suspend(): void {
     this.#active = false;
+    this.discardStaging();
+    this.view.refresh.hidden = true;
     ++this.#attempt;
     this.element.dataset.stale = "true";
     this.view.notice.textContent = "连接已中断，当前显示旧视图。";

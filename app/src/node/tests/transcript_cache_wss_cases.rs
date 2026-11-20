@@ -246,7 +246,7 @@ async function handleRequest(msg) {
     for (let i = 1; i <= Number(latest.replayTurns ?? 0); i++) {
       const original = latest.externalRewrite && i > 2 ? i + 2 : i;
       const suffix = String(original).padStart(4, "0");
-      const prefix = latest.externalRewrite && original === 10 ? "edited" : (latest.turnPrefix ?? "U");
+      const prefix = (latest.externalRewrite && original === 10 || latest.editTurn === i) ? "edited" : (latest.turnPrefix ?? "U");
       const emit = update => send({method:"session/update",params:{sessionId:sid,update}});
       emit({sessionUpdate:"user_message_chunk",...(latest.anonymousTurns ? {} : {messageId:String(original)}),
             content:{type:"text",text:prefix + suffix}});

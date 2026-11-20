@@ -4,6 +4,7 @@ export type HistoryDirection = "older" | "newer";
 export class HistoryPageView {
   readonly element: HTMLElement;
   readonly notice: HTMLElement;
+  readonly refresh: HTMLButtonElement;
   readonly body: HTMLElement;
   readonly turns: HTMLInputElement;
   readonly #bar: HTMLElement;
@@ -38,11 +39,22 @@ export class HistoryPageView {
     this.#bar.hidden = true;
     this.notice = doc.createElement("p");
     this.notice.setAttribute("role", "status");
+    this.refresh = doc.createElement("button");
+    this.refresh.type = "button";
+    this.refresh.textContent = "刷新历史";
+    this.refresh.hidden = true;
     this.body = doc.createElement("div");
-    this.element.append(this.#bar, this.notice, this.body);
+    this.element.append(this.#bar, this.notice, this.refresh, this.body);
+  }
+
+  invalidated(reason?: string): void {
+    this.#bar.hidden = true;
+    this.refresh.hidden = false;
+    this.notice.textContent = ["历史已更新，请刷新", reason].filter(Boolean).join("。");
   }
 
   show(page: HistoryPage, content: HTMLElement): void {
+    this.refresh.hidden = true;
     this.describe(page);
     this.element.removeAttribute("data-stale");
     this.body.replaceChildren(content);

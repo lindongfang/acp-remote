@@ -23,7 +23,7 @@ function observe(page) {
       const frame = JSON.parse(payload);
       if (frame.type !== "command") return;
       requests.set(frame.requestId, frame.action);
-      wire.push({ action: frame.action, mode: frame.payload.mode, reason: frame.payload.reason, sentAt: Date.now() });
+      wire.push({ action: frame.action, mode: frame.payload.mode, reason: frame.payload.reason, payload: frame.payload, sentAt: Date.now() });
     });
     socket.on("framereceived", ({ payload }) => {
       if (typeof payload !== "string") return;
@@ -36,6 +36,68 @@ function observe(page) {
 async function paired(name) {
   const ctx = await browser.newContext({ ignoreHTTPSErrors: true });
   const page = await ctx.newPage();
+  if (!cfg.realCodexMode) await page.addInitScript(() => {
+    const NativeSocket = window.WebSocket;
+    window.WebSocket = class extends NativeSocket {
+      constructor(...args) {
+        super(...args);
+        this.addEventListener("message", event => {
+          if (!event.isTrusted) return;
+          const deliver = data => this.dispatchEvent(new MessageEvent("message", {data}));
+          if (window.hnFault && typeof event.data === "string") {
+            const frame = JSON.parse(event.data);
+            if (frame.type === "result" && frame.requestId === window.hnRequest) {
+              if (window.hnFault === "retry") {
+                event.stopImmediatePropagation();
+                window.hnRelease = () => deliver(event.data);
+              } else {
+                window.hnLateResult = () => deliver(event.data);
+                if (window.hnFault === "request") {
+                  event.stopImmediatePropagation();
+                  deliver(JSON.stringify({...frame,ok:false,result:null,error:{code:"not_found"}}));
+                }
+              }
+            }
+          }
+          if (window.hnFault === "receive" && event.data instanceof ArrayBuffer && new Uint8Array(event.data)[56] === 4) {
+            event.stopImmediatePropagation();
+            const invalid = event.data.slice(0);
+            const header = new DataView(invalid);
+            header.setBigUint64(24,header.getBigUint64(24)+1n);
+            window.hnFailReceive = () => deliver(invalid);
+            window.hnLateSnapshot = () => deliver(event.data);
+          }
+          if (!window.hnCapture) return;
+          if (typeof event.data === "string") {
+            if (JSON.parse(event.data).type === "history.invalidated") {
+              window.hnReplay = () => {
+                this.dispatchEvent(new MessageEvent("message", {data:event.data}));
+                this.dispatchEvent(new MessageEvent("message", {data:window.hnOldBody}));
+              };
+            }
+          } else if (event.data instanceof ArrayBuffer && new Uint8Array(event.data)[56] === 1) {
+            window.hnOldBody = event.data;
+          }
+        });
+      }
+      send(data) {
+        if (window.hnFault && typeof data === "string") {
+          const frame = JSON.parse(data);
+          if (frame.action === "view.open") window.hnRequest = frame.requestId;
+        }
+        if (window.hnOrdinary && typeof data === "string") {
+          const frame = JSON.parse(data);
+          if (frame.action === "view.open") {
+            window.hnOrdinary = false;
+            delete frame.payload.page;
+            frame.payload.reason = "reopen";
+            data = JSON.stringify(frame);
+          }
+        }
+        super.send(data);
+      }
+    };
+  });
   if (name === "a") observe(page);
   const file = path.join(cfg.workDir, `pairing-${name}.json`);
   for (let i = 0; !existsSync(file) && i < 200; i++) await sleep(100);
@@ -157,6 +219,87 @@ try {
       readFailure: visibleText.includes("读取或展示准备失败"),
     };
   }
+
+  report.stage = "HN-030 two-browser manual refresh";
+  writeFileSync(path.join(cfg.peerStateDir,"manual-refresh"),"1");
+  await a.evaluate(() => { window.hnCapture = true; });
+  await count.fill("5");
+  await button(root,"重新加载首页").click();
+  await groups(root,8,12);
+  await root.getByText("HN new turn 12",{exact:true}).first().waitFor();
+  const beforeChange = wire.length;
+  writeFileSync(path.join(cfg.peerStateDir,"edit-twelfth"),"1");
+  await b.evaluate(() => { window.hnOrdinary = true; });
+  await button(b,"打开共享视图").first().click();
+  await root.getByText("历史已更新，请刷新",{exact:true}).waitFor();
+  await a.evaluate(() => {
+    if (!(window.hnOldBody instanceof ArrayBuffer)) throw Error("missing old body frame");
+    window.hnReplay();
+  });
+  const reads = () => wire.slice(beforeChange).filter(e => ["view.open","view.open_source","history.page","view.rebind"].includes(e.action));
+  assert.equal(reads().length,0);
+  assert.equal(await button(root,"刷新历史").count(),1);
+  await root.getByText("HN new turn 12",{exact:true}).first().waitFor();
+  await a.evaluate(() => { window.hnCapture = false; });
+  await button(root,"刷新历史").click();
+  await root.getByText("HN edited turn 12",{exact:true}).first().waitFor();
+  await a.evaluate(() => window.hnReplay());
+  await groups(root,8,12);
+  assert.deepEqual(reads().map(e => e.payload),[{targetId,reason:"explicit_refresh",page:{turns:"5"}}]);
+  assert.equal(await root.getByText("历史已更新，请刷新",{exact:true}).count(),0);
+  assert.equal(await root.getByText("HN new turn 12",{exact:true}).count(),0);
+  report.steps.push("HN-030: old wire frames replayed before and after one explicit five-turn refresh; unchanged visible turns 8–12");
+  for (const failure of ["request","receive"]) {
+    report.stage = "HN-030 " + failure + " failure and manual retry";
+    const oldText = failure === "request" ? "HN edited turn 12" : "HN new turn 12";
+    const newText = failure === "request" ? "HN new turn 12" : "HN edited turn 12";
+    writeFileSync(path.join(cfg.peerStateDir,"edit-twelfth"),failure === "request" ? "0" : "1");
+    await b.evaluate(() => { window.hnOrdinary = true; });
+    await button(b,"打开共享视图").first().click();
+    await root.getByText("历史已更新，请刷新",{exact:true}).waitFor();
+    const initial = reads().length;
+    await a.evaluate(mode => { window.hnFault = mode; window.hnRelease = undefined; },failure);
+    await button(root,"刷新历史").click();
+    if (failure === "receive") {
+      await a.waitForFunction(() => typeof window.hnFailReceive === "function");
+      assert.equal(await root.getByText(newText,{exact:true}).count(),0);
+      await root.getByText(oldText,{exact:true}).first().waitFor();
+      await a.evaluate(() => window.hnFailReceive());
+    }
+    await root.getByText(/历史已更新，请刷新。/).waitFor();
+    if (failure === "receive") assert.match(await root.innerText(),/invalid_sequence/);
+    await root.getByText(oldText,{exact:true}).first().waitFor();
+    assert.equal(reads().length,initial+1);
+    await a.evaluate(() => { window.hnFault = "retry"; });
+    await button(root,"刷新历史").click();
+    await a.waitForFunction(() => typeof window.hnRelease === "function");
+    const late = () => a.evaluate(() => { window.hnLateResult(); window.hnLateSnapshot?.(); });
+    await late();
+    await root.getByText(oldText,{exact:true}).first().waitFor();
+    await a.evaluate(() => { window.hnFault = null; window.hnRelease(); });
+    await root.getByText(newText,{exact:true}).first().waitFor();
+    await late();
+    await groups(root,8,12);
+    assert.equal(await root.getByText(oldText,{exact:true}).count(),0);
+    assert.deepEqual(reads().slice(initial).map(r=>r.payload),Array(2).fill({targetId,reason:"explicit_refresh",page:{turns:"5"}}));
+    report.steps.push("HN-030 " + failure + " failure retained old page; stale response isolated during and after retry");
+  }
+  report.stage = "HN-030 revoke while reader awaits refreshed page";
+  writeFileSync(path.join(cfg.peerStateDir,"edit-twelfth"),"0");
+  await b.evaluate(() => { window.hnOrdinary = true; });
+  await button(b,"打开共享视图").first().click();
+  await root.getByText("历史已更新，请刷新",{exact:true}).waitFor();
+  await a.evaluate(() => { window.hnFault = "retry"; window.hnRelease = undefined; });
+  await button(root,"刷新历史").click();
+  await a.waitForFunction(() => typeof window.hnRelease === "function");
+  const revoked = b.locator("article.device-card").filter({has:b.getByRole("heading",{name:"HN a",exact:true})});
+  await button(revoked,"撤销此客户端").click();
+  await button(b,"确认撤销").click();
+  await a.locator("#pairing-code").waitFor({state:"visible"});
+  await a.evaluate(() => { window.hnReplay(); window.hnRelease(); window.hnLateSnapshot?.(); });
+  assert.equal(await history(a).count(),0);
+  assert.doesNotMatch(await a.locator("body").innerText(),/HN (edited|new) turn 12|历史已更新，请刷新/);
+  report.steps.push("HN-030 revoked reader returned to pairing and late frames left protected content absent");
   }
   report.status = "passed";
 } catch (error) {

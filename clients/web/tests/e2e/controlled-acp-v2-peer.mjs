@@ -213,8 +213,12 @@ rl.on("line", (line) => {
           params: { sessionId, update: { sessionUpdate, messageId: id, content: { type: "text", text } } },
         });
         update("agent_message_chunk", "HN prelude", "prelude");
-        for (let turn = 1; turn <= (sessionId === "child-history" ? 12 : 25); turn++) {
-          update("user_message_chunk", `HN ${version} turn ${turn}`, String(turn));
+        const manualRefresh = existsSync(path.join(stateDir, "manual-refresh"));
+        const editFile = path.join(stateDir, "edit-twelfth");
+        const edited = existsSync(editFile) && readFileSync(editFile, "utf8") === "1";
+        for (let turn = 1; turn <= (sessionId === "child-history" || manualRefresh ? 12 : 25); turn++) {
+          const prefix = manualRefresh && edited && turn === 12 ? "edited" : version;
+          update("user_message_chunk", `HN ${prefix} turn ${turn}`, String(turn));
         }
       }
       const entries = historyTexts.length > 0 ? historyTexts : ["E2E重放历史输出"];

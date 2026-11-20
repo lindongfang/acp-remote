@@ -37,12 +37,21 @@ pub(super) struct BoundHistory {
     pub key: NativeSessionKey,
     pub tc: Arc<TranscriptCacheCoordinator>,
     pub metadata: Value,
+    replacement: Option<tokio::sync::watch::Receiver<bool>>,
 }
 #[derive(Clone)]
 pub struct HistoryRequest {
     pub input: HistoryPageInput,
     pub identity: Arc<NodeIdentity>,
     pub open: Option<ReadReason>,
+}
+impl NativeSocketViewRead {
+    pub(crate) fn history_subscription(
+        &self,
+    ) -> Option<(NativeSessionKey, tokio::sync::watch::Receiver<bool>)> {
+        let history = self.history.as_ref()?;
+        Some((history.key.clone(), history.replacement.clone()?))
+    }
 }
 impl HistoryRequest {
     fn check_child_boundaries(
@@ -394,10 +403,15 @@ impl HistoryRequest {
                     ),
                 },
             );
+        let replacement = window
+            .live
+            .then(|| read.reader.history_replacement(client, &read.read))
+            .transpose()?;
         read.reader
             .select_history_window(client, &read.read, window, tail)?;
         read.reader.check_current(client, key).await?;
         read.history = Some(BoundHistory {
+            replacement,
             request,
             key: key.clone(),
             tc: tc.clone(),
@@ -547,6 +561,7 @@ impl CachedHistory<'_> {
             read,
             reader,
             history: Some(BoundHistory {
+                replacement: None,
                 request,
                 key,
                 tc: tc.clone(),

@@ -2669,7 +2669,10 @@ pub(super) fn start(
                     };
                     let response = view_opened(request, &read);
                     match attachment.attach_view_read(read, &outbound) {
-                        Ok(()) => CommandOutcome::Result(management_success(request, &response)),
+                        Ok(announce) => CommandOutcome::ViewOpened(
+                            management_success(request, &response),
+                            announce,
+                        ),
                         Err(error) => view_failure(&state, &actor, request, error).await,
                     }
                 }));
@@ -2700,7 +2703,10 @@ pub(super) fn start(
                     };
                     let response = view_opened(request, &read);
                     match attachment.attach_view_read(read, &outbound) {
-                        Ok(()) => CommandOutcome::Result(management_success(request, &response)),
+                        Ok(announce) => CommandOutcome::ViewOpened(
+                            management_success(request, &response),
+                            announce,
+                        ),
                         Err(error) => view_failure(&state, &actor, request, error).await,
                     }
                 }));
@@ -2741,7 +2747,10 @@ pub(super) fn start(
                     };
                     let response = view_opened(request, &read);
                     match attachment.attach_view_read(read, &outbound) {
-                        Ok(()) => CommandOutcome::Result(management_success(request, &response)),
+                        Ok(announce) => CommandOutcome::ViewOpened(
+                            management_success(request, &response),
+                            announce,
+                        ),
                         Err(error) => view_failure(&state, &actor, request, error).await,
                     }
                 }));
@@ -2777,7 +2786,10 @@ pub(super) fn start(
                     };
                     let response = view_opened(request, &read);
                     match attachment.attach_view_read(read, &outbound) {
-                        Ok(()) => CommandOutcome::Result(management_success(request, &response)),
+                        Ok(announce) => CommandOutcome::ViewOpened(
+                            management_success(request, &response),
+                            announce,
+                        ),
                         Err(error) => view_failure(&state, &actor, request, error).await,
                     }
                 }));

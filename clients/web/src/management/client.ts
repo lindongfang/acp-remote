@@ -1,6 +1,6 @@
 import type { HistoryRequest } from "./session-protocol/history";
 import { randomId128 } from "../protocol/pairing";
-import type { JsonValue } from "../protocol/jws";
+import { decodeBase64urlStrict, encodeBase64url, type JsonValue } from "../protocol/jws";
 import {
   CONTROL_PATH,
   CONTROL_PROTOCOL,
@@ -198,6 +198,7 @@ export interface ManagementClose {
 export interface ManagementConnectionCallbacks {
   readonly onDevicesChanged?: (revision: number) => void;
   readonly onSessionControlChanged?: (frame: SessionControlChangedFrame) => void;
+  readonly onHistoryInvalidated?: (streamId: string) => void;
   readonly onViewData?: (frame: ViewDataFrame) => void;
   readonly onClose?: (close: ManagementClose) => void;
 }
@@ -238,6 +239,8 @@ export class ManagementConnection {
   ) => WebSocket;
   readonly #callbacks: ManagementConnectionCallbacks;
   readonly #pending = new Map<string, PendingRequest>();
+  #refreshPrefix?: string;
+  #refreshSequence = 0;
   #inbound: Promise<void> = Promise.resolve();
   readonly #inputAckTracker = new InflightInputAcknowledgementTracker();
   #state: ConnectionState = "idle";
@@ -808,6 +811,24 @@ export class ManagementConnection {
     return descriptor;
   }
 
+  // A connection-local prefix and sequence recognize retired attempts without retaining
+  // request IDs or history content for the lifetime of a slow management connection.
+  #viewRequestId(manualRefresh: boolean): string {
+    if (!manualRefresh) return randomId128();
+    this.#refreshPrefix ??= randomId128().slice(0, 16);
+    if (this.#refreshSequence === 0xffffffff) throw new ManagementProtocolError("invalid_response");
+    const bytes = new Uint8Array(4);
+    new DataView(bytes.buffer).setUint32(0, ++this.#refreshSequence);
+    return this.#refreshPrefix + encodeBase64url(bytes);
+  }
+
+  #issuedRefresh(id: string): boolean {
+    if (!this.#refreshPrefix || !id.startsWith(this.#refreshPrefix)) return false;
+    const bytes = decodeBase64urlStrict(id.slice(16));
+    const sequence = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(0);
+    return sequence > 0 && sequence <= this.#refreshSequence;
+  }
+
   async openSessionView(
     targetId: string,
     reason:
@@ -817,14 +838,16 @@ export class ManagementConnection {
       | "reconnect"
       | "reacquire",
     page?: { turns?: string },
+    manualRefresh = false,
   ): Promise<SessionViewOpened> {
-    return await this.#command(
+    return await this.#commandWithId(
       "view.open",
       {
         targetId: requireSessionId(targetId),
         reason,
         ...(page === undefined ? {} : { page }),
       },
+      this.#viewRequestId(manualRefresh),
       parseSessionViewOpened,
     );
   }
@@ -839,11 +862,12 @@ export class ManagementConnection {
       | "reconnect"
       | "reacquire",
     page?: { turns?: string },
+    manualRefresh = false,
   ): Promise<SessionViewOpened> {
     const command = parseSessionCommand(JSON.stringify({
       v: 1,
       type: "command",
-      requestId: randomId128(),
+      requestId: this.#viewRequestId(manualRefresh),
       action: "view.open_source",
       payload: {
         selection,
@@ -1294,6 +1318,10 @@ export class ManagementConnection {
       return;
     }
 
+    if (frame.type === "history.invalidated") {
+      this.#callbacks.onHistoryInvalidated?.(frame.streamId);
+      return;
+    }
     if (frame.type === "devices.changed") {
       this.#callbacks.onDevicesChanged?.(frame.revision);
       return;
@@ -1486,6 +1514,7 @@ export class ManagementConnection {
   ): void {
     const pending = this.#pending.get(frame.requestId);
     if (pending === undefined) {
+      if (this.#issuedRefresh(frame.requestId)) return;
       this.#failProtocol(
         new ManagementProtocolError("invalid_response"),
         "unexpected result",

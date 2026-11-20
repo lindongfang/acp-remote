@@ -317,6 +317,23 @@ describe("C50 authenticated request isolation", () => {
     },
   );
 
+  it("isolates a late result for a retired manual history refresh", async () => {
+    const { connection, fake, commands, answer } = await connectedErrorFixture();
+    try {
+      const first = connection.openSessionView(id(11), "explicit_refresh", { turns:"5" }, true);
+      const oldId = commands()[0]!.requestId;
+      fake.receive({ v:1, type:"result", requestId:oldId, ok:false, result:null, error:{code:"not_found"} });
+      await expect(first).rejects.toMatchObject({code:"not_found"});
+      const current = connection.nodeInfo();
+      const currentId = commands()[1]!.requestId;
+      answer(oldId);
+      answer(currentId);
+      await expect(current).resolves.toMatchObject({status:"ready"});
+      answer(oldId);
+      expect(fake.closeCalls).toHaveLength(0);
+    } finally { connection.disconnect(); }
+  });
+
   it.each(["unknown", "duplicate"] as const)("keeps %s result request identity fatal", async (kind) => {
     const { connection, fake, commands } = await connectedErrorFixture();
     try {
@@ -366,6 +383,8 @@ describe("management frame parsing", () => {
         revision: 1,
         padding: "x".repeat(33 * 1024),
       }),
+      JSON.stringify({ v: 1, type: "history.invalidated", streamId: id(42), cursor: "extra" }),
+      '{"v":1,"type":"history.invalidated","streamId":"bad"}',
       '{"v":1,"type":"unknown"}',
     ];
     for (const value of cases) {
@@ -543,6 +562,7 @@ describe("management WebSocket client", () => {
       ["acpr.access.v1"],
     );
     const changes: number[] = [];
+    const invalidated: string[] = [];
     const connection = new ManagementConnection(
       expected,
       client.privateKey,
@@ -557,6 +577,7 @@ describe("management WebSocket client", () => {
         },
         callbacks: {
           onDevicesChanged: (revision) => changes.push(revision),
+          onHistoryInvalidated: stream => invalidated.push(stream),
         },
       },
     );
@@ -756,6 +777,8 @@ describe("management WebSocket client", () => {
     expect(page.items[0]?.clientId).toBe(clientId);
     await connection.subscribeDevices();
     await vi.waitFor(() => expect(changes).toContain(9));
+    fake.receive({ v: 1, type: "history.invalidated", streamId: id(42) });
+    await vi.waitFor(() => expect(invalidated).toEqual([id(42)]));
     const queue = await connection.inspectSessionQueue(id(15));
     expect(queue).toMatchObject({
       stopReason: "max_tokens",

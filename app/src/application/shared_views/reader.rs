@@ -838,6 +838,7 @@ where
             let guard = slot.data.lock().map_err(|_| ViewError::ReadFailure)?;
             let data = guard.as_ref().ok_or(ViewError::StaleCursor)?;
             Arc::new(TargetGeneration {
+                replaced: tokio::sync::watch::channel(false).0,
                 send: data
                     .generation
                     .send
@@ -867,6 +868,20 @@ where
             .snapshot
             .projection
             .clone())
+    }
+    pub(crate) fn history_replacement(
+        &self,
+        client: &C,
+        read: &OpenedView,
+    ) -> Result<tokio::sync::watch::Receiver<bool>, ViewError> {
+        let slot = self.slot(client, read)?;
+        let data = slot.data.lock().map_err(|_| ViewError::ReadFailure)?;
+        Ok(data
+            .as_ref()
+            .ok_or(ViewError::StaleCursor)?
+            .generation
+            .replaced
+            .subscribe())
     }
     pub(crate) fn select_history_window(
         &self,

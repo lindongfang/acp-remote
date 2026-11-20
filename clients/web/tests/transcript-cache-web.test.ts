@@ -8,10 +8,12 @@ import { readSessionViewStatus } from "../src/management/session-view-status";
 import { SessionViewDisplay } from "../src/management/session-view-display";
 import { SharedViewController } from "../src/workbench/shared-view-controller";
 import type { SessionViewOpened } from "../src/management/session-protocol";
+import { managementErrorMessage } from "../src/workbench/error-formatting";
+import { ManagementRequestError } from "../src/management/client";
 import type { ManagementConnection } from "../src/management/client";
 import type { IdentityRecord } from "../src/pairing/identity";
 import { PROJECTION_FIELDS } from "../src/views/projection";
-import type { ViewDataFrame, ViewRecordKind } from "../src/views/binary";
+import type { ViewDataFrame, PagedViewRecordKind } from "../src/views/binary";
 
 const STREAM_A = b64(1);
 const STREAM_B = b64(2);
@@ -209,7 +211,7 @@ function makeFrame(
   streamId: string,
   seq: bigint,
   recordId: bigint,
-  kind: ViewRecordKind,
+  kind: PagedViewRecordKind,
   payload: Uint8Array,
 ): ViewDataFrame {
   return {
@@ -331,6 +333,121 @@ function feedTextMessage(
   accept(makeFrame(streamId, seqStart + 1n, rawRecordId + 100n, "item_projection", projBytes));
   return seqStart + 2n;
 }
+
+describe("HN-030 manual history refresh", () => {
+  const paged = (id: string): SessionViewOpened => ({
+    ...makeOpened(id), page: {
+      generationId: id, source: "replay", turnStatus: "provable", order: "ascending",
+      totalTurns: "12", firstTurn: "8", lastTurn: "12", prelude: false,
+      turns: Array.from({length:5}, (_,i) => ({turn:String(i+8),firstPosition:String(i+1)})),
+      olderCursor:"before", newerCursor:null, relocated:false, continuity:"same_generation", liveTail:true,
+    },
+  });
+  const selection = {sourceId:SOURCE_ID,harnessId:b64(7),profileId:b64(8),profileRevision:"1",workspaceId:b64(9),launchPath:"fixture"};
+  async function fixture(source = false, invalidated = true) {
+    const doc = new DomDoc() as unknown as Document;
+    const open = vi.fn(async () => paged(STREAM_A));
+    const connection = { openSessionView:open, openSourceSessionView:open, detachSessionStream:vi.fn(), closeSessionView:vi.fn(async () => ({})), sendSessionViewCredit:vi.fn() };
+    const host = new DomNode("div");
+    const controller = new SharedViewController({
+      getManagement:() => connection as unknown as ManagementConnection, getManagementGeneration:() => 1,
+      getInspectedQueueTargetId:() => TARGET_ID, getDocument:() => doc,
+      getSharedViewHost:() => host as unknown as HTMLElement, renderDashboard:vi.fn(),
+    });
+    if (source) {
+      await controller.openSharedSourceView({} as IdentityRecord,selection,"native-R",null,"first_open",{turns:"5"});
+    } else {
+      controller.restoreSharedViewSpec({kind:"target",targetId:TARGET_ID});
+      await controller.openSharedSessionView({} as IdentityRecord,TARGET_ID,null,"first_open",{turns:"5"});
+    }
+    const body = controller.sharedSessionDisplay!.element as unknown as DomNode;
+    const send = (frame: ViewDataFrame) => controller.acceptViewFrame(frame);
+    const end = (id:string, seq:bigint) => send(makeFrame(id,seq,200n,"snapshot_end",new Uint8Array()));
+    const message = (id:string,seq:bigint,marker:string) => feedTextMessage(send,id,SEG_A,seq,1n,1n,marker);
+    const pageMessages = (id: string, last: string) => {
+      let sequence = 1n;
+      for (let turn = 8; turn <= 12; turn++) {
+        const position = BigInt(turn - 7);
+        sequence = feedTextMessage(send, id, SEG_A, sequence, position, position, turn === 12 ? last : "turn-" + turn);
+      }
+      return sequence;
+    };
+    end(STREAM_A,pageMessages(STREAM_A,"old twelve"));
+    expect(body.findAll(n => n.tagName === "H3" && /^第 /.test(n.textContent)).map(n => n.textContent)).toEqual([8,9,10,11,12].map(n => "第 " + n + " 轮"));
+    expect(body.textContent).toContain("old twelve");
+    const notify = () => controller.historyInvalidated(STREAM_A);
+    if (invalidated) {
+      notify(); notify();
+      message(STREAM_A,4n,"ignored late data");
+      expect(body.textContent).not.toContain("ignored late data");
+    }
+    expect(open).toHaveBeenCalledTimes(1);
+    const buttons = body.findAll(n => n.tagName === "BUTTON" && n.textContent === "刷新历史");
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]!.hidden).toBe(!invalidated);
+    return { controller, body, open, connection, button:buttons[0]!, end, message, pageMessages, notify, send };
+  }
+  it.each(["request","receive"])("retains the original page through %s failure and retries once", async failure => {
+    const source = failure === "receive";
+    const {body,open,button,end,message,pageMessages,notify} = await fixture(source);
+    if (failure === "request") open.mockRejectedValueOnce(new ManagementRequestError("not_found"));
+    else open.mockResolvedValueOnce(paged(STREAM_B));
+    button.click();
+    await Promise.resolve();
+    if (failure === "receive") {
+      message(STREAM_B,1n,"partial twelve");
+      expect(body.textContent).not.toContain("partial twelve");
+      end(STREAM_B,7n);
+    }
+    expect(body.textContent).toContain("old twelve");
+    expect(body.textContent).toContain("历史已更新，请刷新");
+    expect(body.textContent).toContain(failure === "receive" ? "invalid_sequence" : managementErrorMessage(new ManagementRequestError("not_found")));
+    expect(button.disabled).toBe(false);
+    expect(open).toHaveBeenCalledTimes(2);
+    open.mockResolvedValueOnce(paged(b64(9)));
+    button.click(); button.click();
+    await Promise.resolve();
+    end(STREAM_B,3n);
+    const seq = pageMessages(b64(9),"new twelve");
+    expect(body.textContent).toContain("old twelve");
+    expect(body.textContent).not.toContain("new twelve");
+    end(b64(9),seq);
+    notify(); end(STREAM_B,3n); message(STREAM_A,4n,"old late");
+    expect(body.textContent).toContain("new twelve");
+    expect(body.textContent).not.toMatch(/old twelve|请刷新|old late|invalid_sequence/);
+    expect(open.mock.calls.slice(1)).toEqual(Array(2).fill(source ? [selection,"native-R","explicit_refresh",{turns:"5"},true] : [TARGET_ID,"explicit_refresh",{turns:"5"},true]));
+  });
+  it("renders the unchanged stream's next turn once without reopening", async () => {
+    const {body,open,button,send} = await fixture(false,false);
+    send(makeFrame(STREAM_A,12n,201n,"turn_start",new TextEncoder().encode(JSON.stringify({turn:"13",firstPosition:"6"}))));
+    const bytes = makeRawTextFrame("nat-1","m-13","appended thirteen");
+    send(makeFrame(STREAM_A,13n,6n,"original_raw",bytes));
+    send(makeFrame(STREAM_A,14n,106n,"item_projection",encodeContentProjection(STREAM_A,SEG_A,6n,6n,6n,6n,bytes,"appended thirteen")));
+    expect(body.textContent.match(/appended thirteen/g)).toHaveLength(1);
+    expect(body.textContent).toContain("第 8–13 轮");
+    expect(button.hidden).toBe(true);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+  it.each(["switch","revoke"])("discards a pending refresh after %s", async action => {
+    const {controller,button,open,connection,end,pageMessages,notify} = await fixture();
+    let resolve!: (opened:SessionViewOpened) => void;
+    open.mockReturnValueOnce(new Promise(r => {resolve = r}));
+    button.click();
+    if (action === "revoke") controller.disposeSharedViews();
+    else {
+      open.mockResolvedValueOnce(paged(b64(11)));
+      await controller.openSharedSourceView({} as IdentityRecord,selection,"other-session",null);
+      end(b64(11),pageMessages(b64(11),"other session twelve"));
+    }
+    resolve(paged(STREAM_B));
+    await Promise.resolve();
+    expect(connection.closeSessionView).toHaveBeenCalledWith(STREAM_B);
+    notify();
+    expect(end(STREAM_B,1n)).toBe(false);
+    if (action === "revoke") expect(controller.sharedSessionDisplay).toBeNull();
+    else expect((controller.sharedSessionDisplay!.element as unknown as DomNode).textContent).toContain("other session twelve");
+  });
+});
 
 describe("STC-002 Web strict protocol & status schema validation", () => {
   it("validates closedWithOptional, optional status fields, and transcript_cache_state status", () => {

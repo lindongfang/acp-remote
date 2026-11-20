@@ -2030,6 +2030,13 @@ async fn check_original_view_append(interactive: bool) {
         loop {
             let msg = reader.next().await.unwrap().unwrap();
             let Message::Binary(bytes) = msg else {
+                if let Message::Text(text) = msg {
+                    let event: serde_json::Value = serde_json::from_str(&text).unwrap();
+                    assert_ne!(
+                        event["type"], "history.invalidated",
+                        "unchanged replay interrupted live tail"
+                    );
+                }
                 continue;
             };
             let (h, payload) = TransferHeader::decode(&bytes).unwrap();
@@ -2271,6 +2278,251 @@ async fn check_schema_degradation(migration_fault: bool) {
     let before = Sha256::digest(std::fs::read(&path).unwrap());
     Box::pin(check_degraded_prompt_and_approval(&f)).await;
     assert_eq!(Sha256::digest(std::fs::read(path).unwrap()), before);
+}
+
+#[tokio::test]
+async fn hn_030_invalidation_after_old_stream_sealed() {
+    Box::pin(check_history_invalidation(HistoryAccess::Authorized)).await;
+}
+#[tokio::test]
+async fn hn_030_revocation_before_invalidation_write() {
+    Box::pin(check_history_invalidation(HistoryAccess::RevokeEvent)).await;
+}
+#[tokio::test]
+async fn hn_030_revocation_before_refreshed_body() {
+    Box::pin(check_history_invalidation(HistoryAccess::RevokeRefresh)).await;
+}
+#[tokio::test]
+async fn hn_030_identical_replay_preserves_live_tail() {
+    Box::pin(check_history_invalidation(HistoryAccess::Unchanged)).await;
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HistoryAccess {
+    Unchanged,
+    Authorized,
+    RevokeEvent,
+    RevokeRefresh,
+}
+
+async fn check_history_invalidation(access: HistoryAccess) {
+    use serde_json::json;
+    let f = HarnessFixture::new("hn030");
+    configure(
+        &f,
+        &json!({"replayTurns":12,"echoUserChunk":true,"capabilityMode":"replay_and_resume"}),
+    );
+    let root = Box::pin(cold_root(&f)).await;
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let mut b = connected(&f, &node, &root.key, &root.id).await;
+    let key = SigningKey::from_slice(&[96; 32]).unwrap();
+    let id = pair_browser(&node, &key, "History reader").await;
+    let observe = node
+        .management
+        .as_ref()
+        .unwrap()
+        .observe_next_document_socket_for_test()
+        .unwrap();
+    let mut a = connected(&f, &node, &key, &id).await;
+    let open = json!({"targetId":root.target.encode(),"reason":"first_open","page":{"turns":"5"}});
+    let old = send_command_wait(&mut a, "view.open", open.clone()).await;
+    let endpoint = observe.await.unwrap();
+    assert_eq!(old["result"]["page"]["liveTail"], true);
+    assert_eq!(old["result"]["page"]["firstTurn"], "8");
+    let stream = Id128::parse_base64url(old["result"]["streamId"].as_str().unwrap()).unwrap();
+    let frames = read_until_snapshot_end(&mut a, stream).await;
+    assert_eq!(frames.raw.len(), 5);
+    assert_eq!(
+        frames.raw[4]["params"]["update"]["content"]["text"],
+        "U0012"
+    );
+    let barrier = node
+        .management
+        .as_ref()
+        .unwrap()
+        .pause_next_boundary(crate::management_ws::ManagementBoundary::HistoryInvalidated);
+    let release = ReleaseManagementBarrier(barrier.clone());
+    let loads = f
+        .peer_logs()
+        .iter()
+        .filter(|e| e["method"] == "session/load")
+        .count();
+    if access != HistoryAccess::Unchanged {
+        configure(&f, &json!({"editTurn":12}));
+    }
+    let latest = send_command_wait(
+        &mut b,
+        "view.open",
+        json!({"targetId":root.target.encode(),"reason":"reopen"}),
+    )
+    .await;
+    assert_eq!(latest["ok"], true);
+    wait_for_peer_method(&f, "session/load", loads + 1).await;
+    let expected = if access == HistoryAccess::Unchanged {
+        "U0012"
+    } else {
+        "edited0012"
+    };
+    verify_ordinary_twelfth_turn(&mut b, &latest, expected).await;
+    if access == HistoryAccess::Unchanged {
+        takeover_target(&mut b, root.target).await;
+        assert_eq!(
+            submit_prompt_turn(&mut b, root.target, "U0013").await["ok"],
+            true
+        );
+        expect_thirteenth_turn(&mut a, stream).await;
+        assert!(!endpoint.history_body_sealed(stream));
+        drop(release);
+        a.close(None).await.unwrap();
+        b.close(None).await.unwrap();
+        node.shutdown(None).await.unwrap();
+        return;
+    }
+    timeout(Duration::from_secs(15), barrier.wait_until_entered())
+        .await
+        .expect("sealed old generation reached writer");
+    assert!(endpoint.history_body_sealed(stream));
+    assert!(timeout(Duration::from_millis(100), a.next()).await.is_err());
+    if access == HistoryAccess::RevokeEvent {
+        crate::ipc::device_revoke(node.ipc_address(), &id)
+            .await
+            .unwrap();
+    }
+    drop(release);
+    if access == HistoryAccess::RevokeEvent {
+        assert_eq!(next_close(&mut a, Duration::from_secs(5)).await.0, 4410);
+    } else {
+        verify_refresh_delivery(&mut a, &node, &id, root.target, stream, access).await;
+    }
+    if access != HistoryAccess::Authorized {
+        let mut retry = valid_management_socket(&f.area, node.listen_addr()).await;
+        prove_client(&mut retry, &key, &id, node_public_key(&node)).await;
+        assert_eq!(next_close(&mut retry, Duration::from_secs(5)).await.0, 4401);
+    }
+    let b_latest = send_command_wait(&mut b, "view.open", open).await;
+    let visible = snapshot(&mut b, &b_latest).await;
+    assert_eq!(
+        visible.raw[4]["params"]["update"]["content"]["text"],
+        "edited0012"
+    );
+    b.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}
+
+async fn verify_refresh_delivery(
+    a: &mut ManagementSocket,
+    node: &NodeRuntime,
+    id: &str,
+    target: EntityId,
+    stream: Id128,
+    access: HistoryAccess,
+) {
+    use serde_json::json;
+    assert_eq!(
+        next_json(a, Duration::from_secs(5)).await,
+        json!({"v":1,"type":"history.invalidated","streamId":stream})
+    );
+    assert!(timeout(Duration::from_millis(100), a.next()).await.is_err());
+    let refreshed = send_command_wait(
+        a,
+        "view.open",
+        json!({"targetId":target.encode(),"reason":"explicit_refresh","page":{"turns":"5"}}),
+    )
+    .await;
+    assert_eq!(refreshed["ok"], true);
+    if access == HistoryAccess::RevokeRefresh {
+        crate::ipc::device_revoke(node.ipc_address(), id)
+            .await
+            .unwrap();
+        assert_eq!(next_close(a, Duration::from_secs(5)).await.0, 4410);
+    } else {
+        let fresh = snapshot(a, &refreshed).await;
+        assert_eq!(fresh.raw.len(), 5);
+        assert_eq!(
+            fresh.raw[4]["params"]["update"]["content"]["text"],
+            "edited0012"
+        );
+        a.close(None).await.unwrap();
+    }
+}
+
+async fn verify_ordinary_twelfth_turn(
+    b: &mut ManagementSocket,
+    latest: &serde_json::Value,
+    expected: &str,
+) {
+    let ordinary = Id128::parse_base64url(latest["result"]["streamId"].as_str().unwrap()).unwrap();
+    let mut baseline = read_until_snapshot_end(b, ordinary).await;
+    if baseline
+        .raw
+        .last()
+        .is_none_or(|frame| frame["params"]["update"]["content"]["text"] != expected)
+    {
+        if !baseline
+            .statuses
+            .iter()
+            .any(|s| s["type"] == "stream_rebound")
+        {
+            read_next_status_matching(
+                b,
+                ordinary,
+                |s| s["type"] == "stream_rebound",
+                Duration::from_secs(5),
+            )
+            .await;
+        }
+        let next =
+            send_command_wait(b, "view.rebind", serde_json::json!({"streamId":ordinary})).await;
+        baseline = snapshot(b, &next).await;
+    }
+    assert_eq!(baseline.raw.len(), 12);
+    assert_eq!(
+        baseline.raw[11]["params"]["update"]["content"]["text"],
+        expected
+    );
+}
+
+async fn expect_thirteenth_turn(a: &mut ManagementSocket, stream: Id128) {
+    let mut turns = Vec::new();
+    let mut raw = Vec::new();
+    timeout(Duration::from_secs(8), async {
+        while raw.len() < 2 {
+            match a.next().await.unwrap().unwrap() {
+                Message::Text(text) => assert_ne!(
+                    serde_json::from_str::<serde_json::Value>(&text).unwrap()["type"],
+                    "history.invalidated"
+                ),
+                Message::Binary(bytes) => {
+                    let (header, payload) = TransferHeader::decode(&bytes).unwrap();
+                    assert_eq!(header.stream(), stream);
+                    a.send(Message::Binary(
+                        TransferHeader::credit(stream, header.packet())
+                            .encode(&[])
+                            .unwrap()
+                            .into(),
+                    ))
+                    .await
+                    .unwrap();
+                    if matches!(
+                        header.record_kind(),
+                        Some(RecordKind::OriginalRaw | RecordKind::TurnStart)
+                    ) {
+                        let frame: serde_json::Value = serde_json::from_slice(payload).unwrap();
+                        if header.record_kind() == Some(RecordKind::TurnStart) {
+                            turns.push(frame["turn"].clone());
+                        } else {
+                            raw.push(frame["params"]["update"]["content"]["text"].clone());
+                        }
+                    }
+                }
+                _ => panic!("unexpected live transport frame"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(turns, [serde_json::json!("13")]);
+    assert_eq!(raw.iter().filter(|text| **text == "U0013").count(), 1);
 }
 
 struct ReleaseManagementBarrier(crate::test_support::SharedAsyncBarrier);

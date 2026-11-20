@@ -41,6 +41,7 @@ export interface SharedViewDisplayLike {
   dispose(): void;
   accept?(frame: ViewDataFrame): void;
   beginStagingRebind?(opened: SessionViewOpened, transport: ViewDisplayTransport): boolean;
+  historyInvalidated?(id: string): void;
   acceptStagedFrame?(frame: ViewDataFrame): boolean;
   abortStagingRebind?(reason?: string): void;
 }
@@ -135,6 +136,8 @@ export class SharedViewController {
     }
     return null;
   }
+
+  historyInvalidated(id: string): void { this.#sharedSessionDisplay?.historyInvalidated?.(id); }
 
   acceptViewFrame(frame: ViewDataFrame): boolean {
     if (this.#sharedSessionDisplay !== null) {
@@ -255,11 +258,16 @@ export class SharedViewController {
     });
     const spec = this.#sharedViewSpec;
     if (!opened.page || !spec || !(display instanceof SessionViewDisplay)) return display;
-    const root = display;
+    let root = display;
     let retired = false;
     const controller = new HistoryPageController(doc, spec, connection, {
       credit: (id, seq) => connection.sendSessionViewCredit(id, seq),
       detach: id => connection.detachSessionStream(id),
+      reopenRequested: full => {
+        const page = full ? null : turns ? { turns } : {};
+        if (spec.kind === "target") void this.openSharedSessionView(record, spec.targetId, null, "reopen", page);
+        else void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "reopen", page);
+      },
     }, undefined, turns => {
       if (spec.kind === "target") void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh", turns ? { turns } : {});
       else void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "explicit_refresh", turns ? { turns } : {});
@@ -267,14 +275,25 @@ export class SharedViewController {
       retired = true;
       releaseSharedDisplay(root, connection);
       root.dispose();
+    }, {
+      open: () => spec.kind === "target"
+        ? connection.openSessionView(spec.targetId, "explicit_refresh", { turns }, true)
+        : connection.openSourceSessionView(spec.selection, spec.nativeSessionId, "explicit_refresh", { turns }, true),
+      promote: (latest, latestDisplay) => {
+        root = latestDisplay;
+        retired = false;
+        this.#openedSessionView = latest;
+        this.#port.renderDashboard(record, "历史已刷新。");
+      },
     });
     history = controller;
     controller.attach(opened, root);
     controller.view.turns.value = turns ?? "";
     display = {
-      element: controller.element, streamId: root.streamId,
+      element: controller.element, get streamId() { return root.streamId; },
       get detached() { return retired || root.detached; },
       start: () => root.start(),
+      historyInvalidated: id => controller.invalidate(id),
       accept: frame => root.accept(frame),
       acceptStagedFrame: frame => controller.accept(frame),
       suspend: () => { root.suspend(); controller.suspend(); },

@@ -2,6 +2,7 @@ import { parseStrictJsonObject } from "../protocol/jws";
 import { turnBoundary } from "./session-protocol/history";
 import { HistoryTurnGroups } from "./history-page-view";
 import type { ViewDataFrame } from "../views/binary";
+import { ViewDecodeError } from "../views/errors";
 import { ViewRecordAssembler } from "../views/records";
 import { ViewContentStore } from "../views/content-store";
 import { decodeProjectionRecord } from "../views/projection";
@@ -17,6 +18,7 @@ export interface ViewDisplayTransport {
   detach(streamId: string): void;
   turnStarted?(turn: string): void;
   snapshotReady?(): void;
+  readFailed?(reason: string): void;
   reopenRequested?(fullHistory?: boolean): void;
   retrySyncRequested?(): void;
 }
@@ -286,6 +288,7 @@ export class SessionViewDisplay {
             this.#transport.credit(this.#streamId, frame.packetSequence);
             this.suspend(status.summary);
             this.detach();
+            this.#transport.readFailed?.(status.summary);
             this.#transport.reopenRequested?.(status.historyUnprovable);
             return;
           }
@@ -297,7 +300,9 @@ export class SessionViewDisplay {
           this.#snapshotReady = true;
           this.#notice.textContent =
             this.#limitations + (this.#staticPage ? " 本页已接收。" : " 本次快照已接收，继续等待增量；快照结束不代表原生历史重放已完整。");
+          this.#transport.credit(this.#streamId, frame.packetSequence);
           this.#transport.snapshotReady?.();
+          return;
         } else {
           const changed = this.#store.accept(completed);
           if (changed && completed.kind === "original_raw") {
@@ -315,9 +320,11 @@ export class SessionViewDisplay {
         }
       }
       this.#transport.credit(this.#streamId, frame.packetSequence);
-    } catch {
+    } catch (error) {
       this.suspend("共享视图读取或展示准备失败，已保留此前收到的内容；未取消原生执行，请重新打开。");
       this.detach();
+      this.#transport.readFailed?.(error instanceof ViewDecodeError
+        ? `共享视图接收失败（${error.code}）` : "共享视图读取或展示准备失败");
     }
   }
 
