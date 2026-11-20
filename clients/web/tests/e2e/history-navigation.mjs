@@ -104,9 +104,10 @@ try {
   const child = history(root);
   await groups(child,1,10);
   await button(child,"更新").click();
+  report.stage = "child second page";
   await groups(child,11,12);
   await button(root,"折叠子会话历史").click();
-  await groups(root,21,25);
+  assert.deepEqual((await root.locator("h3").allTextContents()).filter(t => /^第 \d+ 轮$/.test(t)), [21,22,23,24,25].map(i => `第 ${i} 轮`));
   await button(root,"展开子会话历史").click();
   await groups(child,1,10);
   await button(root,"折叠子会话历史").click();
@@ -143,6 +144,11 @@ try {
   report.status = "passed";
 } catch (error) {
   report.failureType = error.name;
+  report.line = error.stack?.match(/history-navigation\.mjs:(\d+):/)?.[1];
+  report.pages = wire.filter(event => event.page).map(({page}) => ({
+    first:page.firstTurn,last:page.lastTurn,source:page.source,continuity:page.continuity
+  }));
+  report.errors = wire.map(e => e.error).filter(e => typeof e === "string" && /^[a-z_]+$/.test(e));
   process.exitCode = 1;
 } finally {
   await browser.close();
