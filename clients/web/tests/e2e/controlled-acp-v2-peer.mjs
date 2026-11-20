@@ -206,6 +206,17 @@ rl.on("line", (line) => {
     case "session/load":
     case "session/resume": {
       const sessionId = params.sessionId ?? activeSessionId;
+      if (existsSync(path.join(stateDir, "history-navigation"))) {
+        const version = existsSync(path.join(stateDir, "changed")) ? "new" : "original";
+        const update = (sessionUpdate, text, id) => emit({
+          jsonrpc: "2.0", method: "session/update",
+          params: { sessionId, update: { sessionUpdate, messageId: id, content: { type: "text", text } } },
+        });
+        update("agent_message_chunk", "HN prelude", "prelude");
+        for (let turn = 1; turn <= (sessionId === "child-history" ? 12 : 25); turn++) {
+          update("user_message_chunk", `HN ${version} turn ${turn}`, String(turn));
+        }
+      }
       const entries = historyTexts.length > 0 ? historyTexts : ["E2E重放历史输出"];
       for (const text of entries) {
         emit({

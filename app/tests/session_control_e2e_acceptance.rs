@@ -405,3 +405,56 @@ async fn sct_016_real_codex_harness_dual_browser_takeover_and_restart_e2e() {
         root_check.display()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-027: requires embedded production Web, Edge and Playwright"]
+async fn hn_027_controlled_history_navigation() {
+    let repo = repo_root();
+    let area = setup_temp_e2e_area();
+    let bin = Path::new(env!("CARGO_BIN_EXE_acp-remote"));
+    let mut guard = E2eCleanupGuard {
+        root: area.temp_root.clone(),
+        ipc_address: area.ipc_addr.clone(),
+        node_child: Some(spawn_daemon(bin, &area.config_path)),
+        driver_child: None,
+    };
+    wait_node_ready(&area.ipc_addr).await;
+    let scripts = repo.join("clients/web/tests/e2e");
+    let evidence = repo.join("testing/runs/deliver-history-navigation/hn-027.json");
+    fs::create_dir_all(evidence.parent().unwrap()).unwrap();
+    fs::write(area.peer_state_dir.join("history-navigation"), b"").unwrap();
+    let config = area.temp_root.join("browser.json");
+    fs::write(&config, serde_json::to_vec(&serde_json::json!({
+        "origin": area.origin, "workspaceDir": area.workspace_dir, "workDir": area.work_dir,
+        "peerStateDir": area.peer_state_dir, "peerScript": scripts.join("controlled-acp-v2-peer.mjs"),
+        "database": area.temp_root.join("node-data/node.sqlite3"), "evidenceOut": evidence,
+    })).unwrap()).unwrap();
+    guard.driver_child = Some(
+        Command::new("node")
+            .arg(scripts.join("history-navigation.mjs"))
+            .arg(config)
+            .spawn()
+            .unwrap(),
+    );
+    for name in ["a", "b"] {
+        tokio::time::timeout(
+            Duration::from_secs(50),
+            pair_one_client(
+                &area.ipc_addr,
+                &area.work_dir.join(format!("pairing-{name}.json")),
+            ),
+        )
+        .await
+        .expect("browser pairing deadline");
+    }
+    let status = guard.driver_child.as_mut().unwrap().wait().unwrap();
+    ipc::stop(&area.ipc_addr).await.unwrap();
+    assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
+    drop(guard);
+    assert!(!area.temp_root.exists());
+    assert!(TcpListener::bind(area.origin.trim_start_matches("https://")).is_ok());
+    assert!(
+        status.success(),
+        "HN-027 browser assertions failed; see sanitized evidence"
+    );
+}
