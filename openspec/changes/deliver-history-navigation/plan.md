@@ -82,3 +82,5 @@ mode: required
 HN-018 的并发定位与失败不留下半截代际已由独立 tester 实测。HN-021 原探针使用 product.status，在既有平台返回 platform_unimplemented。按增量规格对「实际可用会话操作」的要求，改以同一连接上的 session.capacity.inspect 与会话列表验证，保留原失败记录。首次运行中，pure_memory 收到首轮 input.consume 响应后，20 秒内对端未收到 session/prompt，该次初始化失败记录保留。独立 tester 复验时，在新建纯内存根会话的同一原生连接投递 25 组用户与助手帧，确认 50 帧落盘后重启。三页离线读取、显式刷新后复用旧游标、淘汰后返回 unsupported_capability、同一管理连接查询容量与会话列表均通过。纯内存冷快照标明 continuable=false；直接提交输入返回 settled/queued，对端未收到 resume 或 prompt。resume_only 则实际恢复会话并将新提示送达对端。复验探针已集成（53dfbc95），两种能力在集成分支复跑通过。
 
 HN-001 在 871593b 的全仓检查被 HN-028 验收驱动的两处 Clippy 错误阻断（default_trait_access、too_many_lines），已交由该驱动负责人修复；全仓检查待重跑。
+
+独立预验收逐项报告已在集成工作区保留副本 testing/runs/deliver-history-navigation/independent-precheck/39b14237-results.md。HN-008 已验证回开保留摘要及设备列表，回滚后的配对、提示、审批待测。HN-016 的千轮逐帧遍历仅覆盖父方向。HN-018 的倒序和跨目标输入尚未在同一实节点场景验证。HN-023 已覆盖双客户端交错翻页和撤权，1799/1800 秒边界仅有容量领域证据，实节点翻页与回收联动待测。其余复合步骤的覆盖范围以逐项记录为准。
