@@ -52,7 +52,7 @@
 
 1. **展示快照库**：会话当前已加载时先 `flush` 写入队列，再读取当前代际；有效未过期即用，`source = "transcript_cache"`。零子进程、零名额、不观测活动、不续期。
 2. **当前连接内存视图**：快照库降级、缺行或该目标从未持久化时，读取活跃目标当前代际的内存原始记录（`TargetSnapshot.raw`），按同一 `TurnIndexer` 计算，代际为该目标的 `ViewEpoch`，`source = "live"`。
-3. **标准重放**：前两者均不可用且对端支持标准重放时，沿既有读取准入（`admit_socket` / `admit_socket_source` / 子目标 `ensure_child_read`）申请名额并完成重放，随后从新快照代际（或其内存视图）分页，`source = "replay"`。根会话存在已知运行工作且需要重新加载时，拒绝本次重放并返回 `invalid_stage`，不取消、不新建写入进程；满额返回 `session_capacity_full`。
+3. **标准重放**：前两者均不可用且对端支持标准重放时，沿既有读取准入（`admit_socket` / `admit_socket_source`；子目标转 §8 的独立查询或接收父连接自动投递的子事件）申请名额并完成重放，随后从新快照代际（或其内存视图）分页，`source = "replay"`。根会话存在已知运行工作且需要重新加载时，拒绝本次重放并返回 `invalid_stage`，不取消、不新建写入进程；满额返回 `session_capacity_full`。
 
 分页前统一完成既有纯元数据门禁（`verify_cold_target_read` / `verify_cold_source_read` 与客户端信任 `client_gate`），失败时在披露任何快照内容前拒绝。分页读取只要求读取信任，不要求也不改变会话写控制权。被流式传输的页视图通过既有选择租约登记为受保护会话，期间不被保留期或容量清理淘汰。
 
@@ -114,7 +114,17 @@
 
 ### 8. 子目标分页
 
-`child` 必须满足：父目标解析出的根会话与 `node_session_parents` 记录的子路径根一致（`SessionTreeRepository::resolve_session_tree`）；否则返回 `invalid_target` 且不披露子正文。子目标来源顺序同 §3：子快照 → 子内存视图 → 经 `ensure_child_read` 的根树名额下重放。子目标无独立控制锁，读取仅需读取信任；子目标失败只影响对应容器。Web 提供可嵌入的 `HistoryPageView`（正序）与历史面板中的“子会话历史”最小入口（输入已记录的子原生会话标识后展开/折叠），委派步骤卡片内挂载由 `agent-session-tree` 复用该组件。折叠即关闭子页流；重新展开重新请求子目标第一页，父页边界不变。
+`child` 必须满足：父目标解析出的根会话与 `node_session_parents` 记录的子路径根一致（`SessionTreeRepository::resolve_session_tree`）；否则返回 `invalid_target` 且不披露子正文。子目标来源顺序同 §3：子快照 → 子内存视图 → 根树名额下已明确协商的只读子历史查询；`ensure_child_read` 本身只建立子视图归属。子目标无独立控制锁，读取仅需读取信任；子目标失败只影响对应容器。Web 提供可嵌入的 `HistoryPageView`（正序）与历史面板中的“子会话历史”最小入口（输入已记录的子原生会话标识后展开/折叠），委派步骤卡片内挂载由 `agent-session-tree` 复用该组件。折叠即关闭子页流；重新展开重新请求子目标第一页，父页边界不变。
+
+#### 独立子历史查询的协商与读取
+
+新增项目定义的可选 ACP 扩展。Codex ACP 公布的标准合同通过根重放投递子事件，未提供独立读取子目标的请求；它继续走已有快照和自动投递路径。扩展仅适用于明确实现本合同的 Harness。[ACP v1 扩展机制](https://agentclientprotocol.com/protocol/v1/extensibility)、[ACP v2 扩展机制](https://agentclientprotocol.com/protocol/v2/extensibility)、[Codex ACP 子会话合同](https://github.com/agentclientprotocol/codex-acp/blob/main/docs/subagent-sessions.md)。
+
+- **协商**。以仓库命名空间固定键 `io.github.lindongfang.acp-remote/child-history`，固定方法 `_io.github.lindongfang.acp-remote/child-history`。客户端在初始化能力元数据中声明 `{"version":1}`。v1 读取 initialize.result.agentCapabilities._meta；v2 读取 initialize.result.capabilities._meta。两端版本匹配且连接、配置、身份及协商协议版本仍为原代际时可发送请求。忽略未知版本和方法名提示。禁止用品牌、配置开关、普通 loadSession、子 cancel 或过往连接记录补足证明。已声明却返回 method-not-found 时本连接停用该能力。
+- **身份和归属**。普通管理分页命令不变。冷子目标先按既有顺序尝试展示快照和可证明的子事件，再由根树准入所有者串行登记只读查询。每批发送前和最终发布前核对读取权限、来源、根和子关系、连接代际及工作保护。准入及登记与新工作互斥，根忙返回 invalid_stage。根树唯一名额覆盖查询，不新建子会话资源。查的是指定子 ID，响应也必须与该根及子目标匹配；不得以根重放结束证明子历史完整。
+- **传输**。查询请求携带 rootSessionId、sessionId、cursor（首次为 null）。每个 JSON-RPC 成功响应返回同一根及子 ID、非空 snapshotId、从 0 开始的连续十进制字符串 sequence、chunk（最长 16 KiB 原始字节的无填充 base64url）、nextCursor（不透明字符串或 null）。chunk 按顺序拼接为按来源排序的 UTF-8 NDJSON，逐行保存完整原始 ACP session/update，含原 JSON 字节；每帧以 LF 结束，字符串内部换行须转义。允许单帧跨块，不按轮数截断。nextCursor 非空时必须有字节进展；不接受重复游标、越序、跨代、非法字节或未结束帧；空历史仅允许首块为空且直接结束。游标、正文及原始响应不入日志。子查询成功返回的分页来源标记为 replay，表示本次从原生历史读取。单条请求经连接原 JSON-RPC ID 关联，子查询游标不暴露给 Web。
+- **发布与退出**。同一根下同一子目标与连接代际共享单次查询。按块解码，逐帧复核 method、原生子 ID 与版本，以隔离的暂存记录构建快照。对 changed digest 以原子事务替换子快照及轮次索引；相同内容保留原快照令牌与保留计时。分页读取和查询结果以子身份返回。服务端错误、提前 EOF、进展超时、撤权和关闭均丢弃暂存并释放所有者，最后一个观察者退出时停止后续请求；关闭顺序为停止发请求、等待或有界取消查询任务、清理暂存、释放根名额租约。不能用 session/cancel 停止读取。能力缺失仅限制子视图。真实 Harness 未协商时只能验证负向，受控实现的正向证据单独登记。
+
 
 ### 9. Web 分层与模块预算
 

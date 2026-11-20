@@ -14,9 +14,9 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | WP1 | 可证明轮次、方向、参数与游标范围 | 无 | coder | app/src/domain、app/src/adapters/acp、app/src/management_ws | 分页模型、命令合同与单测 | HN-003 至 HN-007 |
 | WP2 | 旧库首次翻页、增量索引及换代 | WP1 | coder | app/src/transcript_cache | 原子迁移与有界区间读测试 | HN-008、HN-009 |
-| WP3 | 按来源选页、权限复核、跨代定位、实时衔接 | WP1、WP2 | coder | app/src/node、app/src/application/shared_views、app/src/management_ws | 标准命令接线与集成测试 | HN-010 至 HN-024 |
+| WP3 | 独立只读子历史查询、按来源选页、权限复核、跨代定位、实时衔接 | WP1、WP2 | coder | app/src/node、app/src/adapters/acp、app/src/application/native_dispatch、app/src/transcript_cache、app/src/application/shared_views、app/src/management_ws | 标准命令接线与集成测试 | HN-010 至 HN-024、HN-029 |
 | WP4 | 父子独立翻页、折叠恢复与迟到响应处理 | WP1；联调依赖 WP3 | coder | clients/web/src、clients/web/tests | 分页组件、控制器与交互测试 | HN-002、HN-025 至 HN-027 |
-| WP5 | 独立验收与交付检视 | WP1 至 WP4 | tester、reviewer | testing、当前变更 plan.md 与 tasks.md | 固定提交的执行证据与审查结论 | HN-001 至 HN-028 |
+| WP5 | 独立验收与交付检视 | WP1 至 WP4 | tester、reviewer | testing、当前变更 plan.md 与 tasks.md | 固定提交的执行证据与审查结论 | HN-001 至 HN-029 |
 
 ## Merge Order
 
@@ -40,7 +40,7 @@
 
 | Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes |
 | --- | --- | --- | --- | --- | --- |
-| 编码前门禁 | 独立 reviewer | 父步骤入口、游标权限、轮次证明与用例充分性 | PV1 通过且语义阻断清零 | passed | 独立 reviewer 已复核规划提交 7aeff9a2，关闭 HN-R01 至 HN-R05 |
+| 编码前门禁 | 独立 reviewer | 父步骤入口、游标权限、轮次证明与用例充分性 | PV1 通过且语义阻断清零 | pending | 7aeff9a2 原范围已通过；独立子历史查询增量须复审后编码 |
 | 集成交付门禁 | 独立 reviewer | 受测提交、真实链路、资源与安全 | 独立验收通过且阻断项关闭 | pending | 尚无受测提交 |
 
 ## Main E2E
@@ -69,7 +69,8 @@ mode: required
 | HN-R04 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 旧页遗漏迟到的工具补丁 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
 | HN-R05 | 独立 reviewer | 中 | 4dd96797 + 规划工作区 | 子首页与重新定位语义混用 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
 | HN-F01 | 独立 tester / HN-022 | 高 | 1808ce2 | 冷读旧页时，页内工具能显示最终状态，但指向页后 rawOutput 的引用缺少可读取的原始字节 | 待修复 | open | 已由真实 WSS 探针复现，待原 tester 对修复提交复测 |
-| HN-F02 | 独立 tester / HN-012 | 高 | 1808ce2 | 根忙时按要求拒绝；根空闲但仅有根重放能力、无子快照或子事件时，子首次读取返回 unsupported_capability。原用例预期成功 | 待明确子历史来源 | open | 待分别验证有、无子数据路径及根名额 |
+| HN-F02 | 独立 tester / HN-012 | 高 | 1808ce2 | 根忙时按要求拒绝；根空闲但仅有根重放能力、无子快照或子事件时，子首次读取返回 unsupported_capability。原用例预期成功 | 用户已确认独立子历史查询 | open | 待分别验证有、无子数据路径及根名额 |
+| HN-F03 | 独立 tester / HN-027 | 高 | 74e7c2bb | 双浏览器跨代定位到正确的 11–15 轮后提示读取或展示准备失败，第 15 轮新正文未显示 | 待修复 | open | 待真实浏览器复测 |
 
 ## Verification Results
 

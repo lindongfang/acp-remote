@@ -6,7 +6,7 @@
 
 - **版本快照与角色独立**：正式集成验收在与独立 `reviewer` 共享的同一本地分支 Git `commit SHA` 上执行（核对 `git rev-parse HEAD` 且受跟踪文件 `git status` 干净）；`tester` 不继承 `coder` 对话，不以开发自评、模拟推断或“检查已启动”冒充执行证据，零用例、仅启动或仅截图均不算通过。
 - **隔离运行环境与资源清理**：所有节点、SQLite、TLS/WSS、浏览器与真实 Harness 测试均使用专属临时 `data_dir`（同时包含 `node.sqlite3` 与 `transcript-cache.sqlite3`）、操作系统分配的空闲回环端口、隔离 `CARGO_TARGET_DIR`（或只读复用同一 commit 的已构建产物）、隔离浏览器上下文与受控测试工作区；严禁读写用户真实默认数据目录、本机真实 `node.sqlite3`/`transcript-cache.sqlite3`、真实浏览器 `IndexedDB` 身份、`~/.codex` 等厂商私有目录或私人会话文件。用例通过、失败或中断时均须经 RAII 守卫与 Windows Job Object 终止本次拉起的节点、受控对端、浏览器及 Codex 完整子进程树，关闭全部数据库连接池（含 `TranscriptCacheStore::shutdown()`），并验证临时 `data_dir` 可在当前进程内立即无锁删除。
-- **受控 ACP 对端（测试自有替身）**：L5 复用 `app/src/node/tests/transcript_cache_wss_cases.rs` 中真实节点 HTTPS/WSS + 受控 `controlled-acp-peer.mjs` 的写法，仅在测试代码内扩展配置：`replayTurns`（逐轮生成 `user_message_chunk`（`messageId` 可为字符串或缺省/`null`）、`agent_message_chunk`、可选 `tool_call`/`tool_call_update` 帧，每轮正文携带唯一标记 `U####`/`A####`/`T####`，四位轮号）、`preludeFrames`（首个用户帧前的前导帧）、`echoUserChunk`（实时 `session/prompt` 期间是否先发出该提示的 `user_message_chunk`）、`randomAgentMessageIds`（每次重放生成不同 `messageId`，证明不存在跨加载稳定标识）、`promptBarrier*`/`loadBarrier*` 文件屏障及 `failLoadMessage`。对端以 `ACP_PEER_LOG_FILE` 逐行记录 `pid`、方法名与参数；“拉起子进程数”按日志中 `initialize` 事件的不同 `pid` 计数并与 Windows Job 内进程枚举交叉核对，“名额占用”以 `session.capacity.inspect` 结果为准。受控对端只证明平台合同，不得作为真实 Harness 通过证据。
+- **受控 ACP 对端（测试自有替身）**：L5 复用 `app/src/node/tests/transcript_cache_wss_cases.rs` 中真实节点 HTTPS/WSS + 受控 `controlled-acp-peer.mjs` 的写法，仅在测试代码内扩展配置：`replayTurns`（逐轮生成 `user_message_chunk`（`messageId` 可为字符串或缺省/`null`）、`agent_message_chunk`、可选 `tool_call`/`tool_call_update` 帧，每轮正文携带唯一标记 `U####`/`A####`/`T####`，四位轮号）、`preludeFrames`（首个用户帧前的前导帧）、`echoUserChunk`（实时 `session/prompt` 期间是否先发出该提示的 `user_message_chunk`）、`randomAgentMessageIds`（每次重放生成不同 `messageId`，证明不存在跨加载稳定标识）、`promptBarrier*`/`loadBarrier*` 文件屏障及 `failLoadMessage`。对端以 `ACP_PEER_LOG_FILE` 逐行记录 `pid`、方法名及断言所需的非敏感参数；子查询仅记录连接编号、请求编号、序号与字节数，在内存中比对正文和游标；“拉起子进程数”按日志中 `initialize` 事件的不同 `pid` 计数并与 Windows Job 内进程枚举交叉核对，“名额占用”以 `session.capacity.inspect` 结果为准。受控对端只证明平台合同，不得作为真实 Harness 通过证据。
 - **L3/L4 确定性条件**：领域与存储层使用纯函数输入、注入式 `CacheRetentionClock` 与可控单调时钟、确定性随机种子和故障注入；SQLite 断言直接查询 `transcript-cache.sqlite3` 的 `transcript_cache_meta`、`transcript_sessions`、`transcript_records`、`transcript_turns` 与 `PRAGMA` 结果，并复用仓库既有 `sqlx::sqlite`（零新增依赖）。
 - **L6 真实链路边界**：真实端到端必须连接真实 Windows 节点、内嵌生产前端的同源 Web 与已授权真实 Codex ACP 适配器子进程；缺少真实 Codex 可执行环境、认证凭据或配额时整例如实记为 `not-run` 并写明前置阻塞，不以受控对端结果替代，也不自动转 `LX`。受控对端的浏览器端到端单独作为平台合同验收（HN-027），不冒称真实 Harness 验收。
 - **安全与不变量红线**：模型上下文始终以 Harness 原生恢复为权威，分页内容不得回灌模型；`node.sqlite3` 零 Schema 变更；游标与会话正文不得出现在日志、错误载荷或测试快照中；错误响应保持既有单键闭集信封，不附带详情。
@@ -35,6 +35,9 @@
 | specs/history-navigation/spec.md | 手动打开子历史与权限隔离 | 折叠后重新展开 | HN-020、HN-026、HN-027 |
 | specs/history-navigation/spec.md | 手动打开子历史与权限隔离 | 展开失败或撤销 | HN-020、HN-026 |
 | specs/history-navigation/spec.md | 手动打开子历史与权限隔离 | 子目标缺少分页能力 | HN-020 |
+| specs/history-navigation/spec.md | 独立只读子历史查询 | 有能力且根空闲 | HN-012、HN-016、HN-029 |
+| specs/history-navigation/spec.md | 独立只读子历史查询 | 未证明能力或根忙 | HN-012、HN-020、HN-029 |
+| specs/history-navigation/spec.md | 独立只读子历史查询 | 中途失去证明或响应错误 | HN-020、HN-029 |
 | specs/history-navigation/spec.md | 原生历史与实时衔接 | 分页中的工具更新 | HN-022 |
 | specs/history-navigation/spec.md | 原生历史与实时衔接 | 迟到读取响应 | HN-009、HN-022、HN-026 |
 | specs/history-navigation/spec.md | 刷新重连与历史限制 | 外部客户端继续对话后显式刷新 | HN-015、HN-021、HN-028 |
@@ -111,8 +114,8 @@
 ### HN-012 重放会扰动运行中原生工作时返回 invalid_stage 且不取消
 
 - 用例级别：L5
-- 操作步骤：1) 控制客户端 A 在根会话 R 上提交提示，受控对端以 `promptBarrier` 保持 R 处于运行中；2) 经测试夹具在 `node_session_parents` 记录 R 的子目标 C（C 无快照且未加载）；3) 只读客户端 B 请求 `history.page`（`target` 为 R、`child` 为 C、`mode.kind = "first"`）；4) 记录对端日志中的 `initialize`、`session/load`、`session/cancel` 与 R 的输出流；5) 释放屏障令 R 正常结束，B 重复同一请求。
-- 预期结果：第 3 步返回 `invalid_stage`，不打开流、不返回子正文；运行期间对端新增 `initialize`、`session/load`、`session/cancel` 次数均为 0，R 的输出流持续且最终正常 `end_turn`；第 5 步 R 空闲后同一请求经根树名额下的子目标读取成功返回 C 的首页，名额计数只体现根会话 1 个。
+- 操作步骤：1) 控制客户端 A 在根会话 R 上提交提示，受控对端以 `promptBarrier` 保持 R 处于运行中；2) 经测试夹具在 `node_session_parents` 记录 R 的子目标 C（C 无快照与当前子事件；当前连接已协商独立查询并备有 C 的 12 轮历史）；3) 只读客户端 B 请求 `history.page`（`target` 为 R、`child` 为 C、`mode.kind = "first"`）；4) 记录对端日志中的 `initialize`、`session/load`、`session/cancel`、独立子查询与 R 的输出流；5) 释放屏障令 R 正常结束，B 重复同一请求。
+- 预期结果：第 3 步返回 `invalid_stage`，不打开流、不返回子正文；运行期间对端新增 `initialize`、`session/load`、`session/cancel` 及子查询次数均为 0，R 的输出流持续且最终正常 `end_turn`；第 5 步 R 空闲后同一请求经根树名额下的子目标读取成功返回 C 的首页，名额计数只体现根会话 1 个。
 
 ### HN-013 超大单轮按需分块、未加载部分标注与无输出截断
 
@@ -135,8 +138,8 @@
 ### HN-016 快照淘汰后一千轮无稳定标识来源的逐页完整访问
 
 - 用例级别：L5
-- 操作步骤：1) 受控对端 `replay_capable`，`replayTurns` 1000 轮且全部用户帧无 `messageId` 且每两个用户帧之间均有明确助手回应，开启 `randomAgentMessageIds`；根会话 R 与经夹具记录的子目标 C 各持有 1000 轮且本地均无快照；2) 父方向：客户端 B 以 `view.open` 携带 `page = {"turns":"10"}` 打开 R，随后反复以 `olderCursor` 请求；在收到 501–510 后令 R 释放并推进保留期时钟删除其快照，下一次以旧游标请求，收到 `stale_cursor` 后以 `locate`（`older`，`fromTurn = "500"`）请求，再继续以游标遍历至末页；3) 子方向：以 `child = C`、`mode.kind = "first"`开始，反复以 `newerCursor` 请求；在收到 491–500 后删除 C 的快照，收到 `stale_cursor` 后以 `locate`（`newer`，`fromTurn = "501"`）请求并遍历至末页；4) 统计每方向所有页的轮次标记、`relocated`/`continuity` 标志与对端 `session/load` 次数。
-- 预期结果：父方向共 100 页依次为 991–1000 至 1–10，子方向共 100 页依次为 1–10 至 991–1000，每页恰含 10 个完整轮次且标记与轮号一致，各方向并集恰为 1..1000、无重复、无缺失；淘汰后旧游标返回 `stale_cursor`，重新定位页（491–500 与 501–510）标记 `relocated = true`、`continuity = "unproven"`，其余页为 `same_generation`；重定位后没有跳回各自首页；末页对应方向游标为 `null`；每方向 `session/load` 恰为 2 次（首次加载与淘汰后重定位）。
+- 操作步骤：1) 受控对端 `replay_capable`，`replayTurns` 1000 轮且全部用户帧无 `messageId` 且每两个用户帧之间均有明确助手回应，开启 `randomAgentMessageIds`；R 的根重放和当前连接已协商的 C 独立只读查询各提供可区分的 1000 轮；父子关系已登记，本地均无快照，根重放不投递 C 的事件；2) 父方向：客户端 B 以 `view.open` 携带 `page = {"turns":"10"}` 打开 R，随后反复以 `olderCursor` 请求；在收到 501–510 后令 R 释放并推进保留期时钟删除其快照，下一次以旧游标请求，收到 `stale_cursor` 后以 `locate`（`older`，`fromTurn = "500"`）请求，再继续以游标遍历至末页；3) 子方向：以 `child = C`、`mode.kind = "first"`开始，反复以 `newerCursor` 请求；在收到 491–500 后删除 C 的快照，收到 `stale_cursor` 后以 `locate`（`newer`，`fromTurn = "501"`）请求并遍历至末页；4) 统计每方向所有页的轮次标记、`relocated`/`continuity` 标志与对端根加载次数、子查询首批次数。
+- 预期结果：父方向共 100 页依次为 991–1000 至 1–10，子方向共 100 页依次为 1–10 至 991–1000，每页恰含 10 个完整轮次且标记与轮号一致，各方向并集恰为 1..1000、无重复、无缺失；淘汰后旧游标返回 `stale_cursor`，重新定位页（491–500 与 501–510）标记 `relocated = true`、`continuity = "unproven"`，其余页为 `same_generation`；重定位后没有跳回各自首页；末页对应方向游标为 `null`；R 的 `session/load` 恰为 2 次；C 的查询首批恰为 2 次（首次与淘汰后重定位），子 `session/load` 为 0 次。
 
 ### HN-017 重定位期间来源被压缩或改写时的范围与 not_found
 
@@ -159,7 +162,7 @@
 ### HN-020 子目标分页：关系校验、独立分页、失败隔离、缺能力与展开不改变执行
 
 - 用例级别：L5
-- 操作步骤：经夹具记录根会话 R 的子目标 C1、C1 的子目标 C2、另一棵树的会话 U；1) B 以 `child = C1`、`turns = "3"`、`mode.kind = "first"`请求，同时以 `turns = "5"` 请求 R 的父页，再以 `child = C2` 请求；2) 以 `child = U` 与不存在的 `child` 请求；3) 令 C1 无快照且对端对 C1 的加载失败，并发请求 C1 子页与 R 父页；4) 令子目标 C3 为无重放且无快照，另令子目标 C4 的内容不含用户帧，分别请求子页并继续请求 R 父页；5) 在 B 读取子页流期间撤销 B；6) R 运行提示期间，只读客户端 B 反复展开（打开子页流）与折叠（关闭流）C1 共 20 次；7) 折叠后令 C1 实时追加第 11、12 轮，再次展开 C1 首页并以 `newerCursor` 翻至末页，同时重读 R 的父页。
+- 操作步骤：经夹具记录根会话 R 的子目标 C1、C1 的子目标 C2、另一棵树的会话 U；预先由根重放自动投递 C1 的 10 轮与 C2 的 3 轮可证明历史并等到子页可读，各分支重置夹具；1) B 以 `child = C1`、`turns = "3"`、`mode.kind = "first"`请求，同时以 `turns = "5"` 请求 R 的父页，再以 `child = C2` 请求；2) 以 `child = U` 与不存在的 `child` 请求；3) 令 C1 无快照与当前子事件，在已协商的独立子查询上注入服务端错误，并发请求 C1 子页与 R 父页；4) 在仅支持根加载的当前连接为已证明关系的 C3 保持无快照、无当前子事件，另令自动投递的 C4 内容不含用户帧，分别请求子页并继续请求 R 父页；5) 在 B 读取子页流期间撤销 B；6) 恢复有读取权限的 B 与 C1 的可读子快照；R 运行提示期间，只读客户端 B 反复展开（打开子页流）与折叠（关闭流）C1 共 20 次；7) 折叠后令 C1 实时追加第 11、12 轮，再次展开 C1 首页并以 `newerCursor` 翻至末页，同时重读 R 的父页。
 - 预期结果：1) C1 子页为 1–3、`order = "ascending"`，R 父页为 21–25，C2 可按后代关系读取，子首页 relocated=false、continuity=same_generation，父子分页互不影响；2) 返回 `invalid_target`，无子正文；3) 子页请求失败只返回该请求的错误，R 父页成功；4) C3 与 C4 返回 `unsupported_capability`（C4 不按消息条数切分），R 父页继续可用；5) B 的连接以 `4410` 关闭，未收到剩余子正文；6) 对端未收到来自展开/折叠的 `session/prompt` 或 `session/cancel`，R 正常完成，`session.control.inspect` 的 `controlEpoch` 与队列快照不变，名额只计根会话；7) 重新展开首页仍为 1–10，末页包含第 11、12 轮，R 父页的轮次范围与各轮 `firstPosition` 与折叠前一致。
 
 ### HN-021 无重放会话：重启后快照只读分页、外部增量边界与淘汰后限制
@@ -201,7 +204,7 @@
 ### HN-027 真实节点、同源 Web 与受控 ACP 对端的浏览器翻页端到端验收
 
 - 用例级别：L6
-- 操作步骤：构建内嵌最新生产前端的 `acp-remote.exe`，在隔离 `data_dir` 与随机端口启动，隔离浏览器上下文经真实配对入网，使用 `clients/web/tests/e2e/` 既有浏览器驱动方式（不新增依赖），对端为受控 ACP（25 轮父会话含前导帧，另经夹具记录 12 轮子目标）：1) 打开父会话并逐次点击“更早”至末页；2) 将每页轮数改为 5 后刷新最新页，再输入 0；3) 恢复有效父每页轮数后，在历史面板“子会话历史”入口手动输入子目标标识展开、翻至下一页、折叠后再展开；4) 释放会话后继续翻页并记录对端日志；5) 第一客户端停留在旧代父页，记录旧更早游标与期望坐标；修改对端重放内容，由第二个已配对客户端显式刷新并确认换代。第一客户端保持原页、不刷新，点击“更早”，记录请求与响应顺序；6) 停止节点并清理进程树与临时目录。
+- 操作步骤：构建内嵌最新生产前端的 `acp-remote.exe`，在隔离 `data_dir` 与随机端口启动，隔离浏览器上下文经真实配对入网，使用 `clients/web/tests/e2e/` 既有浏览器驱动方式（不新增依赖），对端为受控 ACP（25 轮父会话含前导帧，根重放自动投递已登记子目标的 12 轮可证明事件，未协商独立查询）：1) 打开父会话并逐次点击“更早”至末页；2) 将每页轮数改为 5 后刷新最新页，再输入 0；3) 恢复有效父每页轮数后，在历史面板“子会话历史”入口手动输入子目标标识展开、翻至下一页、折叠后再展开；4) 释放会话后继续翻页并记录对端日志；5) 第一客户端停留在旧代父页，记录旧更早游标与期望坐标；修改对端重放内容，由第二个已配对客户端显式刷新并确认换代。第一客户端保持原页、不刷新，点击“更早”，记录请求与响应顺序；6) 停止节点并清理进程树与临时目录。
 - 预期结果：1) 页面依次显示 16–25、6–15、1–5 三页，每页轮次分组自上而下正序，最后一页含前导记录；2) 显示 21–25，输入 0 时提示参数错误且未发送请求；3) 子会话依次显示 1–10、11–12 且组内正序，重新展开回到 1–10，父页内容与分组不变；4) 释放后翻页期间对端新增 `initialize` 为 0；5) 第一客户端先按旧游标及 older 续读收到 stale_cursor，继而自动按原期望坐标 locate，新页 relocated=true、continuity=unproven；页面显示“已在最新同步代际中重新定位，与之前页面的连续性未经证明”且展示新内容；6) 无残留子进程、端口占用或文件句柄。
 
 ### HN-028 真实 Windows 节点、同源 Web 与真实 Codex 的历史分页端到端闭环
@@ -209,3 +212,19 @@
 - 用例级别：L6
 - 操作步骤：在隔离 `data_dir`、随机端口与受控 Codex 隔离会话目录下启动真实 `acp-remote.exe`（内嵌生产前端），同源 Web 完成配对并绑定已授权真实 Codex ACP 适配器（缺可执行环境、凭据或配额时整例记 `not-run` 并记录原因）：1) 在 Web 创建会话并完成至少 12 轮真实对话（含一次真实工具调用），以每页 5 轮查看最新页并记录页元数据；2) 释放会话并重启节点，打开该会话后在后台校准完成、会话再次释放后逐页点击“更早”，同时枚举 Job 内与系统中的 Codex 进程；3) 使用外部独立 Codex 客户端向同一原生会话追加一轮真实对话后退出；4) 在 Web 点击显式刷新后再点击“更早”；5) 停止节点并核查进程树、端口与临时目录。
 - 预期结果：1) 页元数据 `turnStatus = "provable"`，最新页为最新 5 轮且自上而下正序分组；2) 翻页依次覆盖全部轮次直至第 1 轮，翻页期间新增 Codex 进程数为 0；3) 外部追加成功；4) 刷新后最新页包含外部新增轮次，随后“更早”从刷新后的新游标取得新代际历史页；5) 无残留 Codex 子进程或端口占用，临时目录可立即删除。
+
+### HN-029 当前连接协商的只读子历史查询、分批验证与根树准入
+
+- 用例级别：L5
+- 操作步骤：分别在隔离环境执行以下五组检查。
+  1. 通过真实节点和管理 WSS 准备来源 S、空闲根 R、关系已证明的孩子 C 和兄弟 D、两个已授权的只读客户端。C 无快照且无当前子事件，R 有可读父页。分别运行 ACP v1 和 v2 对端，核对双方的命名空间键、版本及设计指定的初始化元数据位置。只接受设计固定方法，输入 12 轮带工具与未知字段的原始子历史，使单帧跨 16 KiB 块边界并切开 UTF-8 字符。两个客户端同时展开 C，暂停首批并查看容量，再释放后逐页读取。内存中核对请求的 rootSessionId、sessionId、首次空游标、续批游标及保存的逐帧原始字节。
+  2. 在各自全新连接依次测试能力缺省、仅根 loadSession、仅子取消、声明在错误位置、版本未知、仅方法名提示、重连后未重新确认能力；再让已匹配对端返回 method-not-found，同一连接重试。另在无扩展连接分别提供有效子快照与根重放自动投递的足够子事件后展开。
+  3. 以屏障分别令根提示先获准、查询先登记。分别在下一批发送前和最终发布前撤销权限、移除父子关系、断开来源、切换来源配置/身份或连接代际、切换读取代际，放行迟到响应。分组测试一个观察者离开、最后一个观察者离开和节点关闭。检查原生方法计数、WSS 输出、暂存、租约及下一次合法根工作。
+  4. 每组重置夹具，分别注入错误 JSON-RPC 关联 ID（推进无进展超时）、响应根或子 ID 错配、更新帧属 D 或协议版本不匹配、非 session/update、空或变化的 snapshotId、sequence 非规范或从 1 开始/跳号/重复、重复游标、非末批无字节进展、非法 base64url、块长超过 16 KiB、非法 UTF-8、末帧未以 LF 完结、服务端错误、提前 EOF 与进展超时。另测首批为空且结束。并行检查父页以及另一来源同名 R/C 的子页。
+  5. 在最终发布路径设置屏障，使用存储夹具预置相同内容或不同内容的可读子代际，记录令牌、保留时间、轮次索引与正文摘要，推进保留时钟后放行。分别注入事务失败和较新读取代际抢先完成。比对发布前后各项以及翻页后的保留时间；以原文标记、原始响应和游标扫描产品日志、错误及测试快照。
+- 预期结果：逐组核对协议、数据库与根树状态。
+  1. 两个版本下，同一根、孩子和连接代际只有一条查询链，sequence 从字符串 `"0"` 连续增长；两个客户端的 C 首页均为 1–10，续页为 11–12，均正序。命中快照的续页新增查询为零。原始帧字节和顺序一致，页标识为 C，Web 只见平台分页游标。根树始终只计一个名额，针对 C 的 prompt、load、resume、cancel、close 调用均为零。
+  2. 无匹配能力且无数据时返回 `unsupported_capability`，不发探测请求。已声明却拒绝方法的连接仅第一次调用，其后直接报告限制。快照和自动投递两个分支均给出 C 页，扩展请求为零；只有根加载成功却无子数据时不能打开 C。父页及根执行持续可用。
+  3. 根工作先获准时返回 `invalid_stage`，查询先登记时原生查询与受保护工作没有重叠。单个观察者退出不影响另一读者；失去证明、读取代际过期或最后一个观察者退出后停止后续请求，迟到响应不发布，原生取消次数为零。撤权按既有关闭合同执行。查询任务有界退出，暂存清空，读取租约释放，随后合法工作能取得准入；关机后临时目录可立即删除。
+  4. 每个错误分支均不发布部分子快照，无子正文外泄，父页、其他来源及已有可读代际完整。空历史能结束传输，无虚构轮次，依既有不可证明轮次规则返回分页限制。
+  5. 发布前只可见上一完整代际；持有效发布权且摘要相同时保留原令牌与保留时间，内容改变时正文、索引、新令牌一次生效。事务失败或旧代迟到保留先前可读代际，读取不延长保留时间。日志、错误和测试快照中敏感标记命中数为零。正向结果属于受控对端合同证据，真实 Harness 未协商时仅能验证负向。
