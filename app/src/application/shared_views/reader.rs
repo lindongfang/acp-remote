@@ -826,6 +826,29 @@ where
             .downcast::<ReadSlot<R>>()
             .map_err(|_| ViewError::InvalidClient)
     }
+    /// A finite page keeps its captured projection across later replay publications.
+    /// The independent send fence still shares the source and native target revocation flags.
+    pub(crate) async fn open_history_snapshot(
+        &self,
+        client: &C,
+        read: &OpenedView,
+    ) -> Result<OpenedView, ViewError> {
+        let generation = {
+            let slot = self.slot(client, read)?;
+            let guard = slot.data.lock().map_err(|_| ViewError::ReadFailure)?;
+            let data = guard.as_ref().ok_or(ViewError::StaleCursor)?;
+            Arc::new(TargetGeneration {
+                send: data
+                    .generation
+                    .send
+                    .next_epoch(data.snapshot.descriptor.view_epoch()),
+                snapshot: std::sync::RwLock::new(Arc::clone(&data.snapshot)),
+                custom_statuses: Mutex::new(crate::domain::shared_view_log::AppendLog::new()?),
+            })
+        };
+        self.open_selected(client, &read.handle.target, Some(generation))
+            .await
+    }
     /// Internal current-observation capture. External open also registers its actual read intent.
     #[allow(
         clippy::too_many_lines,

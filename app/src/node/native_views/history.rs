@@ -273,6 +273,12 @@ impl HistoryRequest {
         source: &str,
     ) -> Result<NativeSocketViewRead, HistoryError> {
         let request = self;
+        if request.open.is_none() {
+            read.read = read
+                .reader
+                .open_history_snapshot(client, &read.read)
+                .await?;
+        }
         let mut generation = Generation::Live(
             crate::transcript_cache::entity_id_to_bytes(
                 read.descriptor().view_epoch().as_entity_id(),
