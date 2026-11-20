@@ -79,6 +79,6 @@ mode: required
 
 独立 tester 另已验证以下子场景。HN-012 中，根执行期间拒绝读取冷子会话；根空闲且自动投递子目标专属用户和助手帧后，子首页显示第 1–10 轮，整树占 1 个名额。未投递且无子快照时返回 unsupported_capability。HN-013 中，5 MiB 内容传输中途断线后可完整重读第 6–15 轮。HN-016 的父会话在无跨加载稳定 ID 的条件下遍历 1,000 轮、100 页，中途快照淘汰后重新定位，逐帧核对通过，共发生两次 session/load。子会话独立查询及其千轮遍历留待新实现验证。
 
-HN-018 的并发定位与失败不留下半截代际已由独立 tester 实测。HN-021 原探针使用 product.status，在既有平台返回 platform_unimplemented。按增量规格对「实际可用会话操作」的要求，改以同一连接上的 session.capacity.inspect 与会话列表验证，保留原失败记录。分组日志确认，只有 resume_only 完成 25 轮及重启后的读取和显式刷新。pure_memory 首轮 input.consume 已响应，20 秒内对端仅记录 initialize 与 session/new，未收到 session/prompt；该组的 25 轮及重启后步骤尚未执行，原因待查。两组均待完整复验。
+HN-018 的并发定位与失败不留下半截代际已由独立 tester 实测。HN-021 原探针使用 product.status，在既有平台返回 platform_unimplemented。按增量规格对「实际可用会话操作」的要求，改以同一连接上的 session.capacity.inspect 与会话列表验证，保留原失败记录。首次运行中，pure_memory 收到首轮 input.consume 响应后，20 秒内对端未收到 session/prompt，该次初始化失败记录保留。独立 tester 复验时，在新建纯内存根会话的同一原生连接投递 25 组用户与助手帧，确认 50 帧落盘后重启。三页离线读取、显式刷新后复用旧游标、淘汰后返回 unsupported_capability、同一管理连接查询容量与会话列表均通过。纯内存冷快照标明 continuable=false；直接提交输入返回 settled/queued，对端未收到 resume 或 prompt。resume_only 则实际恢复会话并将新提示送达对端。复验探针提交待集成。
 
 HN-001 在 871593b 的全仓检查被 HN-028 验收驱动的两处 Clippy 错误阻断（default_trait_access、too_many_lines），已交由该驱动负责人修复；全仓检查待重跑。
