@@ -18,16 +18,16 @@
 ### 硬约束与非目标
 
 - 以 [总体设计](../../../docs/architecture/overview.md) 与 `openspec/specs/` 长期规格为依据；保持设备信任层（`client-trust`）、单会话客户端控制权接管（`session-control-takeover`）与外部原生会话纳管（`native-session-import`）三者职责独立。
-- 会话控制权接管仅作用于主会话（根执行树）内的会话写操作，不阻塞设备列表查询、设备撤销、全局容量面板查看或创建新会话等节点级管理动作。
+- 会话控制权接管仅作用于主会话（根执行树）内的会话写操作，不阻塞设备列表查询、设备撤销、全局容量面板查看与手动释放或创建新会话等节点级管理动作，也不改动连接私有的分块上传暂存协议（`management-input-upload`）。
 - 控制权接管状态属于会话活跃运行期内存事实，不跨会话资源释放或节点重启持久保留；不因控制权顶号切换而中止在途执行或清空节点已受理队列。
-- 首期限定 Windows 节点与同源 Web，当前处于需求与设计定义阶段（`.openspec.yaml` 标记 `x-deferred: true`），正式启动本变更时基于真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`。
+- 首期限定 Windows 节点与同源 Web，基于 [refactor-web-workbench](../archive/2026-11-20-refactor-web-workbench/proposal.md) 模块化基线实施，严格保持 Web 新增与修改子模块单文件行数上限及单向无环依赖。
 
 ### 本 change 的成功判据
 
 - SC1：同一主会话（根执行树）同一时刻最多允许一台可信客户端持有控制权；新建会话自动赋予创建客户端初始控制权，其他可信客户端默认处于只读态。
 - SC2：支持顶号式显式接管与主动释放接管；设备 B 显式接管成功后原子递增控制代际，原主控设备 A 立即退回只读态且迟到旧控制请求被确定性拒绝，在途执行、已受理队列及待决审批无缝移交新主控设备操控。
-- SC3：未接管的可信客户端可实时旁观会话输出、共享队列与待审批状态，并在查看空闲会话时按既有策略读取展示快照或按需触发历史重放，但所有会话写操作（提交输入、队列编辑/取消/优先发送、中断/继续、裁决审批）均被节点拒绝。
-- SC4：主控客户端被撤销信任、主会话资源释放（含 30 分钟空闲自动回收或显式释放）或节点重启后，控制权状态自动归零为无主只读态；正式开工后通过编码前门禁、真实实现与独立集成交付验收。
+- SC3：未接管的可信客户端可实时旁观会话输出、共享队列、排队项正文与待审批状态，并在查看空闲会话时按既有策略读取展示快照或按需触发历史重放，但所有会话写操作（提交输入、队列编辑/取消/优先发送、中断/继续、裁决审批）均被节点拒绝。
+- SC4：主控客户端被撤销信任、主会话资源释放（含 30 分钟空闲自动回收、满额淘汰或显式释放）或节点重启后，控制权状态自动归零为无主只读态；通过编码前门禁、真实实现与独立集成交付验收。
 
 ## What Changes
 
@@ -48,8 +48,8 @@
 
 ## Impact
 
-- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)，并与 [deliver-native-session-import](../deliver-native-session-import/proposal.md) 保持术语与层次解耦；跨变更关系见 [能力地图](../../../docs/architecture/capability-map.md)。
-- 影响范围：节点主会话运行期控制权协调器、WSS 会话命令与审批入口验权、控制权状态推送及 Web 会话页只读/接管状态栏与操作控件门禁；具体写范围在正式开工阶段 `plan.md` 定义。
+- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[refactor-web-workbench](../archive/2026-11-20-refactor-web-workbench/proposal.md)，并与 [deliver-native-session-import](../deliver-native-session-import/proposal.md) 保持术语与层次解耦；跨变更关系见 [能力地图](../../../docs/architecture/capability-map.md)。
+- 影响范围：节点主会话运行期控制权协调器、WSS 会话命令与审批入口验权、控制权状态推送及 Web 会话工作台只读/接管状态栏与操作控件门禁；具体工作包划分与写范围见 [plan.md](plan.md)。
 
 ## Exploration
 
