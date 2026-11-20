@@ -946,6 +946,17 @@ async fn check_two_readers(real_timeout: bool) {
         .await
         .unwrap();
     assert_eq!(next_close(&mut b, Duration::from_secs(5)).await.0, 4410);
+    let mut returning = valid_management_socket(&f.area, node.listen_addr()).await;
+    prove_client(&mut returning, &bkey, &bid, node_public_key(&node)).await;
+    send_json(
+        &mut returning,
+        &json!({"v":1,"type":"command","requestId":Id128::new([91;16]).to_base64url(),
+                "action":"history.page","payload":{"target":scope,"turns":"10",
+                "mode":{"kind":"continue","direction":"older","cursor":cursor}}}),
+    )
+    .await;
+    let closed = next_close(&mut returning, Duration::from_secs(5)).await;
+    assert_eq!(closed, (4401, "authentication failed".to_owned()));
     a.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
 }
