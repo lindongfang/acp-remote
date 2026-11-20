@@ -13,6 +13,7 @@
 - [deliver-session-capacity](../../openspec/changes/archive/2026-11-19-deliver-session-capacity/proposal.md) 已归档，50 主会话名额、30 分钟无活动自动回收请求、已知活动保护与管理账本协调规格已同步至 `openspec/specs/`。
 - [deliver-session-control-takeover](../../openspec/changes/archive/2026-11-20-deliver-session-control-takeover/proposal.md) 已归档，单主会话客户端独占控制权接管（`controlEpoch`）、只读观察隔离与释放/重启自动归零规格已同步至 `openspec/specs/`。
 - [deliver-session-transcript-cache](../../openspec/changes/archive/2026-11-20-deliver-session-transcript-cache/proposal.md) 已归档，节点物理隔离持久化展示快照库（30 天滑动保留 + 10 GiB 上限）、冷会话首屏秒开快照与后台单飞标准重放、及 `resume_only`/`pure_memory` 混合自适应恢复规格已同步至 `openspec/specs/`。
+- [deliver-history-navigation](../../openspec/changes/deliver-history-navigation/proposal.md) 已于 2026-11-20 移除远期冻结标记，进入编码前准备（轮次分页、游标代际与缓存外重新定位），尚未通过编码前门禁、未合入产品代码。
 - 当前其余尚未开工的远期变更在 `.openspec.yaml` 中标记 `x-deferred: true`，按轻量化规则仅维护需求与设计层（`proposal.md`、`specs/`、`design.md`），待正式开工时再移除 `x-deferred: true` 并基于当时真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`，不提前预生成或跨变更陪跑重审。
 
 ## 能力归属与阶段职责
@@ -24,7 +25,7 @@
 | [deliver-session-control-takeover（已归档）](../../openspec/changes/archive/2026-11-20-deliver-session-control-takeover/proposal.md) | session-control-takeover（并修订 session-execution、permission-approvals） | 按主会话根树的单客户端顶号式显式接管（`controlEpoch`）、其余受信设备会话内只读观察及随会话释放自动归零 | 已归档客户端信任、会话闭环与主树资源生命周期 |
 | [deliver-session-transcript-cache（已归档）](../../openspec/changes/archive/2026-11-20-deliver-session-transcript-cache/proposal.md) | session-transcript-cache（并修订 structured-history、native-session-recovery、session-resource-policy） | 物理隔离的持久化结构化展示快照库（默认 30 天滑动保留 + 10 GiB 上限）、冷会话首屏秒开快照结合后台自动拉取补齐外部更新（满额优雅降级）及混合自适应恢复 | 通用闭环历史视图、原生恢复及 50 名额资源边界 |
 | [integrate-pi-harness（待排期）](../../openspec/changes/integrate-pi-harness/proposal.md) | pi-harness-compatibility | Pi（不绑定本机版本）与候选外部 ACP 服务端的配置及独立兼容性实证 | 通用闭环实际合同 |
-| [deliver-history-navigation（待排期）](../../openspec/changes/deliver-history-navigation/proposal.md) | history-navigation | 在标准重放视图与本地有效展示快照上按轮次分页及衔接实时内容，支持缓存外重新定位 | 通用重放、持久化展示快照库及可证明轮次 |
+| [deliver-history-navigation（实施准备中）](../../openspec/changes/deliver-history-navigation/proposal.md) | history-navigation | 在标准重放视图与本地有效展示快照上按轮次分页及衔接实时内容，支持缓存外重新定位 | 通用重放、持久化展示快照库及可证明轮次 |
 | [deliver-agent-session-tree（待排期）](../../openspec/changes/deliver-agent-session-tree/proposal.md) | agent-session-tree | 读取原生身份、父子关系与子历史，在父步骤内展开并正序分页，支持受管展示快照复用 | 历史导航、展示快照库及主树控制/容量规则 |
 | [deliver-native-session-import（待排期）](../../openspec/changes/deliver-native-session-import/proposal.md) | native-session-import | 外部原生会话显式平台纳管、唯一执行归属与重新校验，不导入私有历史文件 | 基础原生身份/加载端口、容量及客户端控制权接管 |
 | [deliver-session-data-lifecycle（待排期）](../../openspec/changes/deliver-session-data-lifecycle/proposal.md) | session-data-lifecycle | 固定范围原生删除、同步擦除目标展示快照、最小审计及平台自有缓存/到期管理元数据安全清理 | 唯一执行归属、会话控制权、资源释放及原生删除证据 |
