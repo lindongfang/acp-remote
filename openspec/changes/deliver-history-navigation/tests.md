@@ -105,8 +105,8 @@
 ### HN-011 缺快照经标准重放分页、快照淘汰后重新定位与满额限制
 
 - 用例级别：L5
-- 操作步骤：1) 在无任何快照的全新 `data_dir` 中，令受控对端（`replay_capable`，`replayTurns` 25 轮）暴露一个外部原生会话 S，客户端 B 经发现与 `target.register` 后以 `view.open` 携带 `page = {"turns":"10"}` 打开；2) B 关闭视图、S 被释放后以返回的 `olderCursor` 请求更早页；3) 推进保留期时钟 31 天触发清理删除 S 的快照，B 以先前游标再请求一次，随后以 `locate`（`older`，`fromTurn = "15"`）请求；4) 再次删除快照，以 50 个受保护主会话占满名额后重复第 3 步的定位请求，随后释放 1 个名额重试。
-- 预期结果：第 1 步经一次 `session/load` 完成重放，页元数据 `source = "replay"`、返回 16–25，快照库新增 S 的完整代际与 25 行轮次索引；第 2 步返回 6–15，`source = "transcript_cache"` 且未再次拉起子进程；第 3 步旧游标返回 `stale_cursor` 且无内容，定位请求按容量规则重放一次后返回 6–15，`relocated = true`、`continuity = "unproven"`、`generationId` 与旧值不同，快照被重建；第 4 步满额时返回 `session_capacity_full`，不打开流、不返回部分页、不关闭任何受保护会话，释放名额后同一请求成功返回 6–15。
+- 操作步骤：1) 在无任何快照的全新 `data_dir` 中，令受控对端（`replay_capable`，`replayTurns` 25 轮）暴露一个外部原生会话 U，客户端 B 经发现与 `target.register` 后，在主树身份未证时尝试打开 U 并记录进程与名额；再使用有可信根身份记录且无快照的会话 S，以 `view.open` 携带 `page = {"turns":"10"}` 打开；2) B 关闭视图、S 被释放后以返回的 `olderCursor` 请求更早页；3) 推进保留期时钟 31 天触发清理删除 S 的快照，B 以先前游标再请求一次，随后以 `locate`（`older`，`fromTurn = "15"`）请求；4) 再次删除快照，以 50 个受保护主会话占满名额后重复第 3 步的定位请求，随后释放 1 个名额重试。
+- 预期结果：第 1 步 U 返回 `session_tree_unverified`，不启动加载进程、不新增容量名额、不返回正文；S 经一次 `session/load` 完成重放，页元数据 `source = "replay"`、返回 16–25，快照库新增 S 的完整代际与 25 行轮次索引；第 2 步返回 6–15，`source = "transcript_cache"` 且未再次拉起子进程；第 3 步旧游标返回 `stale_cursor` 且无内容，定位请求按容量规则重放一次后返回 6–15，`relocated = true`、`continuity = "unproven"`、`generationId` 与旧值不同，快照被重建；第 4 步满额时返回 `session_capacity_full`，不打开流、不返回部分页、不关闭任何受保护会话，释放名额后同一请求成功返回 6–15。
 
 ### HN-012 重放会扰动运行中原生工作时返回 invalid_stage 且不取消
 
