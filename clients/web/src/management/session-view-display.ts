@@ -1,3 +1,6 @@
+import { parseStrictJsonObject } from "../protocol/jws";
+import { turnBoundary } from "./session-protocol/history";
+import { HistoryTurnGroups } from "./history-page-view";
 import type { ViewDataFrame } from "../views/binary";
 import { ViewRecordAssembler } from "../views/records";
 import { ViewContentStore } from "../views/content-store";
@@ -12,8 +15,9 @@ import type { SessionViewOpened, TranscriptCacheState } from "./session-protocol
 export interface ViewDisplayTransport {
   credit(streamId: string, packetSequence: bigint): void;
   detach(streamId: string): void;
+  turnStarted?(turn: string): void;
   snapshotReady?(): void;
-  reopenRequested?(): void;
+  reopenRequested?(fullHistory?: boolean): void;
   retrySyncRequested?(): void;
 }
 
@@ -47,6 +51,10 @@ export class SessionViewDisplay {
   readonly #notice: HTMLParagraphElement;
   readonly #banner: TranscriptCacheBanner;
   #limitations: string;
+  readonly #groups?: HistoryTurnGroups;
+  readonly #paged: boolean;
+  readonly #staticPage: boolean;
+  #snapshotReady = false;
   readonly #segments: HTMLDivElement;
   readonly #statuses: HTMLDivElement;
   readonly #timelines = new Map<string, StructuredTimeline>();
@@ -87,6 +95,9 @@ export class SessionViewDisplay {
     });
     this.#banner.update(opened.status);
     this.#segments = owner.createElement("div");
+    this.#staticPage = opened.page?.liveTail === false;
+    this.#paged = opened.page !== undefined;
+    if (opened.page?.turnStatus === "provable") this.#groups = new HistoryTurnGroups(owner, this.#segments, opened.page);
     this.element.append(this.#notice, this.#statuses, this.#banner.element, this.#segments);
   }
 
@@ -98,7 +109,7 @@ export class SessionViewDisplay {
   }
 
   beginStagingRebind(opened: SessionViewOpened, transport: ViewDisplayTransport): boolean {
-    if (this.#disposed) return false;
+    if (this.#disposed || this.#paged || opened.page) return false;
     this.clearStagingOnly();
     const staging: StagingRebindState = {
       streamId: opened.streamId,
@@ -238,7 +249,7 @@ export class SessionViewDisplay {
     this.#started = true;
     this.#limitations = limitationsCopy(staging.opened);
     this.#notice.textContent =
-      this.#limitations + " 本次快照已接收，继续等待增量；快照结束不代表原生历史重放已完整。";
+      this.#limitations + (this.#staticPage ? " 本页已接收。" : " 本次快照已接收，继续等待增量；快照结束不代表原生历史重放已完整。");
     this.#banner.setCallbacks({
       onRetrySync: () => this.#transport.retrySyncRequested?.(),
     });
@@ -275,12 +286,17 @@ export class SessionViewDisplay {
             this.#transport.credit(this.#streamId, frame.packetSequence);
             this.suspend(status.summary);
             this.detach();
-            this.#transport.reopenRequested?.();
+            this.#transport.reopenRequested?.(status.historyUnprovable);
             return;
           }
+        } else if (completed.kind === "turn_start") {
+          if (!this.#groups || this.#staticPage) throw new Error("unexpected_turn");
+          const boundary = turnBoundary(parseStrictJsonObject(completed.bytes()));
+          if (this.#groups.append(boundary)) this.#transport.turnStarted?.(boundary.turn);
         } else if (completed.kind === "snapshot_end") {
+          this.#snapshotReady = true;
           this.#notice.textContent =
-            this.#limitations + " 本次快照已接收，继续等待增量；快照结束不代表原生历史重放已完整。";
+            this.#limitations + (this.#staticPage ? " 本页已接收。" : " 本次快照已接收，继续等待增量；快照结束不代表原生历史重放已完整。");
           this.#transport.snapshotReady?.();
         } else {
           const changed = this.#store.accept(completed);
@@ -292,7 +308,8 @@ export class SessionViewDisplay {
             );
           }
           if (completed.kind === "item_projection") {
-            this.timeline(decodeProjectionRecord(completed).segmentId);
+            const record = decodeProjectionRecord(completed);
+            if (record.type === "item_projection") this.timeline(record.segmentId, record.firstPosition);
           }
           for (const timeline of this.#timelines.values()) timeline.refresh();
         }
@@ -304,8 +321,18 @@ export class SessionViewDisplay {
     }
   }
 
-  private timeline(segment: string): StructuredTimeline {
-    return this.timelineFor(segment, this.#store);
+  private timeline(segment: string, position?: bigint): void {
+    if (!this.#groups) { this.timelineFor(segment, this.#store); return; }
+    if (position === undefined) return;
+    for (const group of this.#groups.groups) {
+      if (position < group.start || (group.end !== undefined && position >= group.end)) continue;
+      const key = segment + "/" + group.start;
+      if (this.#timelines.has(key)) continue;
+      const timeline = createStructuredTimeline(this.#owner, this.#store, segment,
+        position => position >= group.start && (group.end === undefined || position < group.end));
+      this.#timelines.set(key, timeline);
+      group.host.append(timeline.element);
+    }
   }
 
   private timelineFor(segment: string, store: ViewContentStore): StructuredTimeline {
@@ -354,7 +381,7 @@ export class SessionViewDisplay {
     this.#accepting = false;
     this.#assembler.seal();
     this.clearStagingOnly();
-    this.#notice.textContent = this.#limitations + " " + reason;
+    this.#notice.textContent = this.#limitations + " " + reason + (this.#paged && !this.#snapshotReady ? " 此页仍有未加载部分。" : "");
     this.element.dataset.stale = "true";
   }
 

@@ -607,7 +607,7 @@ describe("STC-016 Off-screen staging rebind, DOM/Selection preservation, shorten
     expect(retryBtn.hidden).toBe(false);
     retryBtn.click();
     await vi.waitFor(() => {
-      expect(openSessionView).toHaveBeenCalledWith(TARGET_ID, "explicit_refresh");
+      expect(openSessionView).toHaveBeenCalledWith(TARGET_ID, "explicit_refresh", {});
       expect(controller.sharedSessionDisplay?.streamId).toBe(STREAM_B);
     });
 
@@ -647,5 +647,42 @@ describe("STC-016 Off-screen staging rebind, DOM/Selection preservation, shorten
     expect(ok).toBe(true);
     nextDisplay.acceptStagedFrame(makeFrame(b64(44), 9n, 9n, "status", new TextEncoder().encode("not-json")));
     expect(nextRoot.dataset.stale).toBe("true");
+  });
+});
+
+
+describe("HN-025 paged production display", () => {
+  it("keeps original groups and assigns appended messages to their TurnStart exactly once", () => {
+    const boundaries = Array.from({ length: 10 }, (_, i) => ({ turn: String(i+16), firstPosition: String(i+16) }));
+    const opened: SessionViewOpened = { ...makeOpened(STREAM_A), page: { source: "live", liveTail: true,
+      turnStatus: "provable", order: "ascending", totalTurns: "25", generationId: "g", turns: boundaries,
+      firstTurn: "16", lastTurn: "25", olderCursor: "opaque", newerCursor: null, prelude: false,
+      relocated: false, continuity: "same_generation" } };
+    const reopenRequested = vi.fn();
+    const display = new SessionViewDisplay(new DomDoc() as unknown as Document, opened,
+      { credit: vi.fn(), detach: vi.fn(), reopenRequested });
+    const root = display.element as unknown as DomNode;
+    const groups = () => root.findAll(n => n.tagName === "SECTION" && n.children[0]?.tagName === "H3");
+    const initial = groups();
+    expect(initial.map(n => n.children[0]?.textContent)).toEqual(boundaries.map(b => "第 " + b.turn + " 轮"));
+    let seq = 1n;
+    const send = (frame: ViewDataFrame) => display.accept(frame);
+    for (let turn = 16; turn <= 27; turn++) {
+      const position = BigInt(turn);
+      if (turn > 25) {
+        const bytes = new TextEncoder().encode(JSON.stringify({ turn: String(turn), firstPosition: String(turn) }));
+        for (let repeat = 0; repeat < 2; repeat++) {
+          send({ ...makeFrame(STREAM_A, seq++, position, "status", bytes), kind: "turn_start" });
+        }
+      }
+      seq = feedTextMessage(send, STREAM_A, SEG_A, seq, position, position, "unique-" + turn);
+    }
+    expect(groups()).toHaveLength(12);
+    for (const [index, group] of groups().entries()) {
+      if (index < 10) expect(group).toBe(initial[index]);
+      expect(group.textContent.match(/unique-\d+/g)).toEqual(["unique-" + (index+16)]);
+    }
+    send(makeFrame(STREAM_A, seq++, 80n, "status", new TextEncoder().encode('{"type":"history_unprovable"}')));
+    expect(reopenRequested).toHaveBeenCalledWith(true);
   });
 });

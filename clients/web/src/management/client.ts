@@ -1,3 +1,4 @@
+import type { HistoryRequest } from "./session-protocol/history";
 import { randomId128 } from "../protocol/pairing";
 import type { JsonValue } from "../protocol/jws";
 import {
@@ -815,12 +816,14 @@ export class ManagementConnection {
       | "reopen"
       | "reconnect"
       | "reacquire",
+    page?: { turns?: string },
   ): Promise<SessionViewOpened> {
     return await this.#command(
       "view.open",
       {
         targetId: requireSessionId(targetId),
         reason,
+        ...(page === undefined ? {} : { page }),
       },
       parseSessionViewOpened,
     );
@@ -835,6 +838,7 @@ export class ManagementConnection {
       | "reopen"
       | "reconnect"
       | "reacquire",
+    page?: { turns?: string },
   ): Promise<SessionViewOpened> {
     const command = parseSessionCommand(JSON.stringify({
       v: 1,
@@ -845,6 +849,7 @@ export class ManagementConnection {
         selection,
         nativeSessionId,
         reason,
+        ...(page === undefined ? {} : { page }),
       },
     }));
     if (command.action !== "view.open_source") {
@@ -856,6 +861,11 @@ export class ManagementConnection {
       command.requestId,
       parseSessionViewOpened,
     );
+  }
+
+  async readHistoryPage(request: HistoryRequest): Promise<SessionViewOpened> {
+    const command = parseSessionCommand(JSON.stringify({ v: 1, type: "command", requestId: randomId128(), action: "history.page", payload: request }));
+    return this.#commandWithId(command.action, command.payload, command.requestId, parseSessionViewOpened);
   }
 
   async rebindSessionView(streamId: string): Promise<SessionViewOpened> {

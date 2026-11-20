@@ -11,6 +11,8 @@ export type ViewRecordKind =
   | "status"
   | "snapshot_end";
 
+export type PagedViewRecordKind = ViewRecordKind | "turn_start";
+
 export interface ViewDataFrame {
   readonly type: "data";
   readonly streamId: string;
@@ -18,7 +20,7 @@ export interface ViewDataFrame {
   readonly recordId: bigint;
   readonly byteOffset: bigint;
   readonly totalLength: bigint;
-  readonly kind: ViewRecordKind;
+  readonly kind: PagedViewRecordKind;
   readonly last: boolean;
   readonly payload: Uint8Array;
 }
@@ -97,6 +99,7 @@ export function validateViewData(frame: ViewDataFrame): void {
     case "original_raw":
     case "item_projection":
     case "status":
+    case "turn_start":
       if (frame.totalLength === 0n || frame.payload.length === 0) {
         throw new ViewDecodeError("invalid_frame");
       }
@@ -149,11 +152,12 @@ export function decodeViewFrame(wire: Uint8Array): ViewBinaryFrame {
     return Object.freeze({ type: "credit", streamId, packetSequence });
   }
   if (wire[5] !== 1) throw new ViewDecodeError("invalid_header");
-  let kind: ViewRecordKind;
+  let kind: PagedViewRecordKind;
   switch (recordKind) {
     case 1: kind = "original_raw"; break;
     case 2: kind = "item_projection"; break;
     case 3: kind = "status"; break;
+    case 5: kind = "turn_start"; break;
     case 4: kind = "snapshot_end"; break;
     default: throw new ViewDecodeError("invalid_header");
   }

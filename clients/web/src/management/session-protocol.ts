@@ -79,3 +79,4 @@ export {
 
 export type { SessionControlSnapshot } from "./session-protocol/control";
 export { parseSessionControlSnapshot } from "./session-protocol/control";
+export type { HistoryPage, HistoryRequest } from "./session-protocol/history";

@@ -10,6 +10,7 @@ export interface ViewStatusRecord {
   readonly segmentId: string | null;
   readonly summary: string;
   readonly requiresReopen: boolean;
+  readonly historyUnprovable?: boolean;
   readonly cacheState?: TranscriptCacheState | null;
 }
 
@@ -66,6 +67,10 @@ export function readSessionViewStatus(bytes: Uint8Array): ViewStatusRecord {
   const typeIndex = members.get("type");
   const type = typeIndex !== undefined && document.tokens[typeIndex]?.kind === "string"
     ? document.stringValue(typeIndex) : null;
+  if (type === "history_unprovable") {
+    if (members.size !== 1) invalid();
+    return { document, segmentId: null, requiresReopen: true, historyUnprovable: true, summary: "当前历史无法证明轮次边界，正在重新读取完整视图。" };
+  }
   if (type === "stream_rebound") {
     for (const name of ["previousStreamId", "streamId", "viewEpoch", "sourceBindingId", "sourceId"]) {
       if (members.has(name)) id(name);

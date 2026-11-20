@@ -420,6 +420,7 @@ describe("actual main lifecycle functions (component execution, not browser evid
     expect(harness.connection.openSessionView.mock.calls.at(-1)).toEqual([
       "target",
       "reconnect",
+      {},
     ]);
     expect(harness.controller.sharedSessionDisplay).toBe(harness.displays[1]);
     expect([...harness.controller.staleSharedDisplays]).toEqual([

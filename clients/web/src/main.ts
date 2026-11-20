@@ -1,5 +1,4 @@
 import "./styles.css";
-import { requiredElement } from "./workbench/dom-primitives";
 import { ManagementWorkbench } from "./workbench/management-workbench";
 
 const app = document.querySelector<HTMLDivElement>("#app");
@@ -8,22 +7,21 @@ if (app === null) {
   throw new Error("application root is missing");
 }
 
-app.innerHTML = `
-  <main class="shell">
-    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="切换为深色主题">深色</button>
-    <section
-      id="access-panel"
-      class="panel"
-      aria-labelledby="panel-title"
-      aria-live="polite"
-    ></section>
-    <div id="session-view-cache"></div>
-  </main>
-`;
-
-const panel = requiredElement("access-panel", HTMLElement);
-const sharedViewHost = requiredElement("session-view-cache", HTMLElement);
-const themeToggle = requiredElement("theme-toggle", HTMLButtonElement);
+const shell = document.createElement("main");
+shell.className = "shell";
+const themeToggle = document.createElement("button");
+themeToggle.id = "theme-toggle";
+themeToggle.className = "theme-toggle";
+themeToggle.type = "button";
+const panel = document.createElement("section");
+panel.id = "access-panel";
+panel.className = "panel";
+panel.setAttribute("aria-labelledby", "panel-title");
+panel.setAttribute("aria-live", "polite");
+const sharedViewHost = document.createElement("div");
+sharedViewHost.id = "session-view-cache";
+shell.append(themeToggle, panel, sharedViewHost);
+app.replaceChildren(shell);
 const systemTheme = globalThis.matchMedia("(prefers-color-scheme: dark)");
 let themeOverride: boolean | null = null;
 

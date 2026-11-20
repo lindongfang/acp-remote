@@ -1,3 +1,4 @@
+import { HistoryPageController } from "./history-page-controller";
 import type { IdentityRecord } from "../pairing/identity";
 import type { ManagementConnection } from "../management/client";
 import type {
@@ -202,6 +203,7 @@ export class SharedViewController {
     opened: SessionViewOpened,
     connection: ManagementConnection,
     clearStaleOnSnapshot: boolean,
+    turns?: string,
   ): SharedViewDisplayLike {
     const factory =
       this.#port.displayFactory ??
@@ -209,12 +211,20 @@ export class SharedViewController {
         new SessionViewDisplay(doc, openedView, callbacks));
     const doc = this.#port.getDocument?.() ?? globalThis.document;
     let display!: SharedViewDisplayLike;
+    let history: HistoryPageController | undefined;
     display = factory(doc, opened, {
+      turnStarted: turn => history?.turnStarted(turn),
       credit: (streamId, sequence) =>
         connection.sendSessionViewCredit(streamId, sequence),
       detach: (streamId) => connection.detachSessionStream(streamId),
-      reopenRequested: () => {
-        void this.rebindSharedView(record, opened);
+      reopenRequested: full => {
+        if (this.#sharedSessionDisplay !== display) return;
+        const spec = this.#sharedViewSpec;
+        if (opened.page && spec?.kind === "target") {
+          void this.openSharedSessionView(record, spec.targetId, null, "reopen", full ? null : {});
+        } else if (opened.page && spec?.kind === "source") {
+          void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "reopen", full ? null : {});
+        } else void this.rebindSharedView(record, opened);
       },
       retrySyncRequested: () => {
         const spec = this.#sharedViewSpec;
@@ -242,6 +252,33 @@ export class SharedViewController {
         this.#staleSharedDisplays.clear();
       },
     });
+    const spec = this.#sharedViewSpec;
+    if (!opened.page || !spec || !(display instanceof SessionViewDisplay)) return display;
+    const root = display;
+    let retired = false;
+    const controller = new HistoryPageController(doc, spec, connection, {
+      credit: (id, seq) => connection.sendSessionViewCredit(id, seq),
+      detach: id => connection.detachSessionStream(id),
+    }, undefined, turns => {
+      if (spec.kind === "target") void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh", turns ? { turns } : {});
+      else void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "explicit_refresh", turns ? { turns } : {});
+    }, () => this.#sharedSessionDisplay === display && this.#port.getManagement() === connection && this.#sharedViewSpec === spec, () => {
+      retired = true;
+      releaseSharedDisplay(root, connection);
+      root.dispose();
+    });
+    history = controller;
+    controller.attach(opened, root);
+    controller.view.turns.value = turns ?? "";
+    display = {
+      element: controller.element, streamId: root.streamId,
+      get detached() { return retired || root.detached; },
+      start: () => root.start(),
+      accept: frame => root.accept(frame),
+      acceptStagedFrame: frame => controller.accept(frame),
+      suspend: () => { root.suspend(); controller.suspend(); },
+      dispose: () => { controller.dispose(); root.dispose(); },
+    };
     return display;
   }
 
@@ -250,6 +287,7 @@ export class SharedViewController {
     targetId: string,
     submit: HTMLButtonElement | null,
     reason: SharedViewOpenReason = "first_open",
+    page: { turns?: string } | null = {},
   ): Promise<void> {
     const connection = this.#port.getManagement();
     const generation = this.#port.getManagementGeneration();
@@ -260,7 +298,7 @@ export class SharedViewController {
       return;
     }
     try {
-      const opened = await connection.openSessionView(targetId, reason);
+      const opened = await connection.openSessionView(targetId, reason, page ?? undefined);
       if (
         generation !== this.#port.getManagementGeneration() ||
         this.#port.getManagement() !== connection ||
@@ -276,7 +314,7 @@ export class SharedViewController {
       const previousOpened = this.#openedSessionView;
       let display: SharedViewDisplayLike | null = null;
       try {
-        display = this.#instantiateDisplay(record, opened, connection, false);
+        display = this.#instantiateDisplay(record, opened, connection, false, page?.turns);
         this.#sharedSessionDisplay = display;
         this.#sharedSessionConnection = connection;
         this.#openedSessionView = opened;
@@ -471,6 +509,7 @@ export class SharedViewController {
     nativeSessionId: string,
     submit: HTMLButtonElement | null,
     reason: SharedViewOpenReason = "first_open",
+    page: { turns?: string } | null = {},
   ): Promise<void> {
     const connection = this.#port.getManagement();
     const generation = this.#port.getManagementGeneration();
@@ -493,7 +532,7 @@ export class SharedViewController {
       return;
     }
     try {
-      const opened = await connection.openSourceSessionView(selection, nativeSessionId, reason);
+      const opened = await connection.openSourceSessionView(selection, nativeSessionId, reason, page ?? undefined);
       if (
         generation !== this.#port.getManagementGeneration() ||
         this.#port.getManagement() !== connection ||
@@ -509,7 +548,7 @@ export class SharedViewController {
       const previousOpened = this.#openedSessionView;
       let display: SharedViewDisplayLike | null = null;
       try {
-        display = this.#instantiateDisplay(record, opened, connection, true);
+        display = this.#instantiateDisplay(record, opened, connection, true, page?.turns);
         this.#sharedSessionDisplay = display;
         this.#sharedSessionConnection = connection;
         this.#openedSessionView = opened;

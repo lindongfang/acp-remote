@@ -1,3 +1,4 @@
+import { parseHistoryPage, type HistoryPage } from "./history";
 import type { JsonValue } from "../../protocol/jws";
 import {
   approvalQuantity,
@@ -80,6 +81,7 @@ export interface SessionViewOpened {
   readonly streamId: string;
   readonly viewEpoch: string;
   readonly snapshotRevision: string;
+  readonly page?: HistoryPage;
   readonly capabilities: {
     readonly opaqueChunks: 1;
   };
@@ -195,7 +197,7 @@ export interface ApprovalDecisionResult {
 
 export function parseSessionViewOpened(value: JsonValue): SessionViewOpened {
   return responseResult(() =>
-    closed(value, {
+    closedWithOptional(value, {
       v: literal(1),
       type: oneOf("view.opened"),
       requestId: requireSessionId,
@@ -253,7 +255,7 @@ export function parseSessionViewOpened(value: JsonValue): SessionViewOpened {
             cacheWarning: requireBoolean,
           },
         ),
-    }),
+    }, { page: parseHistoryPage }),
   );
 }
 

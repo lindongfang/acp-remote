@@ -135,7 +135,9 @@ class Timeline {
   #cards: Map<bigint, Card>;
   #disposed = false;
 
-  constructor(owner: Document, store: ViewContentStore, segment: string) {
+  readonly #includes: (position: bigint) => boolean;
+  constructor(owner: Document, store: ViewContentStore, segment: string, includes: (position: bigint) => boolean) {
+    this.#includes = includes;
     this.#owner = owner;
     this.#store = store;
     this.#segment = segment;
@@ -367,7 +369,7 @@ class Timeline {
   refresh(): void {
     if (this.#disposed || this.#store === null) return;
     try {
-      const items = this.#store.items(this.#segment);
+      const items = this.#store.items(this.#segment).filter(item => this.#includes(item.firstPosition));
       const notices: string[] = [];
       for (const item of items) {
         let card = this.#cards.get(item.anchorId);
@@ -402,7 +404,7 @@ class Timeline {
     this.#segment = segmentId;
     this.element.dataset.segmentId = segmentId;
     try {
-      const items = store.items(segmentId);
+      const items = store.items(segmentId).filter(item => this.#includes(item.firstPosition));
       const oldList = [...this.#cards.values()];
       const claimed = new Set<Card>();
       const matched: Array<Card | null> = new Array(items.length).fill(null);
@@ -511,10 +513,10 @@ class Timeline {
   }
 }
 
-export function createStructuredTimeline(owner: Document, store: ViewContentStore, segmentId: string): StructuredTimeline {
+export function createStructuredTimeline(owner: Document, store: ViewContentStore, segmentId: string, includes = (_position: bigint) => true): StructuredTimeline {
   let timeline: Timeline | null = null;
   try {
-    timeline = new Timeline(owner, store, segmentId);
+    timeline = new Timeline(owner, store, segmentId, includes);
     timeline.refresh();
     const instance = timeline;
     return Object.freeze({

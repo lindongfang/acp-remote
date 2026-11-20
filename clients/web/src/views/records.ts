@@ -1,7 +1,7 @@
 import {
   VIEW_U64_MAX,
   type ViewDataFrame,
-  type ViewRecordKind,
+  type PagedViewRecordKind,
   validateViewData,
   viewStreamBytes,
 } from "./binary";
@@ -10,7 +10,7 @@ import { allocateViewBytes, copyViewBytes, ViewDecodeError } from "./errors";
 export interface CompletedViewRecord {
   readonly streamId: string;
   readonly recordId: bigint;
-  readonly kind: ViewRecordKind;
+  readonly kind: PagedViewRecordKind;
   readonly length: bigint;
   bytes(): Uint8Array;
 }
@@ -20,7 +20,7 @@ class OwnedViewRecord implements CompletedViewRecord {
   constructor(
     readonly streamId: string,
     readonly recordId: bigint,
-    readonly kind: ViewRecordKind,
+    readonly kind: PagedViewRecordKind,
     readonly length: bigint,
     chunks: readonly Uint8Array[],
   ) {
@@ -46,7 +46,7 @@ class OwnedViewRecord implements CompletedViewRecord {
 
 interface PartialRecord {
   readonly recordId: bigint;
-  readonly kind: ViewRecordKind;
+  readonly kind: PagedViewRecordKind;
   readonly total: bigint;
   offset: bigint;
   readonly chunks: Uint8Array[];
