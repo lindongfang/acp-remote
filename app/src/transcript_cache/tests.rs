@@ -893,12 +893,13 @@ async fn all_pool_changes(pool: &sqlx::SqlitePool) -> i64 {
     let mut held = Vec::new();
     let mut changes = 0;
     for _ in 0..pool.options().get_max_connections() {
-        let mut connection = pool.acquire().await.unwrap();
+        held.push(pool.acquire().await.unwrap());
+    }
+    for mut connection in held {
         changes += sqlx::query_scalar::<_, i64>("SELECT total_changes()")
             .fetch_one(&mut *connection)
             .await
             .unwrap();
-        held.push(connection);
     }
     changes
 }
@@ -969,9 +970,9 @@ async fn hn_009_lazy_index_restart_retention_and_cascades() {
             .await
             .unwrap();
     assert_eq!(ordinals, (1..=25).map(|i| (i, i + 2)).collect::<Vec<_>>());
-    let changes = all_pool_changes(&db).await;
+    let initial_write_count = all_pool_changes(&db).await;
     cache.read_turn_page(&key, latest).await.unwrap().unwrap();
-    assert_eq!(all_pool_changes(&db).await, changes);
+    assert_eq!(all_pool_changes(&db).await, initial_write_count);
     for i in [28, 29] {
         assert!(cache.writer().try_enqueue_frame(
             &key,

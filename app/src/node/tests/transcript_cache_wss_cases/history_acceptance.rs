@@ -536,11 +536,11 @@ async fn interactive_cold_root(f: &HarnessFixture, prelude_count: u64) -> ColdRo
         .transcript_cache
         .store();
     timeout(Duration::from_secs(10), async {
-        while !store
+        while store
             .load_snapshot(&session)
             .await
             .unwrap()
-            .is_some_and(|s| s.session.record_count == 50 + prelude_count)
+            .is_none_or(|s| s.session.record_count != 50 + prelude_count)
         {
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
@@ -917,6 +917,9 @@ async fn check_two_readers(real_timeout: bool) {
             "HN-023 physically closed and released at {} seconds",
             since.elapsed().as_secs()
         );
+        // Fence B's notification of the released root before revoking B's trust.
+        let observer = send_command_wait(&mut b, "session.capacity.inspect", json!({})).await;
+        assert_eq!(observer["result"]["occupied"], 0);
     }
     crate::ipc::device_revoke(node.ipc_address(), &bid)
         .await
