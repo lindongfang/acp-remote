@@ -133,14 +133,26 @@ try {
   await button(root,"更早").click();
   await groups(root,11,15);
   await root.getByText("已在最新同步代际中重新定位，与之前页面的连续性未经证明",{exact:false}).first().waitFor();
-  await root.getByText("HN new turn 15",{exact:true}).first().waitFor();
+
   const sequence = wire.slice(start).filter(e => e.action === "history.page" || e.error || e.page);
   assert.deepEqual(sequence[0].mode, {kind:"continue",cursor:oldPage.olderCursor,direction:"older"});
   assert.equal(sequence[1].error, "stale_cursor");
   assert.deepEqual(sequence[2].mode, {kind:"locate",fromTurn:"15",direction:"older"});
   assert.equal(sequence[3].page.relocated,true);
   assert.equal(sequence[3].page.continuity,"unproven");
-  report.steps.push("older, stale_cursor, locate(15), relocated/unproven, new content");
+  report.steps.push("older, stale_cursor, locate(15), relocated/unproven, warning visible");
+  report.stage = "relocated page content";
+  try {
+    await root.getByText(/HN new turn 15\b/).first().waitFor({timeout:8000});
+  } finally {
+    const visibleText = await root.innerText();
+    report.relocatedContent = {
+      newTurns: [...visibleText.matchAll(/HN new turn (\d+)/g)].map(m => Number(m[1])),
+      oldTurns: [...visibleText.matchAll(/HN original turn (\d+)/g)].map(m => Number(m[1])),
+      snapshotReceived: visibleText.includes("本页已接收"),
+      readFailure: visibleText.includes("读取或展示准备失败"),
+    };
+  }
   report.status = "passed";
 } catch (error) {
   report.failureType = error.name;
