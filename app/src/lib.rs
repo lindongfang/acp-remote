@@ -29,6 +29,7 @@ pub mod shared_view_test_support;
 pub mod storage;
 pub(crate) mod strict_json;
 pub mod tls;
+pub mod transcript_cache;
 pub mod trust;
 
 #[cfg(test)]

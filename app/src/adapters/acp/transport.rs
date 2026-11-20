@@ -34,6 +34,11 @@ enum EnqueueMode {
 }
 #[derive(Clone)]
 pub struct ConnectionScope(Arc<()>);
+impl ConnectionScope {
+    pub(crate) fn synthetic_for_cache() -> Self {
+        Self(Arc::new(()))
+    }
+}
 impl PartialEq for ConnectionScope {
     fn eq(&self, o: &Self) -> bool {
         Arc::ptr_eq(&self.0, &o.0)

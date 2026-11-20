@@ -311,6 +311,14 @@ impl AcpSource {
             .and_then(std::sync::Weak::upgrade)
             .ok_or(crate::domain::shared_view::ViewError::CaptureUnavailable)
     }
+    #[cfg(windows)]
+    pub(crate) fn capability_profile(&self) -> Option<crate::transcript_cache::CapabilityProfile> {
+        let connection = self.connection().ok()?;
+        let strategy = connection.strategy()?;
+        Some(super::native_views::capability_profile_from_strategy(
+            &strategy,
+        ))
+    }
     fn terminal(&self, reason: n::SourceTerminalReason) -> n::SourceTerminal<ConnectionScope> {
         let reason = self
             .0

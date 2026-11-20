@@ -20,9 +20,9 @@
 ### 硬约束与非目标
 
 - 以 [总体设计](../../../docs/architecture/overview.md) 与 `openspec/specs/` 长期规格为依据；**模型执行上下文恢复始终以 Harness 原生（`session/resume` 或 `session/load`）为唯一权威**，严禁拼接平台展示快照文本重发给模型伪造上下文，严禁解析各厂商 CLI 私有磁盘目录文件。
-- 展示快照库必须与节点核心控制管理库（`acp-remote.sqlite`）**物理隔离存储**；快照库故障、满额淘汰或过期清理不得阻塞设备信任、请求去重、严格权限审批及会话容量账本。
+- 展示快照库必须与节点核心控制管理库（`node.sqlite3`）**物理隔离存储**；快照库故障、满额淘汰或过期清理不得阻塞设备信任、请求去重、严格权限审批及会话容量账本。
 - 本地展示快照保留策略默认为**按会话快照最后写入/同步时间滑动保留 30 天**，总磁盘安全上限默认为 **10 GiB**（均支持在 `acp-remote.toml` 中配置）；活跃已加载会话受保护不清理，原生会话显式删除时立即同步擦除对应快照。
-- 首期限定 Windows 节点与同源 Web，当前处于需求与设计定义阶段（`.openspec.yaml` 标记 `x-deferred: true`），正式启动本变更时基于真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`。
+- 首期限定 Windows 节点与同源 Web，基于 [refactor-web-workbench](../archive/2026-11-20-refactor-web-workbench/proposal.md) 模块化基线实施，严格保持 Web 子模块单文件行数上限及单向无环依赖。
 
 ### 本 change 的成功判据
 
@@ -51,8 +51,8 @@
 
 ## Impact
 
-- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)，并为下游 [deliver-history-navigation](../deliver-history-navigation/proposal.md)、[deliver-agent-session-tree](../deliver-agent-session-tree/proposal.md)、[deliver-session-data-lifecycle](../deliver-session-data-lifecycle/proposal.md) 提供持久化展示快照底座；跨变更关系见 [能力地图](../../../docs/architecture/capability-map.md)。
-- 影响范围：独立展示快照存储引擎与生命周期清理任务、节点配置（`acp-remote.toml`）、共享视图与后台自动重放协调端口、WSS 历史秒开与同步增量/代际推送协议及 Web 无感补齐与来源状态提示；具体写范围在正式开工阶段 `plan.md` 定义。
+- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[refactor-web-workbench](../archive/2026-11-20-refactor-web-workbench/proposal.md)，并为下游 [deliver-history-navigation](../deliver-history-navigation/proposal.md)、[deliver-agent-session-tree](../deliver-agent-session-tree/proposal.md)、[deliver-session-data-lifecycle](../deliver-session-data-lifecycle/proposal.md) 提供持久化展示快照底座；跨变更关系见 [能力地图](../../../docs/architecture/capability-map.md)。
+- 影响范围：独立展示快照存储引擎（`transcript-cache.sqlite3`）与生命周期清理任务、节点配置（`acp-remote.toml`）、共享视图与后台自动重放协调端口、WSS 历史秒开与同步状态推送协议及 Web 前缀保持无感补齐与来源状态提示；具体工作包划分与写范围见 [plan.md](plan.md)。
 
 ## Exploration
 

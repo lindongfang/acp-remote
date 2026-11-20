@@ -68,6 +68,10 @@ pub(crate) enum SourceEntry<R> {
     Bind(RouteMarker),
     ReadComplete(ReadCompleteMarker),
     ReadFailure(ReadFailureMarker<R>),
+    PreloadCached {
+        key: NativeSessionKey,
+        frames: Vec<Frame<R>>,
+    },
 }
 
 pub(crate) struct SourceBatch<R> {
@@ -89,6 +93,7 @@ impl<R> Iterator for SourceBatchIter<R> {
                 SourceEntry::Bind(next) => next.version > marker.version,
                 SourceEntry::ReadComplete(next) => next.version > marker.version,
                 SourceEntry::ReadFailure(next) => next.version > marker.version,
+                SourceEntry::PreloadCached { .. } => false,
             });
             if before {
                 return self.0.fallback.take().map(SourceEntry::ReadFailure);
@@ -569,6 +574,27 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SourceProducer<S, R>
         drop(queue);
         self.state.wake.notify_waiters();
         Ok(version)
+    }
+    pub(crate) fn preload_cached_target(
+        &self,
+        key: NativeSessionKey,
+        frames: Vec<Frame<R>>,
+    ) -> Result<(), ViewError> {
+        if self.state.sealed.load(Ordering::Acquire) {
+            return Err(ViewError::SourceReleased);
+        }
+        let mut queue = self
+            .state
+            .queue
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?;
+        queue
+            .try_reserve(1)
+            .map_err(|_| ViewError::AllocationFailure)?;
+        queue.push_back(SourceEntry::PreloadCached { key, frames });
+        drop(queue);
+        self.state.wake.notify_waiters();
+        Ok(())
     }
 }
 impl<S, R> Drop for SourceProducer<S, R> {

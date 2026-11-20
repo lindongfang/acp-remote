@@ -39,6 +39,9 @@ export interface SharedViewDisplayLike {
   suspend(): void;
   dispose(): void;
   accept?(frame: ViewDataFrame): void;
+  beginStagingRebind?(opened: SessionViewOpened, transport: ViewDisplayTransport): boolean;
+  acceptStagedFrame?(frame: ViewDataFrame): boolean;
+  abortStagingRebind?(reason?: string): void;
 }
 
 export type SharedViewDisplayFactory = (
@@ -133,12 +136,14 @@ export class SharedViewController {
   }
 
   acceptViewFrame(frame: ViewDataFrame): boolean {
-    if (
-      this.#sharedSessionDisplay !== null &&
-      frame.streamId === this.#sharedSessionDisplay.streamId
-    ) {
-      this.#sharedSessionDisplay.accept?.(frame);
-      return true;
+    if (this.#sharedSessionDisplay !== null) {
+      if (this.#sharedSessionDisplay.acceptStagedFrame?.(frame) === true) {
+        return true;
+      }
+      if (frame.streamId === this.#sharedSessionDisplay.streamId) {
+        this.#sharedSessionDisplay.accept?.(frame);
+        return true;
+      }
     }
     return false;
   }
@@ -210,6 +215,20 @@ export class SharedViewController {
       detach: (streamId) => connection.detachSessionStream(streamId),
       reopenRequested: () => {
         void this.rebindSharedView(record, opened);
+      },
+      retrySyncRequested: () => {
+        const spec = this.#sharedViewSpec;
+        if (spec?.kind === "target") {
+          void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh");
+        } else if (spec?.kind === "source") {
+          void this.openSharedSourceView(
+            record,
+            spec.selection,
+            spec.nativeSessionId,
+            null,
+            "explicit_refresh",
+          );
+        }
       },
       snapshotReady: () => {
         if (this.#sharedSessionDisplay !== display) return;
@@ -373,6 +392,42 @@ export class SharedViewController {
       ) {
         releaseSharedDisplay(reopened, connection);
         return;
+      }
+      if (previous.beginStagingRebind !== undefined) {
+        const stagedTransport: ViewDisplayTransport = {
+          credit: (streamId, sequence) =>
+            connection.sendSessionViewCredit(streamId, sequence),
+          detach: (streamId) => connection.detachSessionStream(streamId),
+          reopenRequested: () => {
+            void this.rebindSharedView(record, reopened);
+          },
+          retrySyncRequested: () => {
+            const spec = this.#sharedViewSpec;
+            if (spec?.kind === "target") {
+              void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh");
+            } else if (spec?.kind === "source") {
+              void this.openSharedSourceView(
+                record,
+                spec.selection,
+                spec.nativeSessionId,
+                null,
+                "explicit_refresh",
+              );
+            }
+          },
+          snapshotReady: () => {
+            if (this.#sharedSessionDisplay !== previous) return;
+            this.#sharedSessionConnection = connection;
+            this.#openedSessionView = reopened;
+            this.#sharedViewStaleNotice = null;
+            for (const stale of this.#staleSharedDisplays) stale.dispose();
+            this.#staleSharedDisplays.clear();
+          },
+        };
+        if (previous.beginStagingRebind(reopened, stagedTransport)) {
+          this.#port.renderDashboard(record, "正在后台准备最新会话快照，准备就绪后将无缝切换。");
+          return;
+        }
       }
       let display: SharedViewDisplayLike | null = null;
       try {

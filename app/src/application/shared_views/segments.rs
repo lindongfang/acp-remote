@@ -44,6 +44,11 @@ pub struct SegmentEvent {
     pub phase: SegmentPhase,
     pub metadata: SegmentMetadata,
 }
+#[derive(Clone)]
+pub struct CustomStatusEvent {
+    pub bytes: Vec<u8>,
+    pub segment: ViewEpoch,
+}
 pub struct SegmentLog {
     publications: AppendLog<SegmentPublication>,
     versions: Vec<AppendLog<SegmentMetadata>>,
