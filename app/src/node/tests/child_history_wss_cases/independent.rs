@@ -442,6 +442,15 @@ async fn hn_020_hn_029_rejected_native_batches_leave_parent_and_other_source_usa
 
 #[tokio::test]
 async fn hn_020_native_child_and_grandchild_events_preserve_root_turns() {
+    Box::pin(check_native_children(false)).await;
+}
+
+#[tokio::test]
+async fn hn_020_auto_delivered_agent_only_child_requires_a_paging_limit() {
+    Box::pin(check_native_children(true)).await;
+}
+
+async fn check_native_children(check_unprovable: bool) {
     let mut s = Box::pin(Scenario::new(
         1,
         json!({"childHistory":false,"replayTurns":25}),
@@ -506,16 +515,30 @@ async fn hn_020_native_child_and_grandchild_events_preserve_root_turns() {
         grand["error"]
     );
     assert_eq!(snapshot(&mut b, &grand).await.raw.len(), 6);
-    for id in ["no-native-frames", "agent-only"] {
-        req["child"] = json!(id);
+    if check_unprovable {
+        req["child"] = json!("agent-only");
         let unavailable = send_command_wait(&mut b, "history.page", req.clone()).await;
+        let records = if unavailable["ok"] == true {
+            snapshot(&mut b, &unavailable).await.raw.len()
+        } else {
+            0
+        };
+        b.close(None).await.unwrap();
+        s.shutdown().await;
         assert_eq!(
             unavailable["error"],
             json!({"code":"unsupported_capability"}),
-            "child {id}"
+            "C4 ok={} turnStatus={} rawRecordCount={records}",
+            unavailable["ok"],
+            unavailable["result"]["page"]["turnStatus"]
         );
+        return;
     }
+    req["child"] = json!("no-native-frames");
+    let missing = send_command_wait(&mut b, "history.page", req.clone()).await;
+    assert_eq!(missing["error"], json!({"code":"unsupported_capability"}));
     req["child"] = json!(CHILD);
+    takeover_target(&mut s.control, s.root).await;
     let before = send_command_wait(
         &mut s.control,
         "session.control.inspect",
