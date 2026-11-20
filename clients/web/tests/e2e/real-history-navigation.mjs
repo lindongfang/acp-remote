@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { writeFileSync, existsSync } from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { setTimeout as sleep } from "node:timers/promises";
 
 export async function runRealHistory({page,cfg,report,openNewTarget,groups,button,wire,openBound}) {
@@ -73,8 +74,19 @@ export async function runRealHistory({page,cfg,report,openNewTarget,groups,butto
   }
 
   report.stage = "latest five after twelve replies";
+  // The last assistant message can arrive before the node settles its dispatch.
+  const db = new DatabaseSync(path.join(cfg.workDir, "..", "node-data", "node.sqlite3"), { readOnly: true });
+  try {
+    const settled = db.prepare("SELECT count(*) AS n FROM node_native_dispatches WHERE close_reason = 'native_settled'");
+    const until = Date.now() + 30000;
+    while (settled.get().n < 12 && Date.now() < until) await sleep(100);
+    assert.equal(settled.get().n, 12);
+  } finally {
+    db.close();
+  }
   if (!await root.getByLabel("每页轮数").isVisible()) {
     await button(page,"打开共享视图").first().click();
+    await root.getByText(/本次快照已接收|本页已接收/).first().waitFor();
   }
   await root.getByLabel("每页轮数").fill("5");
   await button(root,"重新加载首页").click();
