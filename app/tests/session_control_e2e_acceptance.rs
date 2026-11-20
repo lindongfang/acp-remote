@@ -418,6 +418,7 @@ async fn hn_027_controlled_history_navigation() {
         node_child: Some(spawn_daemon(bin, &area.config_path)),
         driver_child: None,
     };
+    let job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
     wait_node_ready(&area.ipc_addr).await;
     let scripts = repo.join("clients/web/tests/e2e");
     let evidence = repo.join("testing/runs/deliver-history-navigation/hn-027.json");
@@ -497,11 +498,166 @@ async fn hn_027_controlled_history_navigation() {
     let status = guard.driver_child.as_mut().unwrap().wait().unwrap();
     ipc::stop(&area.ipc_addr).await.unwrap();
     assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
+    assert_eq!(job.totals().1, 0, "node descendant still active");
     drop(guard);
     assert!(!area.temp_root.exists());
     assert!(TcpListener::bind(area.origin.trim_start_matches("https://")).is_ok());
     assert!(
         status.success(),
         "HN-027 browser assertions failed; see sanitized evidence"
+    );
+}
+
+struct HistoryProcessJob(std::os::windows::io::OwnedHandle);
+
+impl HistoryProcessJob {
+    fn attach(node: &Child) -> Self {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        // SAFETY: anonymous job without inherited handles; take ownership after checking creation.
+        let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        assert!(!raw.is_null());
+        let job = unsafe { OwnedHandle::from_raw_handle(raw) };
+        // SAFETY: both handles outlive this call, before pairing or launching any harness.
+        assert_ne!(
+            unsafe { AssignProcessToJobObject(raw, node.as_raw_handle()) },
+            0
+        );
+        Self(job)
+    }
+
+    fn totals(&self) -> (u32, u32) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+            QueryInformationJobObject,
+        };
+        let mut counts = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        // SAFETY: the output buffer and its length match the accounting information class.
+        assert_ne!(
+            unsafe {
+                QueryInformationJobObject(
+                    self.0.as_raw_handle(),
+                    JobObjectBasicAccountingInformation,
+                    (&raw mut counts).cast(),
+                    std::mem::size_of_val(&counts).try_into().unwrap(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        (counts.TotalProcesses, counts.ActiveProcesses)
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-028: requires explicitly supplied disposable authenticated Codex home"]
+async fn hn_028_real_history_navigation() {
+    // A dedicated home is supplied by its owner. Never import the user's CLI login.
+    let home = PathBuf::from(
+        std::env::var_os("HN_CODEX_HOME").expect("not-run: isolated HN_CODEX_HOME missing"),
+    )
+    .canonicalize()
+    .unwrap();
+    let personal = PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join(".codex");
+    assert_ne!(Some(&home), personal.canonicalize().ok().as_ref());
+    assert!(
+        home.join("auth.json").is_file() && !home.join("sessions").exists(),
+        "not-run: requires a fresh authorized isolated Codex home"
+    );
+    let repo = repo_root();
+    let adapter = std::env::var_os("HN_CODEX_ADAPTER").map_or_else(||repo.join(
+        "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/codex-acp/dist/index.js"),
+        PathBuf::from);
+    let codex = std::env::var_os("HN_CODEX_PATH").map_or_else(
+        || {
+            PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap())
+                .join("Programs/OpenAI/Codex/bin/codex.exe")
+        },
+        PathBuf::from,
+    );
+    assert!(
+        adapter.is_file() && codex.is_file(),
+        "not-run: missing real adapter or executable"
+    );
+    let area = setup_temp_e2e_area();
+    let bin = Path::new(env!("CARGO_BIN_EXE_acp-remote"));
+    let mut guard = E2eCleanupGuard {
+        root: area.temp_root.clone(),
+        ipc_address: area.ipc_addr.clone(),
+        node_child: Some(spawn_daemon(bin, &area.config_path)),
+        driver_child: None,
+    };
+    let mut job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
+    wait_node_ready(&area.ipc_addr).await;
+    let evidence = repo.join("testing/runs/deliver-history-navigation/hn-028.json");
+    fs::create_dir_all(evidence.parent().unwrap()).unwrap();
+    let config = area.temp_root.join("browser.json");
+    fs::write(&config,serde_json::to_vec(&serde_json::json!({
+        "realCodexMode":true,"codexHome":home,"codexPath":codex,"codexAdapter":adapter,
+        "origin":area.origin,"workspaceDir":area.workspace_dir,"workDir":area.work_dir,"evidenceOut":evidence,
+    })).unwrap()).unwrap();
+    guard.driver_child = Some(
+        Command::new("node")
+            .arg(repo.join("clients/web/tests/e2e/history-navigation.mjs"))
+            .arg(config)
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("CODEX_API_KEY")
+            .spawn()
+            .unwrap(),
+    );
+    tokio::time::timeout(
+        Duration::from_secs(50),
+        pair_one_client(&area.ipc_addr, &area.work_dir.join("pairing-a.json")),
+    )
+    .await
+    .unwrap();
+    let mut total = None;
+    let mut completed = 0;
+    for step in ["restart", "before-pages", "after-pages"] {
+        let signal = area.work_dir.join(step);
+        while !signal.exists()
+            && guard
+                .driver_child
+                .as_mut()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_none()
+        {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if !signal.exists() {
+            break;
+        }
+        match step {
+            "restart" => {
+                ipc::stop(&area.ipc_addr).await.unwrap();
+                assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
+                assert_eq!(job.totals().1, 0);
+                guard.node_child = Some(spawn_daemon(bin, &area.config_path));
+                job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
+                wait_node_ready(&area.ipc_addr).await;
+            }
+            "before-pages" => total = Some(job.totals().0),
+            _ => assert_eq!(
+                Some(job.totals().0),
+                total,
+                "a node descendant started during offline paging"
+            ),
+        }
+        fs::write(area.work_dir.join(format!("{step}.done")), b"").unwrap();
+        completed += 1;
+    }
+    let status = guard.driver_child.as_mut().unwrap().wait().unwrap();
+    ipc::stop(&area.ipc_addr).await.unwrap();
+    assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
+    assert_eq!(job.totals().1, 0);
+    drop(guard);
+    assert!(!area.temp_root.exists());
+    assert!(TcpListener::bind(area.origin.trim_start_matches("https://")).is_ok());
+    assert!(
+        status.success() && completed == 3,
+        "real browser assertions failed"
     );
 }

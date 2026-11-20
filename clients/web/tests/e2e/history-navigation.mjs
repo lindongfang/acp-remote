@@ -60,6 +60,10 @@ function initializeCount() {
 try {
   report.stage = "pair clients";
   const a = await paired("a");
+  if (cfg.realCodexMode) {
+    const { runRealHistory } = await import("./real-history-navigation.mjs");
+    await runRealHistory({page:a,cfg,report,openNewTarget,groups,history,button,wire,openBound});
+  } else {
   const b = await paired("b");
   report.steps.push("both paired");
   report.stage = "create target";
@@ -152,6 +156,7 @@ try {
       snapshotReceived: visibleText.includes("本页已接收"),
       readFailure: visibleText.includes("读取或展示准备失败"),
     };
+  }
   }
   report.status = "passed";
 } catch (error) {
