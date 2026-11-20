@@ -542,6 +542,21 @@ async fn hn_013_five_mib_output_survives_reopen_and_reassembly() {
             if hdr.record_kind() == Some(RecordKind::OriginalRaw) && hdr.total() > size as u64 {
                 partial += payload.len();
             }
+            if hdr.record_kind() == Some(RecordKind::OriginalRaw)
+                && hdr.total() > size as u64
+                && hdr.offset() == 0
+            {
+                let waiting = timeout(Duration::from_millis(120), async {
+                    loop {
+                        let frame = sock.next().await.unwrap().unwrap();
+                        if matches!(frame, Message::Binary(_)) {
+                            break;
+                        }
+                    }
+                })
+                .await;
+                assert!(waiting.is_err(), "sender advanced without the next credit");
+            }
             sock.send(Message::Binary(
                 TransferHeader::credit(stream, hdr.packet())
                     .encode(&[])
@@ -567,6 +582,33 @@ async fn hn_013_five_mib_output_survives_reopen_and_reassembly() {
     assert_eq!(outputs.len(), 1);
     assert_eq!(outputs[0].len(), size);
     assert!(outputs[0].bytes().all(|b| b == b'x'));
+    let large_hash = |raw: &DrainedStreamFrames| {
+        use sha2::{Digest, Sha256};
+        let records = raw
+            .raw_bytes
+            .values()
+            .filter(|bytes| bytes.len() > size)
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 1);
+        Sha256::digest(records[0])
+    };
+    let cold_hash = large_hash(&frames);
+    let live = send_command_wait(
+        &mut sock,
+        "view.open",
+        json!({"targetId":root.target.encode(),"reason":"first_open","page":{"turns":"25"}}),
+    )
+    .await;
+    assert_eq!(live["result"]["page"]["source"], "live");
+    let live_frames = snapshot(&mut sock, &live).await;
+    assert_eq!(large_hash(&live_frames), cold_hash);
+    let original = format!(
+        r#"{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"{}","update":{{"sessionUpdate":"tool_call_update","toolCallId":"big","rawOutput":"{}","status":"completed"}}}}}}"#,
+        root.native,
+        "x".repeat(size)
+    );
+    use sha2::Digest;
+    assert_eq!(sha2::Sha256::digest(original.as_bytes()), cold_hash);
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
 }
@@ -786,21 +828,51 @@ async fn check_nonreplayable(mode: &str) {
     configure(&f, &json!({"capabilityMode":mode,"echoUserChunk":true}));
     let owner = start_node(&f);
     let node = owner.ready().await.unwrap();
+    let native_gate = f.area.directory.join("native-turns");
+    if mode == "pure_memory" {
+        configure(&f, &json!({"nativeTurnGate":native_gate}));
+    }
     let (id, key, sel) = f.install_profile(&node, 1, 86).await;
     let mut sock = connected(&f, &node, &key, &id).await;
     let (target, native) = f
         .create_and_bind_target(&node, &mut sock, &key, &id, &sel)
         .await;
-    for turn in 1..=25 {
-        if turn % 10 == 0 {
-            sock.close(None).await.unwrap();
-            sock = connected(&f, &node, &key, &id).await;
+    if mode == "pure_memory" {
+        std::fs::write(native_gate, b"emit").unwrap();
+        let store = node
+            .session_services
+            .as_ref()
+            .unwrap()
+            .transcript_cache
+            .store();
+        let session = NativeSessionKey::from_config(Some(sel.source), &native).unwrap();
+        timeout(Duration::from_secs(10), async {
+            loop {
+                if store
+                    .load_snapshot(&session)
+                    .await
+                    .unwrap()
+                    .is_some_and(|s| s.session.record_count == 50)
+                {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("pure memory peer's original 25 native turns reached the cache");
+    } else {
+        for turn in 1..=25 {
+            if turn % 10 == 0 {
+                sock.close(None).await.unwrap();
+                sock = connected(&f, &node, &key, &id).await;
+            }
+            assert_eq!(
+                submit_prompt_turn(&mut sock, target, &format!("U{turn:04}")).await["ok"],
+                true
+            );
+            wait_for_peer_method(&f, "session/prompt", turn).await;
         }
-        assert_eq!(
-            submit_prompt_turn(&mut sock, target, &format!("U{turn:04}")).await["ok"],
-            true
-        );
-        wait_for_peer_method(&f, "session/prompt", turn).await;
     }
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
@@ -837,6 +909,9 @@ async fn check_nonreplayable(mode: &str) {
         p["generationId"]
     );
     snapshot(&mut sock, &refreshed).await;
+    let old_again = send_command_wait(&mut sock, "history.page", previous(&p["olderCursor"])).await;
+    assert_eq!(old_again["result"]["page"]["firstTurn"], "6");
+    snapshot(&mut sock, &old_again).await;
     assert_eq!(f.peer_logs().len(), initial);
     expire_cache(&node, &native).await;
     let missing = send_command_wait(
@@ -845,13 +920,46 @@ async fn check_nonreplayable(mode: &str) {
         json!({"target":scope,"mode":{"kind":"first"}}),
     )
     .await;
-    let status = send_command_wait(&mut sock, "product.status", json!({})).await;
+    takeover_target(&mut sock, target).await;
+    let input = submit_prompt_turn(&mut sock, target, "after cache retention").await;
+    if mode == "resume_only" {
+        wait_for_peer_method(&f, "session/prompt", 26).await;
+        assert_eq!(input["ok"], true);
+        assert!(
+            f.peer_logs()
+                .iter()
+                .any(|e| e["method"] == "session/resume")
+        );
+    } else {
+        assert_eq!(first["result"]["status"]["continuable"], false);
+        // The queue acknowledgement is an admission fact. Check native execution separately after shutdown.
+        assert_eq!(input["result"]["request"]["state"], "settled");
+        assert_eq!(input["result"]["request"]["outcome"]["kind"], "queued");
+    }
+    let inventory = send_command_wait(&mut sock, "catalog.inventory", json!({})).await;
+    let capacity = send_command_wait(&mut sock, "session.capacity.inspect", json!({})).await;
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
-    assert_eq!(
-        status["ok"], true,
-        "product.status {mode}: {:?}",
-        status["error"]
+    if mode == "pure_memory" {
+        assert!(
+            f.peer_logs()
+                .iter()
+                .all(|e| e["method"] != "session/prompt" && e["method"] != "session/resume")
+        );
+    }
+    assert!(
+        inventory["result"]["targets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["targetId"] == target.encode() && row["nativeSessionId"] == native)
+    );
+    assert_eq!(capacity["ok"], true);
+    assert_eq!(capacity["result"]["limit"], 50);
+    assert!(
+        capacity["result"]["occupied"]
+            .as_u64()
+            .is_some_and(|n| n <= 1)
     );
     assert_eq!(
         missing["error"],
@@ -1157,5 +1265,237 @@ async fn hn_018_two_simultaneous_locations_and_failed_replay() {
     );
     a.close(None).await.unwrap();
     b.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn hn_020_cached_children_read_independently_while_root_owns_prompt() {
+    use serde_json::json;
+    let f = HarnessFixture::new("hn020");
+    let gate = f.area.directory.join("prompt-release");
+    configure(&f, &json!({"promptBarrierReleaseFile":gate}));
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let (id, key, sel) = f.install_profile(&node, 1, 94).await;
+    let mut a = connected(&f, &node, &key, &id).await;
+    let (root, native) = f
+        .create_and_bind_target(&node, &mut a, &key, &id, &sel)
+        .await;
+    let (unrelated, other_native) = f
+        .create_and_bind_target(&node, &mut a, &key, &id, &sel)
+        .await;
+    release_target(&mut a, unrelated).await;
+    record_child(&node, &sel, &native, "child").await;
+    let pool = node.storage.as_ref().unwrap().pool_for_test();
+    sqlx::query("INSERT INTO node_session_parents SELECT ?, 'grandchild', 'child',source_instance_id,runtime_epoch,connection_epoch,X'0000000000000001',X'0000000000000001',zeroblob(32),0 FROM node_source_session_operations WHERE native_session_id=?").bind(sel.source.encode()).bind(&native).execute(pool).await.unwrap();
+    seed_turns(&node, &sel, &native, 25, "R", "user_message_chunk").await;
+    seed_turns(&node, &sel, "child", 10, "C", "user_message_chunk").await;
+    seed_turns(&node, &sel, "grandchild", 5, "G", "user_message_chunk").await;
+    let read_key = SigningKey::from_slice(&[95; 32]).unwrap();
+    let reader = pair_browser(&node, &read_key, "Child observer").await;
+    let mut b = connected(&f, &node, &read_key, &reader).await;
+    let scope = json!({"kind":"target","targetId":root.encode()});
+    let parent = json!({"target":scope,"turns":"5","mode":{"kind":"first"}});
+    let first = send_command_wait(&mut b, "history.page", parent.clone()).await;
+    assert_eq!(first["result"]["page"]["firstTurn"], "21");
+    snapshot(&mut b, &first).await;
+    let child =
+        |name: &str| json!({"target":scope,"child":name,"turns":"3","mode":{"kind":"first"}});
+    for name in ["missing", &other_native] {
+        let bad = send_command_wait(&mut b, "history.page", child(name)).await;
+        assert_eq!(bad["error"], json!({"code":"invalid_target"}));
+        assert!(bad["result"].is_null());
+    }
+    let grand = send_command_wait(&mut b, "history.page", child("grandchild")).await;
+    assert_eq!(grand["result"]["page"]["firstTurn"], "1");
+    let frames = snapshot(&mut b, &grand).await;
+    assert_eq!(frames.raw.len(), 3);
+    assert!(
+        frames
+            .raw
+            .iter()
+            .all(|r| r["params"]["sessionId"] == "grandchild")
+    );
+    let bound = json!({"targetId":root.encode()});
+    let ctrl = send_command_wait(&mut a, "session.control.inspect", bound.clone()).await;
+    assert_eq!(
+        submit_prompt_turn(&mut a, root, "keep running").await["ok"],
+        true
+    );
+    wait_for_peer_method(&f, "session/prompt", 1).await;
+    let queue = send_command_wait(&mut a, "input.queue", bound.clone()).await;
+    let count = f.peer_logs().len();
+    for _ in 0..20 {
+        let page = send_command_wait(&mut b, "history.page", child("child")).await;
+        let meta = &page["result"]["page"];
+        assert_eq!(meta["firstTurn"], "1");
+        assert_eq!(meta["lastTurn"], "3");
+        assert_eq!(meta["relocated"], false);
+        assert_eq!(snapshot(&mut b, &page).await.raw.len(), 3);
+    }
+    assert_eq!(f.peer_logs().len(), count);
+    assert_eq!(
+        send_command_wait(&mut a, "input.queue", bound.clone()).await["result"],
+        queue["result"]
+    );
+    assert_eq!(
+        send_command_wait(&mut a, "session.control.inspect", bound).await["result"],
+        ctrl["result"]
+    );
+    assert_eq!(
+        send_command_wait(&mut a, "session.capacity.inspect", json!({})).await["result"]["occupied"],
+        1
+    );
+    seed_turns(&node, &sel, "child", 12, "C", "user_message_chunk").await;
+    let req = json!({"target":scope,"child":"child","mode":{"kind":"first"}});
+    let reopened = send_command_wait(&mut b, "history.page", req).await;
+    assert_eq!(reopened["result"]["page"]["lastTurn"], "10");
+    let cursor = reopened["result"]["page"]["newerCursor"].clone();
+    snapshot(&mut b, &reopened).await;
+    let tail=send_command_wait(&mut b,"history.page",json!({"target":scope,"child":"child","mode":{"kind":"continue","cursor":cursor,"direction":"newer"}})).await;
+    assert_eq!(tail["result"]["page"]["firstTurn"], "11");
+    assert_eq!(tail["result"]["page"]["lastTurn"], "12");
+    crate::ipc::device_revoke(node.ipc_address(), &reader)
+        .await
+        .unwrap();
+    assert_eq!(next_close(&mut b, Duration::from_secs(5)).await.0, 4410);
+    let stable = send_command_wait(&mut a, "history.page", parent).await;
+    assert_eq!(
+        stable["result"]["page"]["turns"],
+        first["result"]["page"]["turns"]
+    );
+    std::fs::write(gate, b"done").unwrap();
+    a.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn hn_014_append_over_the_original_socket_view() {
+    use serde_json::json;
+    let f = HarnessFixture::new("hn014-tail");
+    configure(
+        &f,
+        &json!({"capabilityMode":"replay_and_resume","echoUserChunk":true,"replayTurns":25}),
+    );
+    let root = Box::pin(cold_root(&f)).await;
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let mut a = connected(&f, &node, &root.key, &root.id).await;
+    let reader_key = SigningKey::from_slice(&[96; 32]).unwrap();
+    let reader_id = pair_browser(&node, &reader_key, "Live tail reader").await;
+    let mut reader = connected(&f, &node, &reader_key, &reader_id).await;
+    let open = json!({"targetId":root.target.encode(),"reason":"first_open","page":{"turns":"10"}});
+    let initial = send_command_wait(&mut reader, "view.open", open.clone()).await;
+    assert_eq!(initial["result"]["page"]["firstTurn"], "16");
+    let stream = Id128::parse_base64url(initial["result"]["streamId"].as_str().unwrap()).unwrap();
+    let initial_frames = read_until_snapshot_end(&mut reader, stream).await;
+    assert_eq!(initial_frames.turns.len(), 10);
+    let scope = json!({"kind":"target","targetId":root.target.encode()});
+    let mid=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":initial["result"]["page"]["olderCursor"]}})).await;
+    let p = &mid["result"]["page"];
+    snapshot(&mut a, &mid).await;
+    takeover_target(&mut a, root.target).await;
+    for i in 26..=27 {
+        let reply = submit_prompt_turn(&mut a, root.target, &format!("U{i:04}")).await;
+        assert_eq!(reply["ok"], true);
+        wait_for_peer_method(&f, "session/prompt", i - 25).await;
+    }
+    let receipt = timeout(Duration::from_secs(8), async {
+        let mut starts = Vec::new();
+        let mut content = Vec::new();
+        loop {
+            let msg = reader.next().await.unwrap().unwrap();
+            let Message::Binary(bytes) = msg else {
+                continue;
+            };
+            let (h, payload) = TransferHeader::decode(&bytes).unwrap();
+            if h.stream() != stream {
+                continue;
+            }
+            reader
+                .send(Message::Binary(
+                    TransferHeader::credit(stream, h.packet())
+                        .encode(&[])
+                        .unwrap()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            if h.record_kind() == Some(RecordKind::TurnStart) {
+                let val: serde_json::Value = serde_json::from_slice(payload).unwrap();
+                starts.push(val["turn"].as_str().unwrap().to_owned());
+            } else if h.record_kind() == Some(RecordKind::OriginalRaw) {
+                let val: serde_json::Value = serde_json::from_slice(payload).unwrap();
+                content.push((
+                    starts.len(),
+                    val["params"]["update"]["content"]["text"]
+                        .as_str()
+                        .unwrap()
+                        .to_owned(),
+                ));
+                if content.len() == 4 {
+                    break (starts, content);
+                }
+            }
+        }
+    })
+    .await;
+    let latest = send_command_wait(&mut a, "view.open", open).await;
+    let older=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":p["olderCursor"]}})).await;
+    let newer=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"newer","cursor":p["newerCursor"]}})).await;
+    a.close(None).await.unwrap();
+    reader.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+    assert_eq!(latest["result"]["page"]["lastTurn"], "27");
+    assert_eq!(older["result"]["page"]["firstTurn"], "1");
+    assert_eq!(newer["result"]["page"]["lastTurn"], "25");
+    let (starts, content) = receipt.expect("live view receives both complete appended turns");
+    assert_eq!(starts, ["26", "27"]);
+    let correct = content.iter().map(|(n, s)| (*n, s.as_str())).eq([
+        (1, "U0026"),
+        (1, "reply:U0026"),
+        (2, "U0027"),
+        (2, "reply:U0027"),
+    ]);
+    assert!(correct, "turn marker order and message ownership");
+}
+
+#[tokio::test]
+async fn hn_017_replay_relocates_against_compressed_and_rewritten_native_history() {
+    use serde_json::json;
+    let f = HarnessFixture::new("hn017-replay");
+    configure(&f, &json!({"replayTurns":1000}));
+    let root = Box::pin(cold_root(&f)).await;
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let mut sock = connected(&f, &node, &root.key, &root.id).await;
+    let scope = json!({"kind":"target","targetId":root.target.encode()});
+    let locate = |n: u64| json!({"target":scope,"mode":{"kind":"locate","direction":"older","fromTurn":n.to_string()}});
+    let previous = send_command_wait(&mut sock, "history.page", locate(820)).await;
+    assert_eq!(previous["result"]["page"]["firstTurn"], "811");
+    snapshot(&mut sock, &previous).await;
+    for marker in ["C", "W"] {
+        release_target(&mut sock, root.target).await;
+        expire_cache(&node, &root.native).await;
+        configure(&f, &json!({"replayTurns":600,"turnPrefix":marker}));
+        let stale=send_command_wait(&mut sock,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":previous["result"]["page"]["olderCursor"]}})).await;
+        assert_eq!(stale["error"], json!({"code":"stale_cursor"}));
+        let missing = send_command_wait(&mut sock, "history.page", locate(810)).await;
+        assert_eq!(missing["error"], json!({"code":"not_found"}));
+        assert!(missing["result"].is_null());
+        let next = send_command_wait(&mut sock, "history.page", locate(500)).await;
+        assert_eq!(next["result"]["page"]["totalTurns"], "600");
+        assert_eq!(next["result"]["page"]["firstTurn"], "491");
+        assert_eq!(next["result"]["page"]["continuity"], "unproven");
+        let frames = snapshot(&mut sock, &next).await;
+        assert_eq!(frames.raw.len(), 10);
+        for (i, frame) in frames.raw.iter().enumerate() {
+            assert!(
+                frame["params"]["update"]["content"]["text"].eq(&format!("{marker}{:04}", 491 + i)),
+                "unexpected native content at offset {i}"
+            );
+        }
+    }
+    sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
 }

@@ -127,6 +127,18 @@ async function handleRequest(msg) {
   if (method === "session/new") {
     const sid = cfg.fixedSessionId || `peer-session-${sessionSeq++}-${process.pid}`;
     send({ id, result: { sessionId: sid } });
+    if (cfg.nativeTurnGate) {
+      while (!fs.existsSync(cfg.nativeTurnGate)) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      for (let turn = 1; turn <= 25; turn++) {
+        for (const [update, prefix] of [["user_message_chunk","U"],["agent_message_chunk","A"]]) {
+          send({method:"session/update",params:{sessionId:sid,update:{
+            sessionUpdate:update,messageId:prefix+turn,content:{type:"text",text:prefix+String(turn).padStart(4,"0")}
+          }}});
+        }
+      }
+    }
     return;
   }
 
@@ -536,7 +548,7 @@ async fn read_until_snapshot_end(
                     }
                 }
                 Message::Text(txt) => {
-                    received_kinds.push(format!("Text({})", &txt[..txt.len().min(120)]));
+                    received_kinds.push(format!("Text({} bytes)", txt.len()));
                 }
                 Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
                 Message::Close(frame) => {
@@ -981,12 +993,7 @@ async fn wait_for_peer_method(fixture: &HarnessFixture, method: &str, min_count:
         }
     })
     .await
-    .unwrap_or_else(|_| {
-        panic!(
-            "timed out waiting for {min_count} calls to {method}; logs={:?}",
-            fixture.peer_logs()
-        )
-    });
+    .unwrap_or_else(|_| panic!("timed out waiting for {min_count} calls to {method}"));
     tokio::time::sleep(Duration::from_millis(60)).await;
 }
 

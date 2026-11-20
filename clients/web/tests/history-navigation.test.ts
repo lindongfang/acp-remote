@@ -149,3 +149,44 @@ describe("history page controller", () => {
     }
   });
 });
+
+describe("independent history component checks", () => {
+  it("imports the history protocol, controller and view with no document", async () => {
+    expect(typeof document).toBe("undefined");
+    vi.resetModules();
+    const [protocol, controller, view] = await Promise.all([
+      import("../src/management/session-protocol/history"),
+      import("../src/workbench/history-page-controller"),
+      import("../src/management/history-page-view"),
+    ]);
+    expect(protocol.historyTurns("10")).toBe("10");
+    expect(typeof controller.HistoryPageController).toBe("function");
+    expect(typeof view.HistoryPageView).toBe("function");
+  });
+
+  it("preserves every parent turn node across a child's collapse, reopen, and failure", async () => {
+    const { controller, port } = setup();
+    const body = controller.view.body as unknown as FakeElement;
+    const groups = () => ((body.children[0] as FakeElement).children.at(-1) as FakeElement).children;
+    const original = [...groups()];
+    expect(original).toHaveLength(10);
+    const root = controller.element as unknown as FakeElement;
+    const [label, toggle, host] = root.children.slice(-3) as FakeElement[];
+    (label!.children[0] as FakeElement).value = "child";
+    const childPage = { ...page, firstTurn: "1", lastTurn: "10", olderCursor: null,
+      turns: Array.from({ length: 10 }, (_, i) => ({ turn: String(i + 1), firstPosition: String(i + 1) })) };
+    port.readHistoryPage.mockResolvedValueOnce(opened(SEGMENT, childPage));
+    toggle!.click();
+    await vi.waitFor(() => expect(host!.textContent).toContain("第 1–10 轮"));
+    toggle!.click();
+    expect(port.closeSessionView).toHaveBeenCalledWith(SEGMENT);
+    port.readHistoryPage.mockRejectedValueOnce(new ManagementRequestError("invalid_target"));
+    toggle!.click();
+    await vi.waitFor(() => expect(port.readHistoryPage).toHaveBeenCalledTimes(2));
+    expect(host!.textContent).not.toContain("第 1–10 轮");
+    expect(port.readHistoryPage.mock.calls.map(([request]) => request.mode)).toEqual([{kind: "first"}, {kind: "first"}]);
+    expect(groups()).toHaveLength(original.length);
+    original.forEach((node, i) => expect(groups()[i]).toBe(node));
+    expect(controller.view.notice.textContent).toContain("第 6–15 轮");
+  });
+});
