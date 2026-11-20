@@ -266,6 +266,7 @@ async fn node_configuration_next_read_joins_cancelled_read_original_close() {
             .unwrap();
         connection.begin_read().await.unwrap();
         connection.finish_catalog(Ok(()), &d).await.unwrap();
+        drop(guard);
     });
     barrier.arrived().await;
     reader.abort();
