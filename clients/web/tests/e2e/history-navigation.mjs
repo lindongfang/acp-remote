@@ -93,16 +93,12 @@ try {
       o.connection_epoch,X'0000000000000001',X'0000000000000001',zeroblob(32),0
       FROM product_targets t JOIN node_source_session_operations o ON t.native_id=o.native_session_id
       WHERE t.target_id=? AND t.native_id=?`).run(targetId,nativeSessionId).changes, 1);
+    const source = db.prepare("SELECT source_id FROM product_targets WHERE target_id=?").get(targetId);
+    writeFileSync(path.join(cfg.workDir,"seed-child.json"),JSON.stringify(source));
   } finally { db.close(); }
-  // Warm the child's real replay snapshot using the same registered harness.
-  await a.locator("#catalog-target-native-id").fill("child-history");
-  await button(a,"登记并绑定 Target").click();
-  const childCard = a.locator(".device-card").filter({hasText:"child-history"});
-  await button(childCard,"载入队列").click();
-  await button(a,"打开共享视图").first().click();
-  await groups(root,3,12);
-  await openBound(a,targetId);
-  await groups(root,16,25);
+  for (let i=0;i<200 && !existsSync(path.join(cfg.workDir,"child-seeded"));i++) await sleep(100);
+  assert.ok(existsSync(path.join(cfg.workDir,"child-seeded")));
+  report.stage = "expand recorded child";
   await root.getByLabel("子会话原生标识").fill("child-history");
   await button(root,"展开子会话历史").click();
   const child = history(root);
@@ -110,7 +106,7 @@ try {
   await button(child,"更新").click();
   await groups(child,11,12);
   await button(root,"折叠子会话历史").click();
-  await groups(root,16,25);
+  await groups(root,21,25);
   await button(root,"展开子会话历史").click();
   await groups(child,1,10);
   await button(root,"折叠子会话历史").click();
@@ -122,28 +118,28 @@ try {
   await button(b,"重试释放协调").waitFor();
   const before = initializeCount();
   await button(root,"更早").click();
-  await groups(root,6,15);
+  await groups(root,16,20);
   assert.equal(initializeCount(),before);
   report.steps.push("offline paging, zero initialize");
   report.stage = "replace generation from second browser";
   const oldPage = wire.findLast(event => event.page)?.page;
-  assert.equal(oldPage.firstTurn, "6");
+  assert.equal(oldPage.firstTurn, "16");
   const start = wire.length;
   writeFileSync(path.join(cfg.peerStateDir,"changed"),"1");
   await openBound(b,targetId);
   await button(history(b),"重新加载首页").click();
   await history(b).getByText("HN new turn 25",{exact:true}).first().waitFor();
   await button(root,"更早").click();
-  await groups(root,1,5);
+  await groups(root,11,15);
   await root.getByText("已在最新同步代际中重新定位，与之前页面的连续性未经证明",{exact:false}).first().waitFor();
-  await root.getByText("HN new turn 5",{exact:true}).first().waitFor();
+  await root.getByText("HN new turn 15",{exact:true}).first().waitFor();
   const sequence = wire.slice(start).filter(e => e.action === "history.page" || e.error || e.page);
   assert.deepEqual(sequence[0].mode, {kind:"continue",cursor:oldPage.olderCursor,direction:"older"});
   assert.equal(sequence[1].error, "stale_cursor");
-  assert.deepEqual(sequence[2].mode, {kind:"locate",fromTurn:"5",direction:"older"});
+  assert.deepEqual(sequence[2].mode, {kind:"locate",fromTurn:"15",direction:"older"});
   assert.equal(sequence[3].page.relocated,true);
   assert.equal(sequence[3].page.continuity,"unproven");
-  report.steps.push("older, stale_cursor, locate(5), relocated/unproven, new content");
+  report.steps.push("older, stale_cursor, locate(15), relocated/unproven, new content");
   report.status = "passed";
 } catch (error) {
   report.failureType = error.name;

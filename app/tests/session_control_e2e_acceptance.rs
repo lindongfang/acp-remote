@@ -447,6 +447,53 @@ async fn hn_027_controlled_history_navigation() {
         .await
         .expect("browser pairing deadline");
     }
+    let seed = area.work_dir.join("seed-child.json");
+    while !seed.exists() {
+        if guard
+            .driver_child
+            .as_mut()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_some()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if seed.exists() {
+        use acp_remote::{
+            adapters::acp::{RawMessage, Version},
+            domain::{EntityId, native::NativeSessionKey},
+            transcript_cache::{
+                CapabilityProfile, NoProtectedSessions, SystemRetentionClock, TranscriptCacheStore,
+            },
+        };
+        use std::sync::Arc;
+        let seed: serde_json::Value = serde_json::from_slice(&fs::read(seed).unwrap()).unwrap();
+        let source = EntityId::decode(seed["source_id"].as_str().unwrap()).unwrap();
+        let key = NativeSessionKey::from_config(Some(source), "child-history").unwrap();
+        let store = TranscriptCacheStore::open(
+            area.temp_root.join("node-data/transcript-cache.sqlite3"),
+            Default::default(),
+            Arc::new(SystemRetentionClock),
+            Arc::new(NoProtectedSessions),
+        )
+        .await
+        .unwrap();
+        let frames = (1..=12).map(|i| {
+            let frame=serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{
+                "sessionId":"child-history","update":{"sessionUpdate":"user_message_chunk",
+                "messageId":i.to_string(),"content":{"type":"text","text":format!("HN child {i}")}}}});
+            (RawMessage::parse(serde_json::to_vec(&frame).unwrap()).unwrap(),i)
+        }).collect();
+        store
+            .replace_with_replay(&key, Version::V2, CapabilityProfile::ReplayCapable, frames)
+            .await
+            .unwrap();
+        store.shutdown().await.unwrap();
+        fs::write(area.work_dir.join("child-seeded"), b"").unwrap();
+    }
     let status = guard.driver_child.as_mut().unwrap().wait().unwrap();
     ipc::stop(&area.ipc_addr).await.unwrap();
     assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
