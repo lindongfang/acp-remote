@@ -65,7 +65,7 @@ mode: required
 ## Handoff
 
 - **独立工作树与基线**：工作树 `D:/Project/acp-remote/.worktrees/deliver-session-transcript-cache`，本地分支 `feat/deliver-session-transcript-cache`，父基线提交 `bc92997c`，构建目录 `D:/Project/acp-remote/.target-wt/deliver-session-transcript-cache`。
-- **权威输入路径**：[proposal.md](proposal.md)、[design.md](design.md)、[tests.md](tests.md)、[tasks.md](tasks.md)、[session-transcript-cache](specs/session-transcript-cache/spec.md)、[structured-history](specs/structured-history/spec.md)、[native-session-recovery](specs/native-session-recovery/spec.md)、[session-resource-policy](specs/session-resource-policy/spec.md)、[AGENTS.md](../../../AGENTS.md)、[硬规则清单](../../../docs/hard-rules.md)、[总体设计](../../../docs/architecture/overview.md)。
+- **权威输入路径**：[proposal.md](proposal.md)、[design.md](design.md)、[tests.md](tests.md)、[tasks.md](tasks.md)、[session-transcript-cache](specs/session-transcript-cache/spec.md)、[structured-history](specs/structured-history/spec.md)、[native-session-recovery](specs/native-session-recovery/spec.md)、[session-resource-policy](specs/session-resource-policy/spec.md)、[AGENTS.md](../../../../AGENTS.md)、[硬规则清单](../../../../docs/hard-rules.md)、[总体设计](../../../../docs/architecture/overview.md)。
 - **读写边界**：严禁触碰主工作区 `D:/Project/acp-remote` 根下的并行变更文件，严禁修改 `openspec/specs/**`、`testing/suites/**`（归档时原子同步）及只读浏览器夹具 `clients/web/tests/browser/`；详细运行与审查原始日志统一写入本地忽略目录 `testing/runs/deliver-session-transcript-cache/`。
 - **验证入口**：见 `## Project Verify` 表中 `PV1`–`PV5`。
 

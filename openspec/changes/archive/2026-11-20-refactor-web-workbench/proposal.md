@@ -2,7 +2,7 @@
 
 ## Why
 
-当前 `clients/web/src/main.ts`（3,695 行）在单一顶层副作用脚本内混杂了配对引导、管理连接代际围栏、设备信任列表、会话队列与输入编排、共享视图与正文分块流、严格审批、容量与原生释放、工作区/Harness 目录以及来源会话发现等全部状态与 DOM 装配；同时 `clients/web/src/management/session-protocol.ts`（2,035 行）与 `clients/web/src/management/client.ts`（1,693 行）也集中了过多跨域 DTO 校验与文档构造职责，导致部分单元测试被迫使用 `readFileSync("../src/main.ts")` 搭配字符串切片与 `new Function` 反射测试私有逻辑。在启动 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md) 与 [deliver-session-transcript-cache](../../deliver-session-transcript-cache/proposal.md) 之前完成纯内部模块化重构，可建立清晰的单向状态与控制器边界，消除大文件耦合与脆弱源码切片测试。
+当前 `clients/web/src/main.ts`（3,695 行）在单一顶层副作用脚本内混杂了配对引导、管理连接代际围栏、设备信任列表、会话队列与输入编排、共享视图与正文分块流、严格审批、容量与原生释放、工作区/Harness 目录以及来源会话发现等全部状态与 DOM 装配；同时 `clients/web/src/management/session-protocol.ts`（2,035 行）与 `clients/web/src/management/client.ts`（1,693 行）也集中了过多跨域 DTO 校验与文档构造职责，导致部分单元测试被迫使用 `readFileSync("../src/main.ts")` 搭配字符串切片与 `new Function` 反射测试私有逻辑。在启动 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md) 与 [deliver-session-transcript-cache](../2026-11-20-deliver-session-transcript-cache/proposal.md) 之前完成纯内部模块化重构，可建立清晰的单向状态与控制器边界，消除大文件耦合与脆弱源码切片测试。
 
 ## Success Criteria
 
@@ -51,7 +51,7 @@
 
 - Web 前端源码：`clients/web/src/main.ts`、`clients/web/src/workbench/*`、`clients/web/src/management/session-protocol.ts`、`clients/web/src/management/session-protocol/*`、`clients/web/src/management/client.ts`、`clients/web/src/management/catalog-documents.ts`、`clients/web/src/management/upload-transfer.ts`。
 - Web 单元测试：`clients/web/tests/session-view-main.test.ts`、`clients/web/tests/r3-source-session.test.ts`、`clients/web/tests/management-error-messages.test.ts`、删除废弃补丁 `clients/web/tests/session-view-node.d.ts` 及新增控制器边界单元测试；`clients/web/tests/browser/` 保持只读零改动。
-- 前置与后续衔接：承接已归档 [fix-build-and-legacy-baseline](../2026-11-19-fix-build-and-legacy-baseline/proposal.md)，为后续 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md)（接入会话级主控/只读状态门控）与 [deliver-session-transcript-cache](../../deliver-session-transcript-cache/proposal.md)（接入共享视图本地快照秒开与后台校准）提供清晰的控制器挂载点。
+- 前置与后续衔接：承接已归档 [fix-build-and-legacy-baseline](../2026-11-19-fix-build-and-legacy-baseline/proposal.md)，为后续 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md)（接入会话级主控/只读状态门控）与 [deliver-session-transcript-cache](../2026-11-20-deliver-session-transcript-cache/proposal.md)（接入共享视图本地快照秒开与后台校准）提供清晰的控制器挂载点。
 
 ## Exploration
 

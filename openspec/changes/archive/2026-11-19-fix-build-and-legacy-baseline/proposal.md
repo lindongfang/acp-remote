@@ -47,7 +47,7 @@
 
 - 构建与工程校验：`app/Cargo.toml`、`app/dev-fixtures/`、`testing/suites/verify-suite.mjs`、`.github/workflows/ci.yml`。
 - 存储与运行时装配：`app/src/storage.rs`、`app/src/storage/`、`app/src/session_storage/schema.rs`、`app/src/session_storage/mod.rs`、`app/src/domain/mod.rs`、`app/src/application/mod.rs` 及被移除的第一代 `#[cfg(test)]` 遗留模块。
-- 前置与后续衔接：在已归档 [deliver-session-capacity](../2026-11-19-deliver-session-capacity/proposal.md) 之上收敛工程底座，为后续前端工作台预重构及 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md)、[deliver-session-transcript-cache](../../deliver-session-transcript-cache/proposal.md) 提供干净基线。
+- 前置与后续衔接：在已归档 [deliver-session-capacity](../2026-11-19-deliver-session-capacity/proposal.md) 之上收敛工程底座，为后续前端工作台预重构及 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md)、[deliver-session-transcript-cache](../2026-11-20-deliver-session-transcript-cache/proposal.md) 提供干净基线。
 
 ## Exploration
 

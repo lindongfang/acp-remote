@@ -1,6 +1,6 @@
 # 独立持久化展示快照库存储与生命周期实现
 
-行为权威依据为 [展示快照库规格](../../openspec/changes/deliver-session-transcript-cache/specs/session-transcript-cache/spec.md)、[结构化历史规格](../../openspec/changes/deliver-session-transcript-cache/specs/structured-history/spec.md) 与 [设计文档](../../openspec/changes/deliver-session-transcript-cache/design.md)。上层节点混合自适应读取、后台单飞标准重放与上下文恢复协调见 [展示快照协调实现](transcript-cache.md)。
+行为权威依据为 [展示快照库规格](../../openspec/specs/session-transcript-cache/spec.md)、[结构化历史规格](../../openspec/specs/structured-history/spec.md) 与 [设计文档](../../openspec/changes/archive/2026-11-20-deliver-session-transcript-cache/design.md)。上层节点混合自适应读取、后台单飞标准重放与上下文恢复协调见 [展示快照协调实现](transcript-cache.md)。
 
 ## 物理分库、零新依赖 `sqlx::sqlite` 与 Windows 句柄生命周期
 

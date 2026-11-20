@@ -14,14 +14,14 @@
 | openspec/specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 多个入口访问同一会话 | CL-056、CL-057、CL-086 |
 | openspec/specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 不同来源中的相同短标识 | CL-056 |
 | openspec/specs/native-session-recovery/spec.md | 原生身份不依赖启动入口 | 接入来源未配置 | CL-056 |
-| openspec/specs/native-session-recovery/spec.md | 原生绑定与按需恢复 | 原生状态缺失 | CL-010、CL-045 |
+| openspec/specs/native-session-recovery/spec.md | 原生绑定与按需恢复 | 原生状态缺失 | CL-010、CL-045、STC-008 |
 | openspec/specs/native-session-recovery/spec.md | 查看允许激活进程 | 查看需要加载 | CL-065、CL-085 |
 | openspec/specs/native-session-recovery/spec.md | 查看允许激活进程 | 查看触发权限请求 | CL-065 |
 | openspec/specs/native-session-recovery/spec.md | 释放确认与管理事实 | 关闭或管理记录失败 | CL-008、CL-011 |
 | openspec/specs/native-session-recovery/spec.md | 释放确认与管理事实 | 存储失败但仍需安全关闭 | CL-011、CL-077 |
-| openspec/specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 无重放恢复 | CL-047、CL-106 |
-| openspec/specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 已准入连接选择无重放恢复 | CL-052 |
-| openspec/specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 恢复重放旧消息 | CL-012、CL-051 |
+| openspec/specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 无重放恢复 | CL-047、CL-106、STC-007 |
+| openspec/specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 已准入连接选择无重放恢复 | CL-052、STC-007、STC-016 |
+| openspec/specs/native-session-recovery/spec.md | 恢复与历史读取分离 | 恢复重放旧消息 | CL-012、CL-051、STC-002、STC-009、STC-016 |
 | openspec/specs/native-session-recovery/spec.md | 恢复和重放保留有效接入参数 | 已有非空或未知 Client 配置 | CL-102 |
 
 ## Cases

@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[已归档通用会话闭环](../archive/2026-11-16-deliver-codex-session-loop/proposal.md) 与 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
+- 依赖：[已归档通用会话闭环](../archive/2026-11-16-deliver-codex-session-loop/proposal.md) 与 [deliver-session-transcript-cache](../archive/2026-11-20-deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：展示快照轮次切片读取、重放流式选页、WSS 历史分页命令与 Web 会话时间线组件；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

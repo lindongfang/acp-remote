@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[deliver-history-navigation](../deliver-history-navigation/proposal.md)、[deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 和基础原生身份/读取端口；各 Harness 按自身已接入能力独立验收，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
+- 依赖：[deliver-history-navigation](../deliver-history-navigation/proposal.md)、[deliver-session-transcript-cache](../archive/2026-11-20-deliver-session-transcript-cache/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 和基础原生身份/读取端口；各 Harness 按自身已接入能力独立验收，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：子身份关系映射、受管快照子步骤引用、分页展开协议、主树控制权继承校验及 Web 展示组件；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration
