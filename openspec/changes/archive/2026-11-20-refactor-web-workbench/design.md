@@ -13,7 +13,7 @@
 - 建立清晰的单向分层依赖：`protocol / views` -> `pairing / management` -> `workbench controllers` -> `workbench coordinator` -> `main.ts` 薄启动入口，消除跨面板隐式全局变量共享与循环依赖。
 - 将所有业务逻辑与状态控制器设计为**导入零副作用（import-pure）**的可实例化类或纯函数，只有 `src/main.ts` 执行顶层 `#app` 挂载与全局事件注册。
 - 保持 `src/management/session-protocol.ts` 与 `src/management/client.ts` 既有公共导出符号集精确一致（100% 向后兼容且不外泄新增内部原语），避免无意义的跨文件重命名噪音。
-- 为后续 [deliver-session-control-takeover](../deliver-session-control-takeover/design.md) 与 [deliver-session-transcript-cache](../deliver-session-transcript-cache/design.md) 预留单一职责扩展缝隙（会话级主控写门控集中在会话队列/输入与审批控制器，本地快照与后台校准集中在共享视图控制器）。
+- 为后续 [deliver-session-control-takeover](../../deliver-session-control-takeover/design.md) 与 [deliver-session-transcript-cache](../../deliver-session-transcript-cache/design.md) 预留单一职责扩展缝隙（会话级主控写门控集中在会话队列/输入与审批控制器，本地快照与后台校准集中在共享视图控制器）。
 
 **Non-Goals:**
 - 不改变任何 HTML 节点标签、CSS 类名、`id`、`aria-*`、`data-*`（如 `data-panel="source-session"`、`data-stale="true"`）、按钮中文文案、错误提示文案或 `sessionStorage` / `IndexedDB` 键名。

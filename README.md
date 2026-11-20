@@ -12,7 +12,7 @@ Harness 是实际运行任务的程序，负责模型推理和工具调用；ACP
 
 - **节点接入与客户端信任（`establish-node-access`，2026-10-30 归档）**：覆盖本机命名管道、DPAPI 身份保护、SQLite 存储、直接 TLS / Tailscale 接入、配对 HTTP、WSS 管理连接、可信设备列表与撤销。已完成 33 例验收及独立检视，详见 [归档计划](openspec/changes/archive/2026-10-30-establish-node-access/plan.md)、[Windows 节点访问实现说明](docs/implementation/windows-node-access.md) 与本地记录 `testing/runs/establish-node-access/`。
 - **通用会话闭环与 Codex 首验（`deliver-codex-session-loop`，2026-11-16 归档）**：覆盖工作区登记、共享输入队列、ACP 原始 JSON 保真运行时、会话执行、严格权限审批、基础原生会话发现/重放及当前连接视图。实际验证范围以 [归档计划](openspec/changes/archive/2026-11-16-deliver-codex-session-loop/plan.md) 为准；Codex 首验归档不代表任意其他 Harness 已通过真实验收。
-- **会话容量与无活动资源回收（`deliver-session-capacity`，2026-11-19 归档）**：覆盖 50 主会话名额上限、30 分钟无活动自动回收请求、已知活动保护与管理账本协调。双层 L6 验收范围见 [归档计划](openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md)，实现边界见 [节点容量说明](docs/implementation/session-capacity.md) 与 [Web 容量说明](docs/implementation/session-capacity-web.md)。
+- **会话容量与无活动资源回收（`deliver-session-capacity`，2026-11-19 归档）**：覆盖 50 主会话名额上限、30 分钟无活动自动回收请求、已知活动保护与管理账本协调。双层 L6 验收范围见 [归档计划](openspec/changes/archive/2026-11-19-deliver-session-capacity/plan.md)，实现边界见 [节点容量说明](docs/implementation/session-capacity.md)、[Web 容量说明](docs/implementation/session-capacity-web.md) 与 [Web 工作台分层实现](docs/implementation/web-workbench.md)。
 
 ### 远期规划
 

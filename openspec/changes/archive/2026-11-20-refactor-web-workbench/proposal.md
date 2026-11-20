@@ -2,7 +2,7 @@
 
 ## Why
 
-当前 `clients/web/src/main.ts`（3,695 行）在单一顶层副作用脚本内混杂了配对引导、管理连接代际围栏、设备信任列表、会话队列与输入编排、共享视图与正文分块流、严格审批、容量与原生释放、工作区/Harness 目录以及来源会话发现等全部状态与 DOM 装配；同时 `clients/web/src/management/session-protocol.ts`（2,035 行）与 `clients/web/src/management/client.ts`（1,693 行）也集中了过多跨域 DTO 校验与文档构造职责，导致部分单元测试被迫使用 `readFileSync("../src/main.ts")` 搭配字符串切片与 `new Function` 反射测试私有逻辑。在启动 [deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 与 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md) 之前完成纯内部模块化重构，可建立清晰的单向状态与控制器边界，消除大文件耦合与脆弱源码切片测试。
+当前 `clients/web/src/main.ts`（3,695 行）在单一顶层副作用脚本内混杂了配对引导、管理连接代际围栏、设备信任列表、会话队列与输入编排、共享视图与正文分块流、严格审批、容量与原生释放、工作区/Harness 目录以及来源会话发现等全部状态与 DOM 装配；同时 `clients/web/src/management/session-protocol.ts`（2,035 行）与 `clients/web/src/management/client.ts`（1,693 行）也集中了过多跨域 DTO 校验与文档构造职责，导致部分单元测试被迫使用 `readFileSync("../src/main.ts")` 搭配字符串切片与 `new Function` 反射测试私有逻辑。在启动 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md) 与 [deliver-session-transcript-cache](../../deliver-session-transcript-cache/proposal.md) 之前完成纯内部模块化重构，可建立清晰的单向状态与控制器边界，消除大文件耦合与脆弱源码切片测试。
 
 ## Success Criteria
 
@@ -13,7 +13,7 @@
 
 ### 硬约束与非目标
 
-- 本变更属于不改变任何外部可观察产品行为、WebSocket 管理协议帧格式、HTTP 配对契约、DOM 结构选择器/无障碍属性或会话存储键名的纯前端内部重构，在 `.openspec.yaml` 声明 `skip_specs: true`，严格遵守 [总体设计](../../../docs/architecture/overview.md)、[能力地图](../../../docs/architecture/capability-map.md)、[AGENTS.md](../../../AGENTS.md) 与 [硬规则清单](../../../docs/hard-rules.md)。
+- 本变更属于不改变任何外部可观察产品行为、WebSocket 管理协议帧格式、HTTP 配对契约、DOM 结构选择器/无障碍属性或会话存储键名的纯前端内部重构，在 `.openspec.yaml` 声明 `skip_specs: true`，严格遵守 [总体设计](../../../../docs/architecture/overview.md)、[能力地图](../../../../docs/architecture/capability-map.md)、[AGENTS.md](../../../../AGENTS.md) 与 [硬规则清单](../../../../docs/hard-rules.md)。
 - 保持 `clients/web/package.json` 零运行时第三方依赖，不引入前端 UI 框架、状态管理库或新构建工具，保持 TypeScript `strict: true`、`noUncheckedIndexedAccess: true` 与 `verbatimModuleSyntax: true` 全量通过。
 - 严禁修改 `clients/web/tests/browser/` 下的独立浏览器 DOM 夹具文件，确保 `clients/web/tests/browser/independent-dom/FIXTURE-SHA256.md` 记录的全部夹具字节与 SHA-256 摘要零变动，且 `await import("../../src/main.ts")` 生产入口契约完全兼容。
 - 不在本变更中提前实现会话控制权接管（`session.control.*`）或持久化展示快照缓存（`transcript-cache`）的任何新协议或新界面功能，不修改 Rust 节点代码（`app/`）。
@@ -51,10 +51,10 @@
 
 - Web 前端源码：`clients/web/src/main.ts`、`clients/web/src/workbench/*`、`clients/web/src/management/session-protocol.ts`、`clients/web/src/management/session-protocol/*`、`clients/web/src/management/client.ts`、`clients/web/src/management/catalog-documents.ts`、`clients/web/src/management/upload-transfer.ts`。
 - Web 单元测试：`clients/web/tests/session-view-main.test.ts`、`clients/web/tests/r3-source-session.test.ts`、`clients/web/tests/management-error-messages.test.ts`、删除废弃补丁 `clients/web/tests/session-view-node.d.ts` 及新增控制器边界单元测试；`clients/web/tests/browser/` 保持只读零改动。
-- 前置与后续衔接：承接已归档 [fix-build-and-legacy-baseline](../archive/2026-11-19-fix-build-and-legacy-baseline/proposal.md)，为后续 [deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md)（接入会话级主控/只读状态门控）与 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)（接入共享视图本地快照秒开与后台校准）提供清晰的控制器挂载点。
+- 前置与后续衔接：承接已归档 [fix-build-and-legacy-baseline](../2026-11-19-fix-build-and-legacy-baseline/proposal.md)，为后续 [deliver-session-control-takeover](../../deliver-session-control-takeover/proposal.md)（接入会话级主控/只读状态门控）与 [deliver-session-transcript-cache](../../deliver-session-transcript-cache/proposal.md)（接入共享视图本地快照秒开与后台校准）提供清晰的控制器挂载点。
 
 ## Exploration
 
 - **实施时机确认（用户确认）**：经对比前置预重构与随业务特性混合拆分的风险，确认在启动 `deliver-session-control-takeover` 与 `deliver-session-transcript-cache` 之前先行独立交付 `refactor-web-workbench`，使结构重构与新协议/UI 行为演进彻底解耦，验收基准完全锚定现有测试套件与构建门禁。
 - **公共导入兼容与独立夹具保护**：经扫描 `clients/web/tests/` 全量测试与 `clients/web/tests/browser/independent-dom/FIXTURE-SHA256.md`，确认保留 `src/main.ts`、`src/management/session-protocol.ts` 与 `src/management/client.ts` 的全部既有外部导入签名，仅将 Vitest 中依赖 `main.ts` 函数体字符串切片的 3 个测试文件升级为真实生产模块导入（并清理配套 `session-view-node.d.ts`），确保独立浏览器夹具文件 SHA-256 零变更。
-- **术语与 ADR 复核**：复用 [领域术语表](../../GLOSSARY.md) 既有定义，不引入新产品概念或外部依赖，无需新增独立 ADR。
+- **术语与 ADR 复核**：复用 [领域术语表](../../../GLOSSARY.md) 既有定义，不引入新产品概念或外部依赖，无需新增独立 ADR。

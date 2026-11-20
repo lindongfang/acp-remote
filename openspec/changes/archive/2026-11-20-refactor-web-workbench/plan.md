@@ -67,7 +67,7 @@ alternative_checks:
 ## Handoff
 
 - **基线分支与工作区**：分支 `v2`，父基线提交 `a69da69e5d1cc6af6a15b3aa393359429c45ba58`，最终受测通过集成提交 `a2a953314ed6215b53b414b71e84c043d94185f3`。
-- **权威输入路径**：[proposal.md](proposal.md)、[design.md](design.md)、[tests.md](tests.md)、[tasks.md](tasks.md)、[AGENTS.md](../../../AGENTS.md)、[硬规则清单](../../../docs/hard-rules.md)、[总体设计](../../../docs/architecture/overview.md)。
+- **权威输入路径**：[proposal.md](proposal.md)、[design.md](design.md)、[tests.md](tests.md)、[tasks.md](tasks.md)、[AGENTS.md](../../../../AGENTS.md)、[硬规则清单](../../../../docs/hard-rules.md)、[总体设计](../../../../docs/architecture/overview.md)。
 - **读写边界**：`coder` 仅允许修改相应工作包声明的 `clients/web/src/`、`clients/web/tests/`（不含只读 `clients/web/tests/browser/`）与 `docs/implementation/web-workbench.md`；`tester` 与 `reviewer` 对受跟踪源码只读，详细运行日志输出至本地忽略目录 `testing/runs/refactor-web-workbench/`。
 - **验证入口**：见 `## Project Verify` 表中 `PV1`–`PV5`。
 
