@@ -364,6 +364,7 @@ struct DrainedStreamFrames {
     turns: Vec<serde_json::Value>,
     statuses: Vec<serde_json::Value>,
     projections: Vec<serde_json::Value>,
+    field_bytes: Vec<(u64, Vec<u8>)>,
     snapshot_ends: usize,
 }
 
@@ -467,11 +468,16 @@ async fn read_until_snapshot_end(
                                 RecordKind::Status => 3,
                                 RecordKind::SnapshotEnd => 4,
                                 RecordKind::TurnStart => 5,
+                                RecordKind::FieldBytes => 6,
                             };
                             let buf = buffers.entry((tag, hdr.record())).or_default();
                             buf.extend_from_slice(payload);
                             if hdr.is_last() {
                                 let full = buffers.remove(&(tag, hdr.record())).unwrap_or_default();
+                                if kind == RecordKind::FieldBytes {
+                                    drained.field_bytes.push((hdr.record(), full));
+                                    continue;
+                                }
                                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&full)
                                 {
                                     if kind == RecordKind::TurnStart {
@@ -1272,6 +1278,7 @@ async fn history_page_cold_socket_selects_raw_and_tool_anchors() {
             frames.len() as u64 + 1,
         ));
     };
+    let output = "精确字节".repeat(4000);
     for turn in 1..=5 {
         push(
             json!({"sessionUpdate":"user_message_chunk","messageId":turn.to_string(),"content":{"type":"text","text":"msg"}}),
@@ -1282,9 +1289,12 @@ async fn history_page_cold_socket_selects_raw_and_tool_anchors() {
             );
         }
         if turn == 3 || turn == 5 {
-            push(
-                json!({"sessionUpdate":"tool_call_update","toolCallId":format!("t{}",turn-2),"status":"completed"}),
-            );
+            let mut update = json!({"sessionUpdate":"tool_call_update","toolCallId":format!("t{}",turn-2),"status":"completed"});
+            if turn == 5 {
+                update["rawOutput"] = json!(output);
+                update["privateSibling"] = json!("OUTSIDE_FIELD");
+            }
+            push(update);
         }
     }
     cache
@@ -1314,6 +1324,41 @@ async fn history_page_cold_socket_selects_raw_and_tool_anchors() {
     let stream = Id128::parse_base64url(older["result"]["streamId"].as_str().unwrap()).unwrap();
     let middle = read_until_snapshot_end(&mut sock, stream).await;
     assert_eq!(middle.raw.len(), 4);
+    let fields = middle
+        .projections
+        .iter()
+        .filter_map(|p| p["fields"].as_array())
+        .flatten()
+        .filter(|f| f["field"] == "rawOutput" && !f["raw"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 1);
+    let reference = &fields[0]["raw"];
+    let id: u64 = reference["rawRecordId"].as_str().unwrap().parse().unwrap();
+    let start: u64 = reference["byteStart"].as_str().unwrap().parse().unwrap();
+    let end: u64 = reference["byteEnd"].as_str().unwrap().parse().unwrap();
+    let token = serde_json::to_vec(&output).unwrap();
+    assert_eq!(end - start, token.len() as u64);
+    assert_eq!(middle.field_bytes.len(), 2); // status and rawOutput
+    assert!(
+        middle
+            .field_bytes
+            .iter()
+            .any(|(record, bytes)| *record == id
+                && bytes[..8] == start.to_be_bytes()
+                && bytes[8..] == token)
+    );
+    assert!(
+        middle
+            .field_bytes
+            .iter()
+            .all(|(_, bytes)| !bytes.windows(13).any(|w| w == b"OUTSIDE_FIELD"))
+    );
+    assert!(
+        middle
+            .raw
+            .iter()
+            .all(|r| !r.to_string().contains("OUTSIDE_FIELD"))
+    );
     assert!(
         middle
             .projections

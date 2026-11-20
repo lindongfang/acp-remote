@@ -49,6 +49,8 @@ struct Position {
     section: Section,
     item: usize,
     delta: usize,
+    material_field: usize,
+    material_index: usize,
     evidence_field: usize,
     evidence_index: usize,
     projection_record: u64,
@@ -130,7 +132,41 @@ impl<T> Drop for DeferredRetirement<T> {
         }
     }
 }
+// A range record starts with its original byte offset, followed by one exact JSON token.
+fn field_bytes_chunk(
+    start: usize,
+    value: &[u8],
+    offset: usize,
+) -> Result<(Vec<u8>, usize), ViewError> {
+    let prefix = (start as u64).to_be_bytes();
+    let total = value
+        .len()
+        .checked_add(prefix.len())
+        .ok_or(ViewError::LengthUnrepresentable)?;
+    let end = offset.saturating_add(MAX_PAYLOAD_BYTES).min(total);
+    if offset >= end || value.is_empty() {
+        return Err(ViewError::InvalidCursor);
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(end - offset)
+        .map_err(|_| ViewError::AllocationFailure)?;
+    if offset < prefix.len() {
+        bytes.extend_from_slice(&prefix[offset..]);
+    }
+    bytes.extend_from_slice(&value[offset.saturating_sub(prefix.len())..end - prefix.len()]);
+    Ok((bytes, total))
+}
 enum Selection<R> {
+    FieldBytes {
+        bytes: Vec<u8>,
+        total: u64,
+        position: Position,
+        next: Position,
+        id: u64,
+        segment: ViewEpoch,
+        source_range: SourceRange,
+    },
     Raw {
         raw: SelectedRaw<R>,
         id: u64,
@@ -990,6 +1026,8 @@ where
                     section: Section::Raw,
                     item: 0,
                     delta: 0,
+                    material_field: 0,
+                    material_index: 0,
                     evidence_field: 0,
                     evidence_index: 0,
                     projection_record: 1,
@@ -1670,6 +1708,63 @@ where
                 super::segments::SegmentPhase::Update,
             );
         }
+        if !tail
+            && position.section == Section::Item
+            && let Some(window) = &data.history
+        {
+            while let Some(field) = version.fields.get(position.material_field) {
+                // Content's primary is the last entry in its ordered evidence.
+                let reference = if field.evidence_count() > 0 {
+                    (position.material_index < field.evidence_count())
+                        .then(|| field.evidence_at(position.material_index))
+                        .transpose()?
+                } else if position.material_index == 0 {
+                    field.raw_reference()
+                } else {
+                    None
+                };
+                let Some(reference) = reference else {
+                    position.material_field += 1;
+                    position.material_index = 0;
+                    continue;
+                };
+                if window.records.contains(&reference.record_index) {
+                    position.material_index += 1;
+                    continue;
+                }
+                let source = journal.records.get(reference.record_index)?;
+                if source.id != reference.record() || source.segment != publication.segment {
+                    return Err(ViewError::InvalidCursor);
+                }
+                let value = source
+                    .raw
+                    .bytes()
+                    .get(reference.byte_start()..reference.byte_end())
+                    .ok_or(ViewError::InvalidCursor)?;
+                let (bytes, total) =
+                    field_bytes_chunk(reference.byte_start(), value, position.offset)?;
+                let mut next = position;
+                next.offset += bytes.len();
+                if next.offset == total {
+                    next.offset = 0;
+                    next.material_index += 1;
+                }
+                return Ok(Selection::FieldBytes {
+                    bytes,
+                    total: total as u64,
+                    position: original,
+                    next,
+                    id: source.id.as_u64(),
+                    segment: source.segment,
+                    source_range: SourceRange {
+                        sequence: source.sequence,
+                        order: source.receipt_order,
+                    },
+                });
+            }
+        }
+        position.material_index = 0;
+        position.material_field = 0;
         let mut next = position;
         let bytes = if position.section == Section::Item {
             if let Some((field, index)) = super::projection_wire::first_evidence(&version, 0) {
@@ -1869,6 +1964,25 @@ where
                     None,
                     read.handle.descriptor.view_epoch(),
                 ),
+                Selection::FieldBytes {
+                    bytes,
+                    total,
+                    position,
+                    next,
+                    id,
+                    segment,
+                    source_range,
+                } => (
+                    position,
+                    next,
+                    id,
+                    total,
+                    RecordKind::FieldBytes,
+                    None,
+                    Some(bytes),
+                    Some(source_range),
+                    segment,
+                ),
                 Selection::Metadata {
                     bytes,
                     position,
@@ -1957,7 +2071,7 @@ where
                 client,
                 &read.handle.target,
                 record,
-                if kind == RecordKind::OriginalRaw {
+                if matches!(kind, RecordKind::OriginalRaw | RecordKind::FieldBytes) {
                     position.offset as u64
                 } else {
                     0

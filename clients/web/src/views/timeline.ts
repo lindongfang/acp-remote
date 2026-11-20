@@ -296,8 +296,10 @@ class Timeline {
       const material = this.#store.field(item, field);
       for (const reference of [material.primary, ...material.evidence]) {
         if (reference?.value === null || reference === null) continue;
-        const key = reference.raw.rawRecordId.toString();
-        if (!documents.has(key)) documents.set(key, { document: reference.value.document, label: "相关内容记录" });
+        const { rawRecordId, byteStart, byteEnd } = reference.raw;
+        const key = reference.fieldSlice ? `${rawRecordId}:${byteStart}:${byteEnd}` : rawRecordId.toString();
+        const label = reference.fieldSlice ? `${field} · 记录 ${rawRecordId} 字节 [${byteStart}, ${byteEnd})` : "相关内容记录";
+        if (!documents.has(key)) documents.set(key, { document: reference.value.document, label });
       }
     }
     if (card.opened !== null && ![...documents.values()].some((value) => value.document === card.opened)) {
@@ -330,7 +332,7 @@ class Timeline {
     card.update.disabled = latest === null;
     card.rawNotice.hidden = card.inspector === null || card.opened === latest;
     card.rawNotice.textContent = latest === null
-      ? "当前原始记录尚未收到，正在查看先前缓存的记录。"
+      ? "正在查看选定的原始内容。当前完整记录尚未收到。"
       : "正在查看先前或所选的原始记录，可显式切换到当前记录。";
     card.error.hidden = true;
     return changed;

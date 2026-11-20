@@ -38,6 +38,7 @@ pub enum StructuredItemKind {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RawFieldReference {
     pub(crate) record: RawRecordId,
+    pub(crate) record_index: usize,
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) append: bool,

@@ -11,7 +11,7 @@ export type ViewRecordKind =
   | "status"
   | "snapshot_end";
 
-export type PagedViewRecordKind = ViewRecordKind | "turn_start";
+export type PagedViewRecordKind = ViewRecordKind | "turn_start" | "field_bytes";
 
 export interface ViewDataFrame {
   readonly type: "data";
@@ -86,6 +86,7 @@ export function validateViewData(frame: ViewDataFrame): void {
   ) {
     throw new ViewDecodeError("invalid_frame");
   }
+  if (frame.kind === "field_bytes" && frame.totalLength <= 8n) throw new ViewDecodeError("invalid_frame");
   switch (frame.kind) {
     case "snapshot_end":
       if (
@@ -99,6 +100,7 @@ export function validateViewData(frame: ViewDataFrame): void {
     case "original_raw":
     case "item_projection":
     case "status":
+    case "field_bytes":
     case "turn_start":
       if (frame.totalLength === 0n || frame.payload.length === 0) {
         throw new ViewDecodeError("invalid_frame");
@@ -157,6 +159,7 @@ export function decodeViewFrame(wire: Uint8Array): ViewBinaryFrame {
     case 1: kind = "original_raw"; break;
     case 2: kind = "item_projection"; break;
     case 3: kind = "status"; break;
+    case 6: kind = "field_bytes"; break;
     case 5: kind = "turn_start"; break;
     case 4: kind = "snapshot_end"; break;
     default: throw new ViewDecodeError("invalid_header");
