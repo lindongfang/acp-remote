@@ -91,6 +91,7 @@ function sendChildEvents(children) {
         }}});
       }
     }
+    logEvent({event:"autoDelivery",sessionId:child.id,first:child.first??1,last:child.last});
   }
 }
 
@@ -117,9 +118,10 @@ async function handleRequest(msg) {
   const cfg = readCfg();
   const { id, method, params } = msg;
   const key = "io.github.lindongfang.acp-remote/child-history";
+  const childBatch = method==="_"+key && params.cursor!==null ? Number(String(params.cursor).replace(/^hn029-native-cursor-/,"")) : 0;
   logEvent(method === "_"+key ? {method, first: params.cursor===null,
     rootMatches:!cfg.expectedChildRoot || params.rootSessionId===cfg.expectedChildRoot,
-    childMatches:params.sessionId==="child-history", batch:params.cursor===null?0:Number(params.cursor)} : { method, params });
+    childMatches:params.sessionId==="child-history", batch:childBatch} : { method, params });
 
   if (method === "initialize") {
     const version = Number(cfg.protocolVersion ?? 1);
@@ -130,6 +132,7 @@ async function handleRequest(msg) {
     if(cfg.childDeclaration==="methodOnly") ext._meta={[key]:{method:"_"+key}};
     if(cfg.childDeclaration==="cancelOnly") ext._meta={childCancel:true};
     if(cfg.childDeclaration==="wrongLocation") delete ext._meta;
+    logEvent({event:"childDeclaration",selectedVersion:version,field:version===1?"agentCapabilities":"capabilities",matching:ext._meta?.[key]?.version===1});
     if (version === 2) {
       send({
         id,
@@ -172,7 +175,7 @@ async function handleRequest(msg) {
         updates.push({sessionUpdate:"user_message_chunk",content:{type:"text",text:"child-turn-"+turn}},{sessionUpdate:"agent_message_chunk",messageId:cfg.randomChildIds?crypto.randomUUID():"agent-"+turn,content:{type:"text",text:"reply"}});
       }
     }
-    const index = params.cursor === null ? 0 : Number(params.cursor);
+    const index = childBatch;
     if(index===0) {
       const bytes=cfg.childFramesFile?fs.readFileSync(cfg.childFramesFile):Buffer.from(updates.map(update=>JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{sessionId,update}}).replace('"unknown":1','"unknown" : 1.00')+"\n").join(""));
       childSnapshots.set(params.sessionId,bytes);
@@ -185,7 +188,8 @@ async function handleRequest(msg) {
       }
     }
     const end = Math.min(bytes.length,(index+1)*16384);
-    const result={rootSessionId:params.rootSessionId,sessionId:params.sessionId,sequence:String(index),snapshotId:"fixture-generation",chunk:bytes.subarray(index*16384,end).toString("base64url"),nextCursor:end===bytes.length?null:String(index+1)};
+    const next=end===bytes.length?null:(cfg.opaqueChildCursors?"hn029-native-cursor-":"")+String(index+1);
+    const result={rootSessionId:params.rootSessionId,sessionId:params.sessionId,sequence:String(index),snapshotId:"fixture-generation",chunk:bytes.subarray(index*16384,end).toString("base64url"),nextCursor:next};
     if(index===(cfg.faultAtBatch??1) && cfg.childFault) Object.assign(result,cfg.childFault);
     send({id:cfg.unmatchedChildReply?String(id)+"-unmatched":id,result});
     logEvent({event:"childBatchSent",batch:index,last:result.nextCursor===null});

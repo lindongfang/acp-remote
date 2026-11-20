@@ -11,6 +11,7 @@ if (!root) throw new Error("Usage: node log-redaction.mjs <run-log-directory>");
 let files = 0;
 let cursorMatches = 0;
 let markerMatches = 0;
+let privateChildMatches = 0;
 for (const entry of await readdir(root, { withFileTypes: true, recursive: true })) {
   if (!entry.isFile() || !entry.name.endsWith(".log")) continue;
   const bytes = await readFile(join(entry.parentPath, entry.name));
@@ -18,7 +19,8 @@ for (const entry of await readdir(root, { withFileTypes: true, recursive: true }
   const log = bytes.toString(encoding);
   cursorMatches += [...log.matchAll(cursor)].length;
   markerMatches += [...log.matchAll(marker)].length;
+  privateChildMatches += [...log.matchAll(/HN029-NATIVE-CONTENT-MARKER|hn029-native-cursor-\d+/g)].length;
   files++;
 }
-console.log(JSON.stringify({ files, cursorMatches, markerMatches }));
-if (files === 0 || cursorMatches || markerMatches) process.exitCode = 1;
+console.log(JSON.stringify({ files, cursorMatches, markerMatches, privateChildMatches }));
+if (files === 0 || cursorMatches || markerMatches || privateChildMatches) process.exitCode = 1;

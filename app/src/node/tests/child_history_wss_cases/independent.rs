@@ -85,7 +85,7 @@ fn original_frames() -> Vec<String> {
             format!("child-{i}")
         };
         let mut raw = child_frame(
-            json!({"sessionUpdate":"user_message_chunk","messageId":i.to_string(),"content":{"type":"text","text":text},"unknown":1}),
+            json!({"sessionUpdate":"user_message_chunk","messageId":i.to_string(),"content":{"type":"text","text":text},"unknown":1,"fixtureTag":"HN029-NATIVE-CONTENT-MARKER"}),
         );
         raw = raw.replace("\"unknown\":1", "\"unknown\" : 1.00");
         if i == 1 {
@@ -127,7 +127,7 @@ async fn two_observers(version: u8) {
     std::fs::write(&path, format!("{}\n", expected.join("\n"))).unwrap();
     configure(
         &s.f,
-        &json!({"childFramesFile":path,"childBarrierIndex":0,"childBarrierFile":release}),
+        &json!({"childFramesFile":path,"childBarrierIndex":0,"childBarrierFile":release,"opaqueChildCursors":true}),
     );
     let mut b = s.observer(113).await;
     let mut c = s.observer(114).await;
@@ -199,12 +199,26 @@ async fn two_observers(version: u8) {
         && e["rootMatches"] == true
         && e["childMatches"] == true));
     let init = logs.iter().find(|e| e["method"] == "initialize").unwrap();
-    let caps = if version == 1 {
+    let caps = if init["params"]["protocolVersion"] == 1 {
         "clientCapabilities"
     } else {
         "capabilities"
     };
     assert_eq!(init["params"][caps]["_meta"][EXT]["version"], 1);
+    let declaration = logs
+        .iter()
+        .find(|e| e["event"] == "childDeclaration")
+        .unwrap();
+    assert_eq!(declaration["selectedVersion"], version);
+    assert_eq!(
+        declaration["field"],
+        if version == 1 {
+            "agentCapabilities"
+        } else {
+            "capabilities"
+        }
+    );
+    assert_eq!(declaration["matching"], true);
     assert!(!logs.iter().any(|e| e["params"]["sessionId"] == CHILD));
     s.assert_root_readable().await;
     b.close(None).await.unwrap();
@@ -399,7 +413,19 @@ async fn hn_020_hn_029_rejected_native_batches_leave_parent_and_other_source_usa
         &json!({"childFault":{"chunk":"","nextCursor":null},"faultAtBatch":0}),
     );
     let empty = send_command_wait(&mut bad, "history.page", s.payload()).await;
-    assert_eq!(empty["error"], json!({"code":"unsupported_capability"}));
+    assert_eq!(empty["result"]["page"]["turnStatus"], "unprovable");
+    assert_eq!(empty["result"]["page"]["totalTurns"], "0");
+    assert!(
+        empty["result"]["page"]["olderCursor"].is_null()
+            && empty["result"]["page"]["newerCursor"].is_null()
+    );
+    assert!(snapshot(&mut bad, &empty).await.raw.is_empty());
+    let mut locate = s.payload();
+    locate["mode"] = json!({"kind":"locate","fromTurn":"1","direction":"newer"});
+    assert_eq!(
+        send_command_wait(&mut bad, "history.page", locate).await["error"],
+        json!({"code":"unsupported_capability"})
+    );
     bad.close(None).await.unwrap();
     other.close(None).await.unwrap();
     controller.close(None).await.unwrap();
@@ -423,6 +449,25 @@ async fn hn_020_native_child_and_grandchild_events_preserve_root_turns() {
         &s.f,
         &json!({"replayChildEvents":[{"id":CHILD,"last":10},{"id":"grandchild","last":3},{"id":"agent-only","last":4,"agentOnly":true}],"promptChildEvents":[{"id":CHILD,"first":11,"last":12}],"promptBarrierReleaseFile":gate}),
     );
+    release_target(&mut s.control, s.root).await;
+    let snapshot_pool = s
+        .node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store()
+        .pool_for_test()
+        .await
+        .unwrap();
+    let removed = sqlx::query("DELETE FROM transcript_sessions WHERE native_session_id=?")
+        .bind(&s.native)
+        .execute(&snapshot_pool)
+        .await
+        .unwrap()
+        .rows_affected();
+    assert_eq!(removed, 1);
+    drop(snapshot_pool);
     let root_page = send_command_wait(
         &mut s.control,
         "view.open",
@@ -432,6 +477,12 @@ async fn hn_020_native_child_and_grandchild_events_preserve_root_turns() {
     let saved = root_page["result"]["page"]["turns"].clone();
     assert_eq!(root_page["result"]["page"]["firstTurn"], "21");
     snapshot(&mut s.control, &root_page).await;
+    wait_for_peer_method(&s.f, "session/load", 1).await;
+    assert!(
+        s.f.peer_logs().iter().any(|e| e["event"] == "autoDelivery"
+            && e["sessionId"] == "grandchild"
+            && e["last"] == 3)
+    );
     let mut b = s.observer(124).await;
     let mut req = s.payload();
     req["child"] = json!("grandchild");
@@ -572,7 +623,7 @@ async fn change_before_release(change: Changed, terminal: bool) {
         json!({"childHistory":true,"watchDisconnect":matches!(change,Changed::SourceDisconnected)}),
     )
     .await;
-    let (id, key, new_sel) = s.f.install_profile(&s.node, 1, 130).await;
+    let (_, _, new_sel) = s.f.install_profile(&s.node, 1, 130).await;
     let reader_key = SigningKey::from_slice(&[131; 32]).unwrap();
     let reader_id = pair_browser(&s.node, &reader_key, "Authority change").await;
     let mut b = connected(&s.f, &s.node, &reader_key, &reader_id).await;
@@ -668,10 +719,7 @@ async fn change_before_release(change: Changed, terminal: bool) {
                 assert_eq!(n, 1);
             }
             Changed::Configuration => {
-                let target =
-                    s.f.register_and_bind_target(&s.node, &key, &id, &new_sel, &s.native)
-                        .await;
-                assert_eq!(s.root, target);
+                set_fixture_profile(&s, &new_sel).await;
             }
         }
         if !terminal {
@@ -706,6 +754,9 @@ async fn change_before_release(change: Changed, terminal: bool) {
         .await
         .unwrap();
         // A subsequent authorized query has finished reading the parent before we inspect storage.
+        if matches!(change, Changed::Configuration) {
+            set_fixture_profile(&s, &s.selection).await;
+        }
         s.assert_root_readable().await;
         assert!(
             store.load_snapshot(&c).await.unwrap().is_none(),
@@ -721,6 +772,20 @@ async fn change_before_release(change: Changed, terminal: bool) {
     let (result, ()) = tokio::join!(publication, work);
     result.unwrap();
     s.shutdown().await;
+}
+
+async fn set_fixture_profile(s: &Scenario, selected: &SourceLaunchSelection) {
+    let n = sqlx::query(
+        "UPDATE node_target_launch_selection SET profile_id=?,profile_revision=? WHERE target_id=?",
+    )
+    .bind(selected.profile.id().encode())
+    .bind(selected.profile.revision().to_be_bytes().to_vec())
+    .bind(s.root.encode())
+    .execute(s.node.storage.as_ref().unwrap().pool_for_test())
+    .await
+    .unwrap()
+    .rows_affected();
+    assert_eq!(n, 1);
 }
 
 async fn wait_for_history_reply(
