@@ -7,7 +7,7 @@ const CHILD: &str = "child-history";
 
 struct Scenario {
     f: HarnessFixture,
-    _owner: NodeProcessOwner,
+    owner: NodeProcessOwner,
     node: NodeRuntime,
     selection: SourceLaunchSelection,
     root: EntityId,
@@ -33,7 +33,7 @@ impl Scenario {
         seed_turns(&node, &selection, &native, 25, "root", "user_message_chunk").await;
         Self {
             f,
-            _owner: owner,
+            owner,
             node,
             selection,
             root,
@@ -71,7 +71,7 @@ impl Scenario {
         self.node.shutdown(None).await.unwrap();
     }
 }
-fn child_frame(update: serde_json::Value) -> String {
+fn child_frame(update: &serde_json::Value) -> String {
     json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":CHILD,"update":update}})
         .to_string()
 }
@@ -85,7 +85,7 @@ fn original_frames() -> Vec<String> {
             format!("child-{i}")
         };
         let mut raw = child_frame(
-            json!({"sessionUpdate":"user_message_chunk","messageId":i.to_string(),"content":{"type":"text","text":text},"unknown":1,"fixtureTag":"HN029-NATIVE-CONTENT-MARKER"}),
+            &json!({"sessionUpdate":"user_message_chunk","messageId":i.to_string(),"content":{"type":"text","text":text},"unknown":1,"fixtureTag":"HN029-NATIVE-CONTENT-MARKER"}),
         );
         raw = raw.replace("\"unknown\":1", "\"unknown\" : 1.00");
         if i == 1 {
@@ -95,7 +95,7 @@ fn original_frames() -> Vec<String> {
         }
         frames.push(raw);
         if i == 1 {
-            frames.push(child_frame(json!({"sessionUpdate":"tool_call","toolCallId":"tool","title":"test tool","status":"completed","unclassified":{"value":7}})));
+            frames.push(child_frame(&json!({"sessionUpdate":"tool_call","toolCallId":"tool","title":"test tool","status":"completed","unclassified":{"value":7}})));
         }
     }
     frames
@@ -120,7 +120,7 @@ async fn hn_029_two_observers_receive_exact_native_bytes_in_both_protocols() {
     }
 }
 async fn two_observers(version: u8) {
-    let mut s = Scenario::new(version, json!({"childHistory":true})).await;
+    let mut s = Box::pin(Scenario::new(version, json!({"childHistory":true}))).await;
     let expected = original_frames();
     let path = s.f.area.directory.join("peer-native.jsonl");
     let release = s.f.area.directory.join("grant-native-batch");
@@ -237,7 +237,7 @@ async fn hn_029_negotiation_is_connection_local_and_no_implicit_probes() {
             "cancelOnly",
             "refused",
         ] {
-            let s=Scenario::new(version,json!({"childHistory":declaration!="absent","childDeclaration":declaration,"childRefused":declaration=="refused"})).await;
+            let s=Box::pin(Scenario::new(version,json!({"childHistory":declaration!="absent","childDeclaration":declaration,"childRefused":declaration=="refused"}))).await;
             let mut b = s.observer(116).await;
             for _ in 0..2 {
                 let r = send_command_wait(&mut b, "history.page", s.payload()).await;
@@ -282,7 +282,7 @@ async fn hn_029_negotiation_is_connection_local_and_no_implicit_probes() {
 #[tokio::test]
 async fn hn_020_hn_029_rejected_native_batches_leave_parent_and_other_source_usable() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-    let mut s = Scenario::new(2, json!({"childHistory":true})).await;
+    let mut s = Box::pin(Scenario::new(2, json!({"childHistory":true}))).await;
     let child = s.cached_key();
     let original_root = s.native.clone();
     s.f.source_id = tc_id(118);
@@ -312,12 +312,12 @@ async fn hn_020_hn_029_rejected_native_batches_leave_parent_and_other_source_usa
     std::fs::write(&path, format!("{}\n", original_frames().join("\n"))).unwrap();
     configure(&s.f, &json!({"childFramesFile":path,"protocolVersion":2}));
     let v1_only = child_frame(
-        json!({"sessionUpdate":"user_message_chunk","messageId":null,"content":{"type":"text","text":"version"}}),
+        &json!({"sessionUpdate":"user_message_chunk","messageId":null,"content":{"type":"text","text":"version"}}),
     );
     let bad_method =
-        child_frame(json!({"sessionUpdate":"future"})).replace("session/update", "session/prompt");
-    let wrong_child = child_frame(json!({"sessionUpdate":"future"})).replace(CHILD, "sibling");
-    let text = child_frame(json!({"sessionUpdate":"future"}));
+        child_frame(&json!({"sessionUpdate":"future"})).replace("session/update", "session/prompt");
+    let wrong_child = child_frame(&json!({"sessionUpdate":"future"})).replace(CHILD, "sibling");
+    let text = child_frame(&json!({"sessionUpdate":"future"}));
     let cases = [
         ("root", 1, json!({"rootSessionId":"other"})),
         ("child", 1, json!({"sessionId":"sibling"})),
@@ -434,7 +434,11 @@ async fn hn_020_hn_029_rejected_native_batches_leave_parent_and_other_source_usa
 
 #[tokio::test]
 async fn hn_020_native_child_and_grandchild_events_preserve_root_turns() {
-    let mut s = Scenario::new(1, json!({"childHistory":false,"replayTurns":25})).await;
+    let mut s = Box::pin(Scenario::new(
+        1,
+        json!({"childHistory":false,"replayTurns":25}),
+    ))
+    .await;
     let db = s.node.storage.as_ref().unwrap().pool_for_test();
     for (name, parent) in [
         ("grandchild", CHILD),
@@ -618,10 +622,10 @@ async fn change_before_release(change: Changed, terminal: bool) {
         adapters::acp::{RawMessage, Version},
         transcript_cache::CapabilityProfile,
     };
-    let mut s = Scenario::new(
+    let mut s = Box::pin(Scenario::new(
         1,
         json!({"childHistory":true,"watchDisconnect":matches!(change,Changed::SourceDisconnected)}),
-    )
+    ))
     .await;
     let (_, _, new_sel) = s.f.install_profile(&s.node, 1, 130).await;
     let reader_key = SigningKey::from_slice(&[131; 32]).unwrap();
@@ -646,7 +650,7 @@ async fn change_before_release(change: Changed, terminal: bool) {
         NativeSessionKey::from_config(Some(s.selection.source), "test-publish-barrier").unwrap();
     let expectation = store.history_generation(&guard).await.unwrap();
     let raw =
-        RawMessage::parse(child_frame(json!({"sessionUpdate":"future"})).into_bytes()).unwrap();
+        RawMessage::parse(child_frame(&json!({"sessionUpdate":"future"})).into_bytes()).unwrap();
     let (ready, locked) = tokio::sync::oneshot::channel();
     let (release, unblock) = tokio::sync::oneshot::channel();
     let publication = store.replace_checked(
@@ -814,7 +818,7 @@ async fn wait_for_history_reply(
 #[tokio::test]
 async fn hn_029_missing_or_mismatched_response_id_times_out_without_publication() {
     for mismatch in [false, true] {
-        let mut s = Scenario::new(1, json!({"childHistory":true})).await;
+        let mut s = Box::pin(Scenario::new(1, json!({"childHistory":true}))).await;
         let mut b = s.observer(133).await;
         let gate = s.f.area.directory.join("no-reply");
         if mismatch {
@@ -866,7 +870,11 @@ async fn hn_029_missing_or_mismatched_response_id_times_out_without_publication(
 
 #[tokio::test]
 async fn hn_029_reconnection_requires_fresh_declaration() {
-    let mut s = Scenario::new(1, json!({"childHistory":true,"replayTurns":25})).await;
+    let mut s = Box::pin(Scenario::new(
+        1,
+        json!({"childHistory":true,"replayTurns":25}),
+    ))
+    .await;
     let payload = s.payload();
     let first = send_command_wait(&mut s.control, "history.page", payload.clone()).await;
     assert_eq!(first["result"]["page"]["lastTurn"], "10");
@@ -896,7 +904,7 @@ async fn hn_029_reconnection_requires_fresh_declaration() {
     drop(db);
     s.control.close(None).await.unwrap();
     s.node.shutdown(None).await.unwrap();
-    drop(s._owner);
+    drop(s.owner);
     configure(&s.f, &json!({"childHistory":false}));
     let owner = start_node(&s.f);
     let node = owner.ready().await.unwrap();

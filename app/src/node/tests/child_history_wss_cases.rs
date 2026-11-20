@@ -490,7 +490,7 @@ async fn child_history_thousand_anonymous_turns_relocate_after_eviction() {
         let frames = read_until_snapshot_end(&mut sock, stream).await;
         assert_eq!(frames.snapshot_ends, 1);
         assert_eq!(frames.raw.len(), 20);
-        for (i, pair) in frames.raw.chunks_exact(2).enumerate() {
+        for (i, pair) in frames.raw.as_chunks::<2>().0.iter().enumerate() {
             let n = first_turn + i;
             assert_eq!(marks[i]["turn"], n.to_string());
             assert!(
@@ -507,7 +507,7 @@ async fn child_history_thousand_anonymous_turns_relocate_after_eviction() {
             );
             assert_eq!(agent["sessionUpdate"], "agent_message_chunk");
             assert_eq!(agent["messageId"].as_str().unwrap().len(), 36);
-            assert!(agent["content"]["text"] == "reply");
+            assert_eq!(agent["content"]["text"], "reply");
         }
         if first_turn == 991 {
             assert!(page["newerCursor"].is_null());
