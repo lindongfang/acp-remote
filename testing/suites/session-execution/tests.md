@@ -11,16 +11,19 @@
 
 | 长期规格路径 | Requirement | Scenario | 用例 |
 | --- | --- | --- | --- |
-| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 断线后重复提交 | CL-017、CL-104 |
-| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 请求身份冲突 | CL-018、CL-088 |
-| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 已清理身份再次提交 | CL-080、CL-104 |
+| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 断线后重复提交 | CL-017、CL-104、SCT-009 |
+| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 未持有会话控制权提交输入被拒 | SCT-007、SCT-009 |
+| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 请求身份冲突 | CL-018、CL-088、SCT-009 |
+| openspec/specs/session-execution/spec.md | 输入受理与防重复 | 已清理身份再次提交 | CL-080、CL-104、SCT-009 |
 | openspec/specs/session-execution/spec.md | 受理授权由节点接管 | 提交者断线或被撤销 | CL-092 |
 | openspec/specs/session-execution/spec.md | 每会话共享三个待发送输入 | 最后一个队列名额并发提交 | CL-087、CL-113 |
 | openspec/specs/session-execution/spec.md | 每会话共享三个待发送输入 | 原生前台忙碌仍可排队 | CL-066、CL-087 |
-| openspec/specs/session-execution/spec.md | 多客户端共享查看和操作 | B 操作 A 的输入 | CL-088 |
+| openspec/specs/session-execution/spec.md | 多客户端共享查看和操作 | B 操作 A 的输入 | CL-088、SCT-005、SCT-010、SCT-016 |
+| openspec/specs/session-execution/spec.md | 多客户端共享查看和操作 | 未接管客户端只读查看队列 | SCT-002、SCT-007、SCT-010 |
 | openspec/specs/session-execution/spec.md | 队列无期限且不跨节点重启保存 | 长时间等待 | CL-079、CL-097 |
 | openspec/specs/session-execution/spec.md | 队列无期限且不跨节点重启保存 | 节点重启 | CL-098 |
-| openspec/specs/session-execution/spec.md | 排队输入可编辑 | 编辑与发送交错 | CL-088、CL-099 |
+| openspec/specs/session-execution/spec.md | 排队输入可编辑 | 编辑与发送交错 | CL-088、CL-099、SCT-011 |
+| openspec/specs/session-execution/spec.md | 排队输入可编辑 | 旧主控在被顶号后提交编辑 | SCT-005、SCT-011 |
 | openspec/specs/session-execution/spec.md | 队列取消与发送串行 | 取消先于发送 | CL-099 |
 | openspec/specs/session-execution/spec.md | 队列取消与发送串行 | 发送后取消 | CL-099 |
 | openspec/specs/session-execution/spec.md | 同会话前台执行互斥 | 成功后顺序派发 | CL-019、CL-089、CL-110、CL-113 |

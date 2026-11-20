@@ -17,10 +17,10 @@
 
 ### 硬约束与非目标
 
-- 以 [总体设计](../../../docs/architecture/overview.md) 与 `openspec/specs/` 长期规格为依据；保持设备信任层（`client-trust`）、单会话客户端控制权接管（`session-control-takeover`）与外部原生会话纳管（`native-session-import`）三者职责独立。
+- 以 [总体设计](../../../../docs/architecture/overview.md) 与 `openspec/specs/` 长期规格为依据；保持设备信任层（`client-trust`）、单会话客户端控制权接管（`session-control-takeover`）与外部原生会话纳管（`native-session-import`）三者职责独立。
 - 会话控制权接管仅作用于主会话（根执行树）内的会话写操作，不阻塞设备列表查询、设备撤销、全局容量面板查看与手动释放或创建新会话等节点级管理动作，也不改动连接私有的分块上传暂存协议（`management-input-upload`）。
 - 控制权接管状态属于会话活跃运行期内存事实，不跨会话资源释放或节点重启持久保留；不因控制权顶号切换而中止在途执行或清空节点已受理队列。
-- 首期限定 Windows 节点与同源 Web，基于 [refactor-web-workbench](../archive/2026-11-20-refactor-web-workbench/proposal.md) 模块化基线实施，严格保持 Web 新增与修改子模块单文件行数上限及单向无环依赖。
+- 首期限定 Windows 节点与同源 Web，基于 [refactor-web-workbench](../2026-11-20-refactor-web-workbench/proposal.md) 模块化基线实施，严格保持 Web 新增与修改子模块单文件行数上限及单向无环依赖。
 
 ### 本 change 的成功判据
 
@@ -48,7 +48,7 @@
 
 ## Impact
 
-- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[refactor-web-workbench](../archive/2026-11-20-refactor-web-workbench/proposal.md)，并与 [deliver-native-session-import](../deliver-native-session-import/proposal.md) 保持术语与层次解耦；跨变更关系见 [能力地图](../../../docs/architecture/capability-map.md)。
+- 依赖：[deliver-codex-session-loop](../2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../2026-11-19-deliver-session-capacity/proposal.md)、[refactor-web-workbench](../2026-11-20-refactor-web-workbench/proposal.md)，并与 [deliver-native-session-import](../../deliver-native-session-import/proposal.md) 保持术语与层次解耦；跨变更关系见 [能力地图](../../../../docs/architecture/capability-map.md)。
 - 影响范围：节点主会话运行期控制权协调器、WSS 会话命令与审批入口验权、控制权状态推送及 Web 会话工作台只读/接管状态栏与操作控件门禁；具体工作包划分与写范围见 [plan.md](plan.md)。
 
 ## Exploration
@@ -56,4 +56,4 @@
 - **顶号式显式接管（用户确认 1）**：鉴于所有可信客户端均属于同一节点 owner，若要求原设备先释放会导致用户离开原设备后无法远程操作；因此采用显式抢占（顶号）模式，新设备确认接管后原子切换主控身份并使旧设备降为只读。
 - **业务只读与历史查看边界（用户确认 2 / 方案 A）**：“只读”仅禁止改变会话执行与队列/审批状态的写操作；只读客户端打开空闲会话时仍可读取本地展示快照或在必要时触发标准只读历史重放（受 50 主会话名额约束）。
 - **活跃期内存驻留与自动归零（用户确认 3）**：控制权按主会话（根执行树）绑定，仅驻留当前活跃运行期内存，随主动释放、客户端撤销、会话资源释放或节点重启自动归零，不建立跨重启持久会话锁表。
-- **术语防撞车（用户确认 4）**：在 [领域术语表](../../GLOSSARY.md) 中明确区分“会话控制权接管（客户端级单会话写权限）”与 `native-session-import` 中的“外部原生会话纳管（平台级原生执行绑定）”，无新增独立 ADR。
+- **术语防撞车（用户确认 4）**：在 [领域术语表](../../../GLOSSARY.md) 中明确区分“会话控制权接管（客户端级单会话写权限）”与 `native-session-import` 中的“外部原生会话纳管（平台级原生执行绑定）”，无新增独立 ADR。

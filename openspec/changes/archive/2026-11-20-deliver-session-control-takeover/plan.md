@@ -66,7 +66,7 @@ mode: required
 ## Handoff
 
 - **基线分支与快照**：当前分支 `v2`，规划基线提交 `bc92997c`（受跟踪工作区干净）；正式实施须在编码前门禁更新为 `passed` 后，在全新 `coder` 会话中启动（遵循 `openspec/config.yaml` 编写 `tests.md` 与 `apply` 编码分会话硬约束）。
-- **权威输入路径**：[proposal.md](proposal.md)、[design.md](design.md)、[tests.md](tests.md)、[tasks.md](tasks.md)、[session-control-takeover 增量规格](specs/session-control-takeover/spec.md)、[session-execution 增量规格](specs/session-execution/spec.md)、[permission-approvals 增量规格](specs/permission-approvals/spec.md)、[AGENTS.md](../../../AGENTS.md)、[硬规则清单](../../../docs/hard-rules.md)、[总体架构](../../../docs/architecture/overview.md)。
+- **权威输入路径**：[proposal.md](proposal.md)、[design.md](design.md)、[tests.md](tests.md)、[tasks.md](tasks.md)、[session-control-takeover 增量规格](specs/session-control-takeover/spec.md)、[session-execution 增量规格](specs/session-execution/spec.md)、[permission-approvals 增量规格](specs/permission-approvals/spec.md)、[AGENTS.md](../../../../AGENTS.md)、[硬规则清单](../../../../docs/hard-rules.md)、[总体架构](../../../../docs/architecture/overview.md)。
 - **读写边界**：`coder` 严格按 `WP1`–`WP3` 声明的 `Write Scope` 修改 `app/`、`clients/web/` 与 `docs/`，严禁触碰 `node_management_audit` 冻结表结构、严禁创建 `session_commands` 表、严禁修改 `.agents/`；`tester` 与 `reviewer` 在门禁阶段对产品源码只读，详细运行与检视原始记录写入本地被忽略目录 `testing/runs/deliver-session-control-takeover/`。
 - **验证入口**：见 `## Project Verify` 表中 `PV1`–`PV5`。
 
