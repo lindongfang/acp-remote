@@ -71,6 +71,9 @@ async fn module_p01_v1_real_create_early_raw_first_snapshot_then_tail() -> Resul
                     snapshot_end = true;
                     break;
                 }
+                RecordKind::TurnStart | RecordKind::FieldBytes => {
+                    bail!("unexpected history record in the ordinary first snapshot")
+                }
                 RecordKind::ItemProjection | RecordKind::Status => {}
             }
         }
