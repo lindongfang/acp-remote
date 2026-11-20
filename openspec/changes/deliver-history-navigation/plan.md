@@ -40,7 +40,7 @@
 
 | Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes |
 | --- | --- | --- | --- | --- | --- |
-| 编码前门禁 | 独立 reviewer | 父步骤入口、游标权限、轮次证明与用例充分性 | PV1 通过且语义阻断清零 | blocked | HN-R01 至 HN-R05 待原审查人复核 |
+| 编码前门禁 | 独立 reviewer | 父步骤入口、游标权限、轮次证明与用例充分性 | PV1 通过且语义阻断清零 | passed | 独立 reviewer 已复核规划提交 7aeff9a2，关闭 HN-R01 至 HN-R05 |
 | 集成交付门禁 | 独立 reviewer | 受测提交、真实链路、资源与安全 | 独立验收通过且阻断项关闭 | pending | 尚无受测提交 |
 
 ## Main E2E
@@ -63,11 +63,11 @@ mode: required
 
 | ID | Source | Severity | Commit SHA | Finding | Fix Commit | Status | Retest / Re-review |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| HN-R01 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 缺少可靠分轮证据 | 待复核 | open | 等待规划复核 |
-| HN-R02 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 实时新增轮次缺少分组边界 | 待复核 | open | 等待规划复核 |
-| HN-R03 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 游标范围编码与方向校验 | 待复核 | open | 等待规划复核 |
-| HN-R04 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 旧页遗漏迟到的工具补丁 | 待复核 | open | 等待规划复核 |
-| HN-R05 | 独立 reviewer | 中 | 4dd96797 + 规划工作区 | 子首页与重新定位语义混用 | 待复核 | open | 等待规划复核 |
+| HN-R01 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 缺少可靠分轮证据 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
+| HN-R02 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 实时新增轮次缺少分组边界 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
+| HN-R03 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 游标范围编码与方向校验 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
+| HN-R04 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 旧页遗漏迟到的工具补丁 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
+| HN-R05 | 独立 reviewer | 中 | 4dd96797 + 规划工作区 | 子首页与重新定位语义混用 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
 
 ## Verification Results
 
