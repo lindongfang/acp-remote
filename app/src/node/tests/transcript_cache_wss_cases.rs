@@ -243,6 +243,11 @@ async function handleRequest(msg) {
         sessionUpdate:"user_message_chunk",messageId:"user-"+id,content:{type:"text",text:promptText}
       }}});
     }
+    if (cfg.adjacentAnonymousUserChunk) {
+      send({method:"session/update",params:{sessionId:sid,update:{
+        sessionUpdate:"user_message_chunk",content:{type:"text",text:"anonymous continuation"}
+      }}});
+    }
     if (cfg.requestPermission) {
       const permId = `perm-${reqSeq++}`;
       const permWait = new Promise((resolve) => {
@@ -334,6 +339,7 @@ rl.on("line", (line) => {
   } else if (msg.id && pendingPermResolve) {
     const r = pendingPermResolve;
     pendingPermResolve = null;
+    logEvent({event:"permissionReply", ok:!!msg.result});
     r(msg.result);
   }
 });
@@ -1851,6 +1857,34 @@ async fn check_degraded_prompt_and_approval(fixture: &HarnessFixture) {
         "prompt consume failed: {consume_res}"
     );
 
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if fixture
+                .peer_logs()
+                .iter()
+                .any(|e| e["event"] == "permissionReply" && e["ok"] == true)
+            {
+                let queue = send_command_wait(
+                    &mut sock_prompt,
+                    "input.queue",
+                    serde_json::json!({"targetId":target_id.encode()}),
+                )
+                .await;
+                assert_eq!(queue["ok"], true);
+                if queue["result"]["active"].is_null()
+                    && queue["result"]["processing"].is_null()
+                    && queue["result"]["waiting"]
+                        .as_array()
+                        .is_some_and(Vec::is_empty)
+                {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("native approval reply and prompt settlement");
     let open = send_command_wait(
         &mut sock_prompt,
         "view.open",

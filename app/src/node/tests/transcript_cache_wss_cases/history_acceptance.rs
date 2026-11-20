@@ -708,11 +708,30 @@ async fn hn_016_parent_thousand_anonymous_turns_relocate_then_finish() {
 
 #[tokio::test]
 async fn hn_023_interleaved_clients_share_cursors_preserve_control_and_queue() {
+    Box::pin(check_two_readers(false)).await;
+}
+
+#[cfg(all(
+    feature = "native-dispatch-dev-fixtures",
+    feature = "approval-owner-acceptance-fixtures"
+))]
+#[tokio::test]
+#[ignore = "uses the real 30-minute Windows node capacity clock"]
+async fn hn_023_real_idle_timeout_for_paged_root() {
+    Box::pin(check_two_readers(true)).await;
+}
+
+async fn check_two_readers(real_timeout: bool) {
     use serde_json::json;
     let f = HarnessFixture::new("hn023");
+    if real_timeout {
+        configure(&f, &json!({"protocolVersion":2}));
+    }
     let owner = start_node(&f);
     let node = owner.ready().await.unwrap();
-    let (id, key, sel) = f.install_profile(&node, 1, 89).await;
+    let (id, key, sel) = f
+        .install_profile(&node, if real_timeout { 2 } else { 1 }, 89)
+        .await;
     let mut a = connected(&f, &node, &key, &id).await;
     let (target, native) = f
         .create_and_bind_target(&node, &mut a, &key, &id, &sel)
@@ -728,6 +747,26 @@ async fn hn_023_interleaved_clients_share_cursors_preserve_control_and_queue() {
     let queue = send_command_wait(&mut a, "input.queue", bound.clone()).await;
     let scope = json!({"kind":"target","targetId":target.encode()});
     let mut cursor = serde_json::Value::Null;
+    #[cfg(all(
+        feature = "native-dispatch-dev-fixtures",
+        feature = "approval-owner-acceptance-fixtures"
+    ))]
+    let idle_clock = if real_timeout {
+        Some(
+            timeout(Duration::from_secs(50), async {
+                loop {
+                    if let Some(clock) = history_idle_clock(&node, &native) {
+                        return clock;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await
+            .expect("root has an original eligible capacity interval"),
+        )
+    } else {
+        None
+    };
     for i in 0..50 {
         let shared = i % 4 == 3;
         let (sock, size) = if i % 2 == 0 {
@@ -768,6 +807,61 @@ async fn hn_023_interleaved_clients_share_cursors_preserve_control_and_queue() {
             .iter()
             .all(|e| e["method"] != "session/prompt" && e["method"] != "session/cancel")
     );
+    #[cfg(all(
+        feature = "native-dispatch-dev-fixtures",
+        feature = "approval-owner-acceptance-fixtures"
+    ))]
+    if let Some((received, since)) = idle_clock {
+        assert_eq!(history_idle_clock(&node, &native), Some((received, since)));
+        eprintln!(
+            "HN-023 real eligible interval observed; two-client clock preserved after 50 reads"
+        );
+        loop {
+            let left = Duration::from_secs(1799).saturating_sub(since.elapsed());
+            if left.is_zero() {
+                break;
+            }
+            if left < Duration::from_secs(5) {
+                tokio::time::sleep(left).await;
+            } else {
+                tokio::time::sleep(
+                    left.saturating_sub(Duration::from_secs(3))
+                        .min(Duration::from_secs(25)),
+                )
+                .await;
+                let page = send_command_wait(
+                    &mut b,
+                    "history.page",
+                    json!({"target":scope,"mode":{"kind":"first"}}),
+                )
+                .await;
+                assert_eq!(page["result"]["page"]["firstTurn"], "16");
+                snapshot(&mut b, &page).await;
+                assert_eq!(history_idle_clock(&node, &native), Some((received, since)));
+            }
+        }
+        let inspect = send_command_wait(&mut a, "session.capacity.inspect", json!({})).await;
+        assert_eq!(inspect["result"]["occupied"], 1);
+        assert!(since.elapsed() < Duration::from_secs(1800));
+        eprintln!("HN-023 sampled original occupied root at 1799 seconds");
+        let pool = node.storage.as_ref().unwrap().pool_for_test();
+        timeout(Duration::from_secs(60),async {
+            loop {
+                let finished:i64=sqlx::query_scalar("SELECT count(*) FROM node_session_automatic_releases o JOIN node_session_capacity c ON c.reservation_id=o.anchor_reservation WHERE c.native_id=? AND o.reason='idle_timeout' AND o.phase='finished' AND c.released=1 AND c.physically_closed=1").bind(&native).fetch_one(pool).await.unwrap();
+                if finished==1 {break;}
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }).await.expect("idle timeout physically reclaims this root on the real scanner");
+        assert!(since.elapsed() >= Duration::from_secs(1800));
+        assert_eq!(
+            send_command_wait(&mut a, "session.capacity.inspect", json!({})).await["result"]["occupied"],
+            0
+        );
+        eprintln!(
+            "HN-023 physically closed and released at {} seconds",
+            since.elapsed().as_secs()
+        );
+    }
     crate::ipc::device_revoke(node.ipc_address(), &bid)
         .await
         .unwrap();
@@ -776,6 +870,30 @@ async fn hn_023_interleaved_clients_share_cursors_preserve_control_and_queue() {
     node.shutdown(None).await.unwrap();
 }
 
+#[cfg(all(
+    feature = "native-dispatch-dev-fixtures",
+    feature = "approval-owner-acceptance-fixtures"
+))]
+fn history_idle_clock(
+    node: &NodeRuntime,
+    native: &str,
+) -> Option<(std::time::Instant, std::time::Instant)> {
+    use crate::application::native_dispatch::runtime_child_source_clock_probe::{
+        rt_source_activity_clocks, rt_source_candidate_clocks,
+    };
+    let rt = &node.session_services.as_ref().unwrap().native;
+    let received = rt_source_activity_clocks(rt)
+        .unwrap()
+        .into_iter()
+        .find(|(_, id, _)| id.as_ref() == native)?
+        .2;
+    let eligible = rt_source_candidate_clocks(rt)
+        .unwrap()
+        .into_iter()
+        .find(|(_, id, _)| id.as_ref() == native)?
+        .2?;
+    Some((received, eligible))
+}
 async fn expire_cache(node: &NodeRuntime, native: &str) {
     let store = node
         .session_services
@@ -1553,4 +1671,187 @@ async fn check_schema_degradation(migration_fault: bool) {
     let before = Sha256::digest(std::fs::read(&path).unwrap());
     Box::pin(check_degraded_prompt_and_approval(&f)).await;
     assert_eq!(Sha256::digest(std::fs::read(path).unwrap()), before);
+}
+
+struct ReleaseManagementBarrier(crate::test_support::SharedAsyncBarrier);
+impl Drop for ReleaseManagementBarrier {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+#[tokio::test]
+async fn hn_018_late_first_reply_after_second_generation_and_other_input() {
+    use serde_json::json;
+    let f = HarnessFixture::new("hn018-order");
+    configure(&f, &json!({"replayTurns":600}));
+    let root = Box::pin(cold_root(&f)).await;
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let mut first_reader = connected(&f, &node, &root.key, &root.id).await;
+    let second_key = SigningKey::from_slice(&[97; 32]).unwrap();
+    let second_id = pair_browser(&node, &second_key, "Second reader").await;
+    let mut second_reader = connected(&f, &node, &second_key, &second_id).await;
+    let mut controller = connected(&f, &node, &root.key, &root.id).await;
+    let (other, other_native) = f
+        .create_and_bind_target(&node, &mut controller, &root.key, &root.id, &root.selection)
+        .await;
+    let scope = json!({"kind":"target","targetId":root.target.encode()});
+    let locate = |n: u32| json!({"target":scope,"mode":{"kind":"locate","fromTurn":n.to_string(),"direction":"older"}});
+    let management = node.management.as_ref().unwrap();
+    let barrier = management.pause_next_boundary(crate::management_ws::ManagementBoundary::Enqueue);
+    let release = ReleaseManagementBarrier(barrier.clone());
+    let first_done = std::sync::atomic::AtomicBool::new(false);
+    let (first, second) = tokio::join!(
+        async {
+            let r = send_command_wait(&mut first_reader, "history.page", locate(500)).await;
+            first_done.store(true, Ordering::SeqCst);
+            r
+        },
+        async {
+            timeout(Duration::from_secs(10), barrier.wait_until_entered())
+                .await
+                .expect("first response prepared at enqueue");
+            configure(&f, &json!({"turnPrefix":"C"}));
+            let refresh=send_command_wait(&mut second_reader,"view.open",json!({"targetId":root.target.encode(),"reason":"explicit_refresh","page":{"turns":"10"}})).await;
+            assert_eq!(refresh["ok"], true, "refresh error {:?}", refresh["error"]);
+            snapshot(&mut second_reader, &refresh).await;
+            let (later, input) = tokio::join!(
+                send_command_wait(&mut second_reader, "history.page", locate(300)),
+                submit_prompt_turn(&mut controller, other, "unrelated in-flight work")
+            );
+            assert_eq!(input["ok"], true);
+            wait_for_peer_method(&f, "session/prompt", 1).await;
+            assert!(f.peer_logs().iter().any(
+                |e| e["method"] == "session/prompt" && e["params"]["sessionId"] == other_native
+            ));
+            assert_eq!(later["result"]["page"]["lastTurn"], "300");
+            let frames = snapshot(&mut second_reader, &later).await;
+            assert_eq!(frames.raw.len(), 10);
+            for (i, frame) in frames.raw.iter().enumerate() {
+                assert!(
+                    frame["params"]["update"]["content"]["text"].eq(&format!("C{:04}", 291 + i)),
+                    "later page content {i}"
+                );
+            }
+            assert!(!first_done.load(Ordering::SeqCst));
+            drop(release);
+            later
+        }
+    );
+    assert_eq!(
+        first["result"]["page"]["lastTurn"], "500",
+        "late error {:?}",
+        first["error"]
+    );
+    assert_ne!(
+        first["result"]["page"]["generationId"],
+        second["result"]["page"]["generationId"]
+    );
+    let old = snapshot(&mut first_reader, &first).await;
+    assert_eq!(old.raw.len(), 10);
+    for (i, frame) in old.raw.iter().enumerate() {
+        assert!(
+            frame["params"]["update"]["content"]["text"].eq(&format!("U{:04}", 491 + i)),
+            "older page content {i}"
+        );
+    }
+    let check = send_command_wait(&mut second_reader, "history.page", locate(300)).await;
+    assert_eq!(
+        check["result"]["page"]["generationId"],
+        second["result"]["page"]["generationId"]
+    );
+    controller.close(None).await.unwrap();
+    first_reader.close(None).await.unwrap();
+    second_reader.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}
+#[tokio::test]
+async fn hn_024_no_user_chunks_after_25_prompts_still_accepts_input() {
+    Box::pin(check_unprovable_prompt_history(false)).await;
+}
+
+#[tokio::test]
+async fn hn_024_mixed_adjacent_user_chunks_still_accepts_input() {
+    Box::pin(check_unprovable_prompt_history(true)).await;
+}
+
+async fn check_unprovable_prompt_history(mixed: bool) {
+    use serde_json::json;
+    let f = HarnessFixture::new("hn024-unprovable");
+    configure(
+        &f,
+        &json!({"capabilityMode":"resume_only","echoUserChunk":mixed,"adjacentAnonymousUserChunk":mixed}),
+    );
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let (id, key, sel) = f.install_profile(&node, 1, 72).await;
+    let mut control = connected(&f, &node, &key, &id).await;
+    let (target, native) = f
+        .create_and_bind_target(&node, &mut control, &key, &id, &sel)
+        .await;
+    for i in 1..=25 {
+        if i % 10 == 0 {
+            control.close(None).await.unwrap();
+            control = connected(&f, &node, &key, &id).await;
+        }
+        assert_eq!(
+            submit_prompt_turn(&mut control, target, &format!("prompt {i}")).await["ok"],
+            true
+        );
+        wait_for_peer_method(&f, "session/prompt", i).await;
+    }
+    let store = node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store();
+    let session = NativeSessionKey::from_config(Some(sel.source), &native).unwrap();
+    let expected = if mixed { 75 } else { 25 };
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if store
+                .load_snapshot(&session)
+                .await
+                .unwrap()
+                .is_some_and(|s| s.session.record_count == expected)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("all native user and assistant frames persisted");
+    let reader_key = SigningKey::from_slice(&[73; 32]).unwrap();
+    let reader_id = pair_browser(&node, &reader_key, "Read history").await;
+    let mut reader = connected(&f, &node, &reader_key, &reader_id).await;
+    let opened = send_command_wait(
+        &mut reader,
+        "view.open",
+        json!({"targetId":target.encode(),"reason":"first_open","page":{"turns":"10"}}),
+    )
+    .await;
+    let page = &opened["result"]["page"];
+    assert_eq!(
+        page["turnStatus"], "unprovable",
+        "error: {:?}",
+        opened["error"]
+    );
+    for field in ["firstTurn", "lastTurn", "newerCursor", "olderCursor"] {
+        assert_eq!(page.get(field), Some(&serde_json::Value::Null));
+    }
+    let frames = snapshot(&mut reader, &opened).await;
+    assert_eq!(frames.raw.len() as u64, expected);
+    let locate=send_command_wait(&mut reader,"history.page",json!({"target":{"kind":"target","targetId":target.encode()},"mode":{"kind":"locate","direction":"older","fromTurn":"1"}})).await;
+    assert_eq!(locate["error"], json!({"code":"unsupported_capability"}));
+    assert_eq!(
+        submit_prompt_turn(&mut control, target, "follow-up after a full history read").await["ok"],
+        true
+    );
+    wait_for_peer_method(&f, "session/prompt", 26).await;
+    control.close(None).await.unwrap();
+    reader.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
 }
