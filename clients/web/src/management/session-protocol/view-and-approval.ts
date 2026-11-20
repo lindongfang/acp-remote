@@ -2,6 +2,7 @@ import type { JsonValue } from "../../protocol/jws";
 import {
   approvalQuantity,
   closed,
+  closedWithOptional,
   literal,
   object,
   oneOf,
@@ -13,6 +14,42 @@ import {
   requireText,
   responseResult,
 } from "./primitives";
+
+export type TranscriptSource = "live" | "transcript_cache" | "hybrid_resumed";
+export type TranscriptSyncState =
+  | "idle"
+  | "revalidating"
+  | "synced"
+  | "degraded_capacity_full"
+  | "degraded_unreachable"
+  | "native_unrecoverable";
+export type TranscriptCapabilityBoundary =
+  | "unknown"
+  | "replay_capable"
+  | "resume_only"
+  | "pure_memory";
+
+export interface TranscriptCacheState {
+  readonly transcriptSource: TranscriptSource;
+  readonly syncState: TranscriptSyncState;
+  readonly capabilityBoundary: TranscriptCapabilityBoundary;
+  readonly continuable: boolean;
+  readonly cacheWarning: boolean;
+}
+
+export interface SessionViewStatus {
+  readonly mode: SessionViewMode;
+  readonly freshness: SessionViewFreshness;
+  readonly projection: SessionViewProjection;
+  readonly join: SessionViewJoin;
+  readonly historyIncomplete: boolean;
+  readonly cacheRecoverable: boolean;
+  readonly transcriptSource?: TranscriptSource;
+  readonly syncState?: TranscriptSyncState;
+  readonly capabilityBoundary?: TranscriptCapabilityBoundary;
+  readonly continuable?: boolean;
+  readonly cacheWarning?: boolean;
+}
 
 export type SessionViewMode =
   | "current_only"
@@ -46,14 +83,7 @@ export interface SessionViewOpened {
   readonly capabilities: {
     readonly opaqueChunks: 1;
   };
-  readonly status: {
-    readonly mode: SessionViewMode;
-    readonly freshness: SessionViewFreshness;
-    readonly projection: SessionViewProjection;
-    readonly join: SessionViewJoin;
-    readonly historyIncomplete: boolean;
-    readonly cacheRecoverable: boolean;
-  };
+  readonly status: SessionViewStatus;
 }
 
 export interface SessionViewClosed {
@@ -175,32 +205,54 @@ export function parseSessionViewOpened(value: JsonValue): SessionViewOpened {
       capabilities: (capabilities) =>
         closed(capabilities, { opaqueChunks: literal(1) }),
       status: (status) =>
-        closed(status, {
-          mode: oneOf(
-            "current_only",
-            "replay_requested",
-            "replaying",
-            "replay_complete",
-            "replay_incomplete",
-          ),
-          freshness: oneOf(
-            "current_observation",
-            "revalidating",
-            "stale",
-          ),
-          projection: oneOf(
-            "available",
-            "partial_known_structure",
-            "unavailable",
-          ),
-          join: oneOf(
-            "proven_native_ids",
-            "rebuilt_no_stable_ids",
-            "unassociated_segments",
-          ),
-          historyIncomplete: requireBoolean,
-          cacheRecoverable: requireBoolean,
-        }),
+        closedWithOptional(
+          status,
+          {
+            mode: oneOf(
+              "current_only",
+              "replay_requested",
+              "replaying",
+              "replay_complete",
+              "replay_incomplete",
+            ),
+            freshness: oneOf(
+              "current_observation",
+              "revalidating",
+              "stale",
+            ),
+            projection: oneOf(
+              "available",
+              "partial_known_structure",
+              "unavailable",
+            ),
+            join: oneOf(
+              "proven_native_ids",
+              "rebuilt_no_stable_ids",
+              "unassociated_segments",
+            ),
+            historyIncomplete: requireBoolean,
+            cacheRecoverable: requireBoolean,
+          },
+          {
+            transcriptSource: oneOf("live", "transcript_cache", "hybrid_resumed"),
+            syncState: oneOf(
+              "idle",
+              "revalidating",
+              "synced",
+              "degraded_capacity_full",
+              "degraded_unreachable",
+              "native_unrecoverable",
+            ),
+            capabilityBoundary: oneOf(
+              "unknown",
+              "replay_capable",
+              "resume_only",
+              "pure_memory",
+            ),
+            continuable: requireBoolean,
+            cacheWarning: requireBoolean,
+          },
+        ),
     }),
   );
 }

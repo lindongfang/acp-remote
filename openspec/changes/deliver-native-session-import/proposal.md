@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：基础原生身份/加载端口、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
+- 依赖：基础原生身份/加载端口、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../archive/2026-11-20-deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：平台执行所有权登记、原生恢复与展示快照代际协调、容量预留与客户端控制权接线及 Web 纳管交互；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

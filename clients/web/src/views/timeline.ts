@@ -8,6 +8,7 @@ import type { RawJsonDocument } from "./raw-json";
 export interface StructuredTimeline {
   readonly element: HTMLElement;
   refresh(): void;
+  rebindGeneration?(store: ViewContentStore, segmentId: string): void;
   dispose(): void;
 }
 type TextPart =
@@ -99,9 +100,18 @@ function textParts(value: RawValue): readonly TextPart[] {
     return textObject(entry, index, true) ?? { kind: "raw" };
   });
 }
+function partKey(part: TextPart): string {
+  return part.kind === "text" ? `t:${part.extra ? 1 : 0}:${part.text.length}:${part.text}` : "r";
+}
+function rawValueKey(entry: NonNullable<FieldMaterial["primary"]>): string {
+  if (entry.value === null) return `${entry.raw.append}/missing`;
+  const parts = textParts(entry.value).map(partKey).join("|");
+  const hasRaw = parts.includes("r") ? `:${entry.raw.byteEnd - entry.raw.byteStart}` : "";
+  return `${entry.raw.append}/ready:${parts}${hasRaw}`;
+}
 function materialKey(value: FieldMaterial): string {
-  const reference = (entry: FieldMaterial["primary"]): string => entry === null ? "none" :
-    `${entry.raw.rawRecordId}/${entry.raw.byteStart}/${entry.raw.byteEnd}/${entry.raw.append}/${entry.value !== null}`;
+  const reference = (entry: FieldMaterial["primary"]): string =>
+    entry === null ? "none" : rawValueKey(entry);
   return `${value.knowledge}:${value.enumCode}:${value.expectedEvidenceCount}:${value.referencesReady}:` +
     reference(value.primary) + ":" + value.evidence.map((entry) => `${entry.index}=${reference(entry)}`).join(";");
 }
@@ -121,7 +131,7 @@ class Timeline {
   readonly #live: HTMLParagraphElement;
   #owner: Document | null;
   #store: ViewContentStore | null;
-  readonly #segment: string;
+  #segment: string;
   #cards: Map<bigint, Card>;
   #disposed = false;
 
@@ -131,6 +141,7 @@ class Timeline {
     this.#segment = segment;
     this.#cards = new Map();
     this.element = this.node("section", "acp-timeline");
+    this.element.dataset.segmentId = segment;
     this.element.setAttribute("aria-label", "会话内容");
     const heading = this.node("h2", "acp-timeline__heading");
     heading.textContent = "会话内容";
@@ -251,13 +262,19 @@ class Timeline {
     if (!field.referencesReady) this.paragraph(parent, "内容尚未完整收到。", "acp-timeline__notice");
   }
 
+  private itemBodyKey(store: ViewContentStore, item: ProjectedItem): string {
+    const content = store.field(item, "content");
+    const output = store.field(item, "rawOutput");
+    return `${item.kind}|${materialKey(content)}|${item.kind === "tool" ? materialKey(output) : ""}`;
+  }
+
   private refreshCard(card: Card, item: ProjectedItem): string | null {
     if (this.#owner === null || this.#store === null) return null;
     const title = this.#store.field(item, "title");
     const status = this.#store.field(item, "status");
     const content = this.#store.field(item, "content");
     const output = this.#store.field(item, "rawOutput");
-    const bodyKey = materialKey(content) + "|" + (item.kind === "tool" ? materialKey(output) : "");
+    const bodyKey = `${item.kind}|${materialKey(content)}|${item.kind === "tool" ? materialKey(output) : ""}`;
     let body: DocumentFragment | null = null;
     if (bodyKey !== card.bodyKey) {
       body = this.#owner.createDocumentFragment();
@@ -379,6 +396,109 @@ class Timeline {
     } catch { this.#live.textContent = "本次展示失败，已保留已有内容。"; }
   }
 
+  rebindGeneration(store: ViewContentStore, segmentId: string): void {
+    if (this.#disposed) return;
+    this.#store = store;
+    this.#segment = segmentId;
+    this.element.dataset.segmentId = segmentId;
+    try {
+      const items = store.items(segmentId);
+      const oldList = [...this.#cards.values()];
+      const claimed = new Set<Card>();
+      const matched: Array<Card | null> = new Array(items.length).fill(null);
+
+      // Match surviving cards across segments: first exact (anchorId, bodyKey), then cross-segment
+      // identical bodyKey (preserving <li> & Selection on compressed replays), then (anchorId, kind).
+      const itemKeys = items.map((item) => this.itemBodyKey(store, item));
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const key = itemKeys[i];
+        if (item === undefined || key === undefined) continue;
+        const candidate = this.#cards.get(item.anchorId);
+        if (
+          candidate !== undefined &&
+          !claimed.has(candidate) &&
+          candidate.item.kind === item.kind &&
+          candidate.bodyKey === key
+        ) {
+          claimed.add(candidate);
+          matched[i] = candidate;
+        }
+      }
+      for (let i = 0; i < items.length; i++) {
+        if (matched[i] !== null) continue;
+        const item = items[i];
+        const key = itemKeys[i];
+        if (item === undefined || key === undefined) continue;
+        const candidate = oldList.find((c) => !claimed.has(c) && c.bodyKey === key);
+        if (candidate !== undefined) {
+          claimed.add(candidate);
+          matched[i] = candidate;
+        }
+      }
+      for (let i = 0; i < items.length; i++) {
+        if (matched[i] !== null) continue;
+        const item = items[i];
+        if (item === undefined) continue;
+        const candidate = this.#cards.get(item.anchorId);
+        if (candidate !== undefined && !claimed.has(candidate) && candidate.item.kind === item.kind) {
+          claimed.add(candidate);
+          matched[i] = candidate;
+        }
+      }
+
+      for (const old of oldList) {
+        if (!claimed.has(old)) {
+          old.listeners.abort();
+          old.inspector?.dispose();
+          old.element.remove();
+        }
+      }
+
+      const orderedCards: Card[] = [];
+      const nextCards = new Map<bigint, Card>();
+      const notices: string[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item === undefined) continue;
+        let card = matched[i] ?? null;
+        const created = card === null;
+        if (card === null) card = this.createCard(item);
+        else card.item = item;
+        const notice = this.refreshCard(card, item);
+        if (notice !== null) notices.push(notice);
+        orderedCards.push(card);
+        nextCards.set(item.anchorId, card);
+        if (created) {
+          // Inserted in order below without disturbing surviving siblings.
+        }
+      }
+
+      for (let i = orderedCards.length - 1; i >= 0; i--) {
+        const card = orderedCards[i];
+        if (card === undefined) continue;
+        const nextEl = i + 1 < orderedCards.length ? (orderedCards[i + 1]?.element ?? null) : null;
+        const kids = Array.from(this.#list.children);
+        const idx = kids.indexOf(card.element);
+        const alreadyPlaced = idx !== -1 && (nextEl === null ? idx === kids.length - 1 : kids[idx + 1] === nextEl);
+        if (!alreadyPlaced) {
+          this.#list.insertBefore(card.element, nextEl);
+        }
+      }
+
+      this.#cards = nextCards;
+      if (notices.length !== 0) {
+        this.#live.textContent = notices.length === 1 ? notices[0] ?? "内容已更新" : "会话内容已更新。";
+      }
+      this.#notice.textContent = items.length === 0
+        ? "当前尚无已收到的内容。"
+        : "显示当前已收到的内容；未解析结构可查看原始记录。";
+    } catch {
+      this.#live.textContent = "本次重绑定展示失败，已保留已有内容。";
+    }
+  }
+
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
@@ -397,7 +517,13 @@ export function createStructuredTimeline(owner: Document, store: ViewContentStor
     timeline = new Timeline(owner, store, segmentId);
     timeline.refresh();
     const instance = timeline;
-    return Object.freeze({ element: instance.element, refresh: () => instance.refresh(), dispose: () => instance.dispose() });
+    return Object.freeze({
+      element: instance.element,
+      refresh: () => instance.refresh(),
+      rebindGeneration: (nextStore: ViewContentStore, nextSegmentId: string) =>
+        instance.rebindGeneration(nextStore, nextSegmentId),
+      dispose: () => instance.dispose(),
+    });
   } catch {
     try { timeline?.dispose(); } catch { /* A broken DOM cannot promise disposal. */ }
     const error = new Error("无法建立会话时间线");

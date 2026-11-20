@@ -852,3 +852,19 @@ pub trait NativeControlPort: NativeLifecyclePort {
         reservation: Self::ControlReservation,
     ) -> CancelledControlReservation<Self::Scope, Self::Probe>;
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CachedHybridFrame {
+    pub sequence: u64,
+    pub receipt_order: u64,
+    pub raw_json: Vec<u8>,
+}
+
+pub trait TranscriptRecoveryObserver: Send + Sync + 'static {
+    fn on_resume_rejected(&self, key: &NativeSessionKey);
+    fn cached_frames_for_hybrid_resume(
+        &self,
+        key: &NativeSessionKey,
+    ) -> BoxFuture<'_, Option<Vec<CachedHybridFrame>>>;
+    fn on_session_resumed_without_replay(&self, key: &NativeSessionKey);
+}

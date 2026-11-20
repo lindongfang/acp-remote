@@ -542,6 +542,9 @@ mod tests {
         include!("node/session_services/capacity_restart_acceptance.rs");
     }
 
+    #[cfg(windows)]
+    mod transcript_cache_wss_cases;
+
     mod catalog_development {
         include!("node/catalog/development_tests.rs");
     }

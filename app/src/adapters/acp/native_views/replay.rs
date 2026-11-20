@@ -37,6 +37,19 @@ use crate::{
 };
 use std::{sync::Weak, task::Context};
 
+struct CompletedReplay {
+    key: NativeSessionKey,
+    version: crate::adapters::acp::Version,
+    profile: crate::transcript_cache::CapabilityProfile,
+    frames: Vec<(u64, crate::adapters::acp::RawMessage)>,
+}
+
+struct ReplayReceivedOutcomes {
+    captured: Result<(), ViewError>,
+    completed_replays: Vec<CompletedReplay>,
+    remote_missing_keys: Vec<NativeSessionKey>,
+}
+
 pub(super) struct NativeHistoryBridge {
     pub(super) attachment: Weak<AcpSourceViews>,
 }
@@ -68,6 +81,7 @@ struct ReplayState {
     read: AcpReplayRead,
     marked: bool,
     proof: Option<Arc<ReadCompletionProof<ConnectionScope, RetainedAcpRaw>>>,
+    replay_frames: Vec<(u64, crate::adapters::acp::RawMessage)>,
 }
 struct ReplayFence {
     scope: ConnectionScope,
@@ -542,6 +556,7 @@ impl AcpSourceViews {
                 read,
                 marked: false,
                 proof: None,
+                replay_frames: Vec::new(),
             }),
             ticket: Mutex::new(None),
             task: Mutex::new(None),
@@ -572,12 +587,67 @@ impl AcpSourceViews {
         Ok(())
     }
     pub(super) fn capture_replay_received(&self, event: &Received) -> Result<(), ViewError> {
+        let strategy_info = self.source.connection().ok().and_then(|conn| {
+            conn.strategy()
+                .map(|s| (s.version(), super::capability_profile_from_strategy(&s)))
+        });
+        let outcomes = self.collect_replay_received_outcomes(event, strategy_info)?;
+        let captured = outcomes.captured;
+        if let Some(tap) = &self.transcript_tap {
+            if let Some((version, profile)) = strategy_info
+                && let Incoming::Update {
+                    event: update_event,
+                    origin:
+                        crate::adapters::acp::UpdateOrigin::Live
+                        | crate::adapters::acp::UpdateOrigin::DuringResume,
+                    raw,
+                } = event.incoming()
+                && let Ok(key) = NativeSessionKey::from_config(
+                    Some(self.pre.metadata().source_id),
+                    update_event.session().as_str(),
+                )
+            {
+                tap.on_live_update(&key, version, profile, event.sequence(), raw);
+            }
+            for item in outcomes.completed_replays {
+                tap.on_replay_completed(&item.key, item.version, item.profile, item.frames);
+            }
+            for key in outcomes.remote_missing_keys {
+                tap.on_replay_remote_missing(&key);
+            }
+        }
+        if let Ok(views) = self.views() {
+            views.core.changed.notify_waiters();
+        }
+        captured
+    }
+
+    fn collect_replay_received_outcomes(
+        &self,
+        event: &Received,
+        strategy_info: Option<(
+            crate::adapters::acp::Version,
+            crate::transcript_cache::CapabilityProfile,
+        )>,
+    ) -> Result<ReplayReceivedOutcomes, ViewError> {
+        let mut completed_replays = Vec::new();
+        let mut remote_missing_keys = Vec::new();
         let mut operations = self.operations.lock().map_err(|_| ViewError::ReadFailure)?;
         let mut capture = self.capture.lock().map_err(|_| ViewError::ReadFailure)?;
         let captured = capture.capture_received(event);
         operations.retain(|operation| operation.strong_count() != 0);
         for operation in operations.iter().filter_map(Weak::upgrade) {
             let mut state = operation.state.lock().map_err(|_| ViewError::ReadFailure)?;
+            if !state.marked
+                && let Incoming::Update {
+                    event: update_event,
+                    origin: crate::adapters::acp::UpdateOrigin::DuringReplay,
+                    raw,
+                } = event.incoming()
+                && update_event.session().as_str() == operation.key.native_id()
+            {
+                state.replay_frames.push((event.sequence(), raw.clone()));
+            }
             let observed = state.read.observe_received(event)?;
             if observed && !state.marked && state.read.response_boundary().is_some() {
                 let boundary = state
@@ -594,7 +664,19 @@ impl AcpSourceViews {
                     _retained: RetainedAcpRaw::from_received(event),
                 }));
                 match capture.complete_module_read(operation.key.clone(), &state.read) {
-                    Ok(_) => state.marked = true,
+                    Ok(_) => {
+                        state.marked = true;
+                        self.clear_hybrid_preloaded(&operation.key);
+                        if let Some((version, profile)) = strategy_info {
+                            let frames = std::mem::take(&mut state.replay_frames);
+                            completed_replays.push(CompletedReplay {
+                                key: operation.key.clone(),
+                                version,
+                                profile,
+                                frames,
+                            });
+                        }
+                    }
                     Err(error) => {
                         let _ = capture.fail_module_read(
                             &operation.key,
@@ -610,8 +692,10 @@ impl AcpSourceViews {
                     }
                 }
             }
-            if matches!(event.incoming(), Incoming::Response { id, response: Response::RemoteError { .. }, .. } if *id==operation.rpc)
-                && !state.marked
+            if matches!(
+                event.incoming(),
+                Incoming::Response { id, response: Response::RemoteError { .. }, .. } if *id == operation.rpc
+            ) && !state.marked
             {
                 let _ = capture.fail_module_read(
                     &operation.key,
@@ -624,14 +708,17 @@ impl AcpSourceViews {
                     },
                 );
                 state.marked = true;
+                remote_missing_keys.push(operation.key.clone());
             }
+            drop(state);
         }
         drop(capture);
         drop(operations);
-        if let Ok(views) = self.views() {
-            views.core.changed.notify_waiters();
-        }
-        captured
+        Ok(ReplayReceivedOutcomes {
+            captured,
+            completed_replays,
+            remote_missing_keys,
+        })
     }
     fn replay_failed(&self, operation: &ReplayOperation, error: ViewError) {
         if let (Ok(mut capture), Ok(mut state)) = (self.capture.lock(), operation.state.lock())

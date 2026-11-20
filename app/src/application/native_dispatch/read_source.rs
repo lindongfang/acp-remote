@@ -28,6 +28,11 @@ pub enum ReadTargetKind {
     SourceOnly,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ColdReadMetadata {
+    pub(crate) key: super::NativeSessionKey,
+}
+
 /// A current route on the original resource, independent of reliable Loaded metadata.
 pub enum SourceReadCapability<P: crate::application::native_dispatch::NativeApprovalPort> {
     RootResource(RootReadCapability<P>),
@@ -306,6 +311,24 @@ where
         + NativeControlRepository
         + crate::application::native_dispatch::NativeApprovalRepository,
 {
+    pub(crate) fn install_transcript_observer(
+        &self,
+        observer: Arc<dyn super::TranscriptRecoveryObserver>,
+    ) -> Result<(), DispatchError> {
+        self.core.install_transcript_observer_inner(observer)
+    }
+    #[must_use]
+    pub(crate) fn is_session_slot_active(&self, key: &super::NativeSessionKey) -> bool {
+        self.core.is_session_slot_active_inner(key)
+    }
+    #[must_use]
+    pub(crate) fn active_live_source(&self, key: &super::NativeSessionKey) -> Option<P::Source> {
+        self.core.active_live_source_inner(key)
+    }
+    #[must_use]
+    pub(crate) fn all_active_protocol_sources(&self) -> Vec<P::Source> {
+        self.core.all_active_protocol_sources_inner()
+    }
     pub(crate) fn install_view_factory(
         &self,
         factory: Arc<dyn super::view_attachment::NativeSourceViewFactory<P>>,
@@ -347,6 +370,27 @@ where
         )?;
         Ok(NativeReadAcquisition { state })
     }
+    pub(crate) fn acquire_target_replay_read(
+        &self,
+        proof: ReadTargetProof,
+    ) -> Result<NativeReadAcquisition<P>, DispatchError> {
+        self.core.running()?;
+        self.core.queue.verify_read_target(&proof)?;
+        let state = Arc::new(ReadAcquisitionState::new());
+        let completed = Arc::clone(&state);
+        let failed = Arc::clone(&state);
+        let core = Arc::clone(&self.core);
+        self.core.tasks.spawn_guarded(
+            async move {
+                let result = core
+                    .ensure_target_replay_read(proof, Arc::clone(&completed))
+                    .await;
+                completed.finish(result.map(|_| ()));
+            },
+            move || failed.finish(Err(DispatchError::RequiredStateUnavailable)),
+        )?;
+        Ok(NativeReadAcquisition { state })
+    }
     pub(crate) fn acquire_source_read(
         &self,
         proof: SourceReadSelectionProof,
@@ -366,6 +410,124 @@ where
             move || failed.finish(Err(DispatchError::RequiredStateUnavailable)),
         )?;
         Ok(NativeReadAcquisition { state })
+    }
+    /// Pure metadata verification for `target` without reserving a 50-slot allocation or spawning.
+    ///
+    /// # Errors
+    /// Rejects stopped runtime or invalid/mismatched target configuration metadata.
+    pub(crate) async fn verify_cold_target_read(
+        &self,
+        proof: &ReadTargetProof,
+    ) -> Result<ColdReadMetadata, DispatchError> {
+        self.core.running()?;
+        self.core.queue.verify_read_target(proof)?;
+        let plan = self.core.configuration.resolve_read(proof).await?;
+        self.core.queue.verify_read_target(proof)?;
+        if plan.target != proof.target()
+            || plan.native != *proof.native()
+            || plan.source_id != proof.native().source().0
+        {
+            return Err(DispatchError::InvalidConfiguration);
+        }
+        Ok(ColdReadMetadata {
+            key: proof.native().clone(),
+        })
+    }
+    /// Pure metadata verification for source-session reads before reading any cached transcript.
+    ///
+    /// # Errors
+    /// Rejects stale, tampered, or mismatched workspace/harness/profile selections.
+    pub(crate) async fn verify_cold_source_read(
+        &self,
+        proof: &SourceReadSelectionProof,
+    ) -> Result<ColdReadMetadata, DispatchError> {
+        self.core.running()?;
+        proof.require_current()?;
+        let plan = self.core.configuration.resolve_source_read(proof).await?;
+        if plan.source_id != proof.selection().source
+            || plan.workspace != proof.selection().workspace
+            || plan.harness != proof.selection().harness
+            || plan.configuration.identity != proof.selection().profile.id()
+            || plan.configuration.revision != proof.selection().profile.revision()
+        {
+            return Err(DispatchError::InvalidConfiguration);
+        }
+        proof.require_current()?;
+        Ok(ColdReadMetadata {
+            key: proof.native().clone(),
+        })
+    }
+    /// Launches/initializes the native source only up to `initialize` capabilities without calling
+    /// `session/resume` or consuming a 50-slot execution allocation.
+    ///
+    /// # Errors
+    /// Returns launch, initialization, or metadata verification failures.
+    pub(crate) async fn probe_target_read(
+        &self,
+        proof: ReadTargetProof,
+    ) -> Result<(P::Source, super::NativeSessionKey), DispatchError> {
+        self.core.running()?;
+        self.core.queue.verify_read_target(&proof)?;
+        let plan = self.core.configuration.resolve_read(&proof).await?;
+        self.core.queue.verify_read_target(&proof)?;
+        if plan.target != proof.target()
+            || plan.native != *proof.native()
+            || plan.source_id != proof.native().source().0
+        {
+            return Err(DispatchError::InvalidConfiguration);
+        }
+        let source = self
+            .core
+            .capacity_source(proof.native(), Arc::new(plan.into_source()))
+            .await?;
+        let core = Arc::clone(&self.core);
+        let slot = Arc::clone(&source);
+        let key = proof.native().clone();
+        self.core
+            .run_source_job(source, async move {
+                let proto = core
+                    .initialize_probe_source(&slot, || core.queue.verify_read_target(&proof))
+                    .await?;
+                Ok((proto, key))
+            })
+            .await
+    }
+    /// Launches/initializes an external source only up to `initialize` capabilities without calling
+    /// `session/resume` or consuming a 50-slot execution allocation.
+    ///
+    /// # Errors
+    /// Returns launch, initialization, or metadata verification failures.
+    pub(crate) async fn probe_source_read(
+        &self,
+        proof: SourceReadSelectionProof,
+    ) -> Result<(P::Source, super::NativeSessionKey), DispatchError> {
+        self.core.running()?;
+        proof.require_current()?;
+        let plan = self.core.configuration.resolve_source_read(&proof).await?;
+        if plan.source_id != proof.selection().source
+            || plan.workspace != proof.selection().workspace
+            || plan.harness != proof.selection().harness
+            || plan.configuration.identity != proof.selection().profile.id()
+            || plan.configuration.revision != proof.selection().profile.revision()
+        {
+            return Err(DispatchError::InvalidConfiguration);
+        }
+        proof.require_current()?;
+        let source = self
+            .core
+            .capacity_source(proof.native(), Arc::new(plan))
+            .await?;
+        let core = Arc::clone(&self.core);
+        let slot = Arc::clone(&source);
+        let key = proof.native().clone();
+        self.core
+            .run_source_job(source, async move {
+                let proto = core
+                    .initialize_probe_source(&slot, || proof.require_current())
+                    .await?;
+                Ok((proto, key))
+            })
+            .await
     }
 }
 

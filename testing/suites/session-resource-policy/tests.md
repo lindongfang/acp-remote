@@ -18,8 +18,9 @@
 | openspec/specs/session-resource-policy/spec.md | 容量计数与自动回收能力分开 | 检查与关闭之间可能自发开始工作 | CP-004、CP-009、CP-028、CP-032 |
 | openspec/specs/session-resource-policy/spec.md | 自动回收受限时保持可管理 | 满额目标均无法自动回收 | CP-029、CP-032 |
 | openspec/specs/session-resource-policy/spec.md | 自动回收受限时保持可管理 | 重连后失去活动或安全关闭依据 | CP-029、CP-032 |
-| openspec/specs/session-resource-policy/spec.md | 默认五十个主会话名额 | 最后一个名额并发分配 | CP-003、CP-004、CP-005、CP-011、CP-025 |
-| openspec/specs/session-resource-policy/spec.md | 默认五十个主会话名额 | 子会话不单独管理 | CP-013、CP-019、CP-023、CP-011 |
+| openspec/specs/session-resource-policy/spec.md | 默认五十个主会话名额 | 最后一个名额并发分配 | CP-003、CP-004、CP-005、CP-011、CP-025、STC-014 |
+| openspec/specs/session-resource-policy/spec.md | 默认五十个主会话名额 | 满额时打开命中本地快照的冷会话优雅降级 | STC-006、STC-014 |
+| openspec/specs/session-resource-policy/spec.md | 默认五十个主会话名额 | 子会话不单独管理 | CP-013、CP-019、CP-023、CP-011、STC-014 |
 | openspec/specs/session-resource-policy/spec.md | 子目标加载归属主执行树 | 直接查看尚未加载的子目标 | CP-019、CP-020、CP-023 |
 | openspec/specs/session-resource-policy/spec.md | 子目标加载归属主执行树 | 根删除或归属不可验证 | CP-021、CP-023 |
 | openspec/specs/session-resource-policy/spec.md | 子目标加载归属主执行树 | 子目标加载失败或仍未释放 | CP-022、CP-023 |
@@ -28,10 +29,10 @@
 | openspec/specs/session-resource-policy/spec.md | 待授权保护随状态解除 | 待授权超过三十分钟且池满 | CP-015、CP-011 |
 | openspec/specs/session-resource-policy/spec.md | 待授权保护随状态解除 | 授权取消后仍有工作 | CP-016、CP-011 |
 | openspec/specs/session-resource-policy/spec.md | 待授权保护随状态解除 | 授权取消后重新纳入判断 | CP-017、CP-011 |
-| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 工作结束后重新计时 | CP-003、CP-007、CP-017、CP-011 |
-| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 页面持续查看 | CP-008、CP-024、CP-026、CP-011 |
-| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 历史重放刷新计时 | CP-024、CP-026 |
-| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 最近重放仍可容量淘汰 | CP-025、CP-026 |
+| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 工作结束后重新计时 | CP-003、CP-007、CP-017、CP-011、STC-015 |
+| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 页面持续查看 | CP-008、CP-024、CP-026、CP-011、STC-015 |
+| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 历史重放刷新计时 | CP-024、CP-026、STC-015 |
+| openspec/specs/session-resource-policy/spec.md | 安全空闲三十分钟回收 | 最近重放仍可容量淘汰 | CP-025、CP-026、STC-015 |
 | openspec/specs/session-resource-policy/spec.md | 满额回收与拒绝 | 候选获得新活动 | CP-004、CP-009、CP-025、CP-028、CP-011 |
 | openspec/specs/session-resource-policy/spec.md | 满额回收与拒绝 | 释放失败 | CP-004、CP-010、CP-020、CP-025、CP-011 |
 | openspec/specs/session-resource-policy/spec.md | 满额回收与拒绝 | 安全关闭成功但管理结果未提交 | CP-004、CP-030、CP-032 |

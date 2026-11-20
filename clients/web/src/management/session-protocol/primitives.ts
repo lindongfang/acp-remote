@@ -109,6 +109,9 @@ export type Shape = Readonly<Record<string, Validator>>;
 export type ShapeValue<S extends Shape> = {
   readonly [K in keyof S]: ReturnType<S[K]>;
 };
+export type OptionalShapeValue<O extends Shape> = {
+  readonly [K in keyof O]?: ReturnType<O[K]>;
+};
 
 export function object(value: JsonValue | undefined): JsonObject {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -136,6 +139,32 @@ export function closed<S extends Shape>(
       keys.map((key) => [key, shape[key]!(source[key])]),
     ),
   ) as ShapeValue<S>;
+}
+
+export function closedWithOptional<R extends Shape, O extends Shape>(
+  value: JsonValue | undefined,
+  required: R,
+  optional: O,
+): ShapeValue<R> & OptionalShapeValue<O> {
+  const source = object(value);
+  for (const key of Object.keys(source)) {
+    if (!Object.hasOwn(required, key) && !Object.hasOwn(optional, key)) {
+      throw new SessionProtocolError("invalid_command");
+    }
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const [key, validator] of Object.entries(required)) {
+    if (!Object.hasOwn(source, key)) {
+      throw new SessionProtocolError("invalid_command");
+    }
+    entries.push([key, validator(source[key])]);
+  }
+  for (const [key, validator] of Object.entries(optional)) {
+    if (Object.hasOwn(source, key) && source[key] !== undefined) {
+      entries.push([key, validator(source[key])]);
+    }
+  }
+  return Object.freeze(Object.fromEntries(entries)) as ShapeValue<R> & OptionalShapeValue<O>;
 }
 
 export function oneOf<const T extends readonly string[]>(...values: T) {

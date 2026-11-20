@@ -501,6 +501,18 @@ export function sourceSessionPanelView(
       viewBanner.append(status(owner, state.staleNotice, "error"));
     }
     if (state.openedView !== null) {
+      const cacheSummary = state.openedView.status.transcriptSource
+        ? `；来源=${
+            state.openedView.status.transcriptSource === "transcript_cache"
+              ? "本地缓存"
+              : state.openedView.status.transcriptSource === "hybrid_resumed"
+                ? "缓存+实时续接"
+                : "实时"
+          }` +
+          (state.openedView.status.syncState ? `，同步=${state.openedView.status.syncState}` : "") +
+          (state.openedView.status.capabilityBoundary ? `，能力=${state.openedView.status.capabilityBoundary}` : "") +
+          (state.openedView.status.cacheWarning ? "（本地缓存写入告警）" : "")
+        : "";
       viewBanner.append(
         status(
           owner,
@@ -508,7 +520,7 @@ export function sourceSessionPanelView(
             state.openedView.status.historyIncomplete
               ? "历史不完整（仅当前实时连接/缓存，无法补全未缓存前文）"
               : "支持重放"
-          }。`,
+          }${cacheSummary}。`,
           "notice",
         ),
       );

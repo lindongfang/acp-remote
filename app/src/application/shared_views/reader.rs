@@ -57,14 +57,18 @@ struct Position {
     ended: usize,
     status_delta: usize,
     status_record: u64,
+    custom_status_delta: usize,
     active_segment: Option<ViewEpoch>,
     native_failure: Option<ViewError>,
 }
-struct SelectionLeases {
+pub(crate) struct SelectionLeases {
     active: std::sync::atomic::AtomicUsize,
     changed: tokio::sync::Notify,
 }
 impl SelectionLeases {
+    pub(crate) fn has_active(&self) -> bool {
+        self.active.load(std::sync::atomic::Ordering::Acquire) > 0
+    }
     fn new() -> Arc<Self> {
         Arc::new(Self {
             active: std::sync::atomic::AtomicUsize::new(0),
@@ -162,6 +166,7 @@ struct ReadData<R> {
     position: Position,
     pending: Option<PendingPosition>,
     last_descriptor: ViewDescriptor,
+    last_custom_status_count: usize,
 }
 struct ReadSlot<R> {
     data: Mutex<Option<ReadData<R>>>,
@@ -740,6 +745,16 @@ where
     pub(crate) fn set_read_control(&mut self, reads: Arc<dyn NativeReadControl>) {
         self.native_reads = Some(reads);
     }
+    pub(crate) async fn check_current(
+        &self,
+        client: &C,
+        target: &NativeSessionKey,
+    ) -> Result<(), ViewError> {
+        self.authority.with_current(client, target, || Ok(())).await
+    }
+    pub(crate) async fn wait_client_change(&self, client: &C) -> Result<(), ViewError> {
+        self.authority.wait_client_change(client).await
+    }
     fn slot(&self, client: &C, read: &OpenedView) -> Result<Arc<ReadSlot<R>>, ViewError> {
         if !Arc::ptr_eq(&self.identity, &read.handle.service)
             || !read
@@ -922,13 +937,17 @@ where
                     ended: 0,
                     status_delta: 0,
                     status_record: 2,
+                    custom_status_delta: 0,
                     active_segment: None,
                     native_failure: None,
                 },
                 pending: None,
                 last_descriptor: descriptor,
+                last_custom_status_count: 0,
             })),
         });
+        self.views
+            .register_lease(target, Arc::downgrade(&slot.leases));
         let erased: Arc<dyn Any + Send + Sync> = slot.clone();
         let (close, mut closed) = watch::channel(false);
         let handle = Arc::new(ReadHandle {
@@ -1326,6 +1345,9 @@ where
     fn select(
         data: &ReadData<R>,
         current: &TargetSnapshot<R>,
+        custom_statuses: &crate::domain::shared_view_log::LogSnapshot<
+            super::segments::CustomStatusEvent,
+        >,
         leases: &Arc<SelectionLeases>,
         native_failure: Option<ViewError>,
     ) -> Result<Selection<R>, ViewError> {
@@ -1378,6 +1400,26 @@ where
             } else {
                 None
             };
+            if tail && position.custom_status_delta < custom_statuses.len() {
+                let event = custom_statuses.get(position.custom_status_delta)?;
+                let mut next = position;
+                next.custom_status_delta = position
+                    .custom_status_delta
+                    .checked_add(1)
+                    .ok_or(ViewError::SequenceExhausted)?;
+                next.status_record = position
+                    .status_record
+                    .checked_add(1)
+                    .ok_or(ViewError::SequenceExhausted)?;
+                return Ok(Selection::Metadata {
+                    bytes: event.bytes.clone(),
+                    position: original,
+                    next,
+                    id: position.status_record,
+                    kind: RecordKind::Status,
+                    segment: event.segment,
+                });
+            }
             if tail && position.status_delta < current.segments.events.len() {
                 let event = current.segments.events.get(position.status_delta)?;
                 if current.segments.publications.get(event.index)?.epoch != event.metadata.epoch {
@@ -1617,7 +1659,19 @@ where
                             .map_err(|_| ViewError::ReadFailure)?,
                     )
                 };
-                Self::select(data, &current, &slot.leases, native_failure)
+                let custom_statuses = data
+                    .generation
+                    .custom_statuses
+                    .lock()
+                    .map_err(|_| ViewError::ReadFailure)?
+                    .snapshot()?;
+                Self::select(
+                    data,
+                    &current,
+                    &custom_statuses,
+                    &slot.leases,
+                    native_failure,
+                )
             })
             .await?;
         let (position, next, record, total, kind, raw, metadata_bytes, source_range, segment) =
@@ -1862,8 +1916,17 @@ where
                         .map_err(|_| ViewError::ReadFailure)?;
                     let mut descriptor = current.descriptor;
                     descriptor.failure = descriptor.failure.or(native_failure);
-                    let changed = descriptor != data.last_descriptor;
+                    let custom_len = data
+                        .generation
+                        .custom_statuses
+                        .lock()
+                        .map_err(|_| ViewError::ReadFailure)?
+                        .snapshot()?
+                        .len();
+                    let changed = descriptor != data.last_descriptor
+                        || custom_len > data.last_custom_status_count;
                     data.last_descriptor = descriptor;
+                    data.last_custom_status_count = custom_len;
                     Ok((descriptor, changed))
                 })
                 .await?;

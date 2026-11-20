@@ -180,6 +180,77 @@ impl ViewSourceStamp {
     }
 }
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptSource {
+    Live,
+    TranscriptCache,
+    HybridResumed,
+}
+
+impl TranscriptSource {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::TranscriptCache => "transcript_cache",
+            Self::HybridResumed => "hybrid_resumed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptSyncState {
+    Idle,
+    Revalidating,
+    Synced,
+    DegradedCapacityFull,
+    DegradedUnreachable,
+    NativeUnrecoverable,
+}
+
+impl TranscriptSyncState {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Revalidating => "revalidating",
+            Self::Synced => "synced",
+            Self::DegradedCapacityFull => "degraded_capacity_full",
+            Self::DegradedUnreachable => "degraded_unreachable",
+            Self::NativeUnrecoverable => "native_unrecoverable",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TranscriptCapabilityBoundary {
+    Unknown,
+    ReplayCapable,
+    ResumeOnly,
+    PureMemory,
+}
+
+impl TranscriptCapabilityBoundary {
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::ReplayCapable => "replay_capable",
+            Self::ResumeOnly => "resume_only",
+            Self::PureMemory => "pure_memory",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TranscriptCacheViewStatus {
+    pub transcript_source: TranscriptSource,
+    pub sync_state: TranscriptSyncState,
+    pub capability_boundary: TranscriptCapabilityBoundary,
+    pub continuable: bool,
+    pub cache_warning: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ViewDescriptor {
     pub(crate) epoch: ViewEpoch,
     pub(crate) read: Option<ReadEpoch>,
@@ -190,6 +261,7 @@ pub struct ViewDescriptor {
     pub(crate) projection: ProjectionState,
     pub(crate) join: JoinState,
     pub(crate) order: OrderBasis,
+    pub(crate) cache_recoverable: bool,
     pub(crate) failure: Option<ViewError>,
 }
 impl ViewDescriptor {
@@ -235,7 +307,7 @@ impl ViewDescriptor {
     }
     #[must_use]
     pub const fn cache_recoverable(self) -> bool {
-        false
+        self.cache_recoverable
     }
     #[must_use]
     pub const fn failure(self) -> Option<ViewError> {

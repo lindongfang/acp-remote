@@ -790,6 +790,7 @@ impl NodeCloseOperation {
     #[cfg(windows)]
     async fn install_session_services(
         &self,
+        directory: &DataDirectory,
         identity: &NodeIdentity,
         policy: &Arc<ApplicationPolicy>,
         management: &ManagementService,
@@ -815,6 +816,8 @@ impl NodeCloseOperation {
             let services = Arc::new(
                 super::session_services::OwnedNodeSessionServices::start(
                     &storage,
+                    directory,
+                    &self.config.transcript_cache(),
                     identity,
                     policy.clone(),
                     self.protector.clone(),
@@ -826,6 +829,9 @@ impl NodeCloseOperation {
             );
             #[cfg(test)]
             if self.hooks.factory.reject_services {
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+                services.seal();
+                let _ = services.shutdown(deadline).await;
                 return Err(AppError::Startup(
                     "injected session service installation failure".into(),
                 ));
@@ -913,7 +919,7 @@ impl NodeCloseOperation {
             }
         }
         #[cfg(windows)]
-        self.install_session_services(&identity, &policy, &management)
+        self.install_session_services(directory, &identity, &policy, &management)
             .await?;
         let listener = TcpListener::bind(config.listen)
             .await

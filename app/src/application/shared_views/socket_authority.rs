@@ -174,6 +174,9 @@ impl SocketViewAuthority {
         cap.require_current()?;
         self.register_source(cap.native().source())
     }
+    pub(crate) fn register_verified_source(&self, source: NativeSourceId) -> Result<(), ViewError> {
+        self.register_source(source)
+    }
     fn register_source(&self, source: NativeSourceId) -> Result<(), ViewError> {
         let mut s = self.sources.write().map_err(|_| ViewError::ReadFailure)?;
         if !s.contains(&source) {
