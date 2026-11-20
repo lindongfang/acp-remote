@@ -8,6 +8,7 @@ use crate::{
     },
 };
 
+#[derive(Clone)]
 pub struct CurrentApprovalActor {
     pub(crate) context: ActorContext,
     pub(crate) target: EntityId,

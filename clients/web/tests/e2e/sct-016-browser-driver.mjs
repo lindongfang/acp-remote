@@ -169,16 +169,26 @@ try {
   );
   await pageA.locator("#session-input-body").fill("queued second prompt");
   await pageA.locator('button:has-text("上传并提交")').click();
+  await pageA.waitForFunction(
+    () => document.querySelectorAll("[data-queue-entry]").length >= 2,
+    null,
+    { timeout: 20_000 },
+  );
   await waitingQueueSection(pageA).locator("[data-queue-entry]").first().waitFor({ state: "visible", timeout: 20_000 });
 
   await pageB.locator("#session-target-id").fill(targetId);
   await pageB.locator('button:has-text("读取会话队列")').click();
   await pageB.locator("[data-queue-entry]").first().waitFor({ state: "visible", timeout: 20_000 });
-  if ((await waitingQueueSection(pageB).locator("[data-queue-entry]").count()) === 0) {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if ((await waitingQueueSection(pageB).locator("[data-queue-entry]").count()) > 0) {
+      break;
+    }
+    evidence.steps.queuePollAttempts = attempt + 1;
+    await sleep(300);
     await pageB.locator('button:has-text("刷新此队列")').click();
-    await waitingQueueSection(pageB).locator("[data-queue-entry]").first().waitFor({ state: "visible", timeout: 20_000 });
-    evidence.steps.queueRefreshedOnB = true;
+    await pageB.locator("[data-queue-entry]").first().waitFor({ state: "visible", timeout: 20_000 });
   }
+  await waitingQueueSection(pageB).locator("[data-queue-entry]").first().waitFor({ state: "visible", timeout: 20_000 });
   await pageB.locator('button:has-text("打开共享视图")').first().click();
   await waitBanner(pageB, "other", "1", "只读观察 · 当前由 Desktop A 接管");
   await pageB.waitForFunction(

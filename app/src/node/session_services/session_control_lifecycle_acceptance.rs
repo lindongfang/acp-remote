@@ -299,6 +299,26 @@ async fn sctl_004_tree_inheritance_root_target_presence_and_unverified_rejected(
             // Child inspected BEFORE root target exists -> rootTargetId == null; after root routed -> non-null.
             let child_t = r3_id(42);
             capacity_route_target(f, "runtime-child-leaf", child_t).await;
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let registry = f
+                    .node
+                    .as_ref()
+                    .unwrap()
+                    .storage
+                    .as_ref()
+                    .unwrap()
+                    .request_registry();
+                loop {
+                    if let Ok(resolved) = registry.resolve_control_root(child_t).await
+                        && resolved.root.native_id() == s1.as_str()
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("child_t parent link persisted");
             let child_no_root = sct_r3_call_peer(f, 1, 13, "session.control.inspect", serde_json::json!({ "targetId": child_t.encode() })).await;
             assert_eq!(child_no_root["result"]["controllerClientId"], f.peers[0].client_id);
             assert_eq!(child_no_root["result"]["rootTargetId"], serde_json::Value::Null);

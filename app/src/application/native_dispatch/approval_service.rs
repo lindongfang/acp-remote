@@ -887,6 +887,10 @@ where
                 .require_approval_fact(&source, operation.probe.metadata().operation)
                 .map_err(rejection)?;
             let core = self.native.core.clone();
+            let authority = self.authority.clone();
+            let decide_actor = actor.clone();
+            let registration_id = input.registration();
+            let expected_control_epoch = input.expected_control_epoch();
             let original_source = source.clone();
             let original_permission = permission.clone();
             let retained = operation.clone();
@@ -897,13 +901,21 @@ where
                 .jobs
                 .spawn_guarded(
                     async move {
-                        let result = match core.deadline() {
-                            Ok(deadline) => {
-                                core.repository
-                                    .decide_approval(&retained.probe, &deadline)
-                                    .await
+                        let result = if let Err(error) = authority.verify_approval_decide(
+                            &decide_actor,
+                            registration_id,
+                            expected_control_epoch,
+                        ) {
+                            Err(NecessaryWriteError::Rejected(error))
+                        } else {
+                            match core.deadline() {
+                                Ok(deadline) => {
+                                    core.repository
+                                        .decide_approval(&retained.probe, &deadline)
+                                        .await
+                                }
+                                Err(error) => Err(rejection(error).into()),
                             }
-                            Err(error) => Err(rejection(error).into()),
                         };
                         let result = result.and_then(|stored| {
                             if !Arc::ptr_eq(

@@ -127,6 +127,29 @@ async fn sct_red_check_approval_uncontrolled_and_cross_epoch_two_step_rejected()
             .await
             .expect("confirmed associated approval");
 
+            // Wait until discover's parent-child link (`node_session_parents`) is also persisted so
+            // `resolve_control_root` maps `child_target` to Peer 0's controlled `root`.
+            tokio::time::timeout(Duration::from_secs(10), async {
+                let registry = f
+                    .node
+                    .as_ref()
+                    .unwrap()
+                    .storage
+                    .as_ref()
+                    .unwrap()
+                    .request_registry();
+                loop {
+                    if let Ok(resolved) = registry.resolve_control_root(child_target).await
+                        && resolved.root.native_id() == root.as_str()
+                    {
+                        break;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("child_target parent link persisted");
+
             // 1. Peer 0 holds initial control of `root` (and its child tree); Peer 1 is uncontrolled
             // and must receive session_not_controlled on approval.register!
             let denied = sct_r3_call_peer(
@@ -200,6 +223,223 @@ async fn sct_red_check_approval_uncontrolled_and_cross_epoch_two_step_rejected()
                 stale_decide["error"]["code"], "session_not_controlled",
                 "{stale_decide}"
             );
+        })
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn sct_rv_int_001_approval_decide_rechecks_control_before_commit_and_releases_admission() {
+    use crate::application::approval_owner::{
+        ApprovalAuthority, CurrentApprovalActor, CurrentApprovalReader,
+    };
+    use crate::application::native_dispatch::NativeApprovalService;
+    use crate::domain::EntityId;
+    use crate::domain::approval_owner::{
+        ApprovalRegistrationId, ApprovalRejection, DecisionAcceptance, NecessaryWriteError,
+        RegisterDecision, SubmitDecision,
+    };
+    use crate::domain::native::NativeSessionKey;
+    use crate::node::request_authority::NodeRequestAuthority;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct PreemptOnThirdVerify {
+        inner: NodeRequestAuthority,
+        control: Arc<crate::application::session_control::SessionControlCoordinator>,
+        preemptor: EntityId,
+        target: EntityId,
+        root: NativeSessionKey,
+        verify_calls: AtomicUsize,
+    }
+
+    impl ApprovalAuthority for PreemptOnThirdVerify {
+        type Actor = crate::access_policy::AuthenticatedActor;
+        fn verify_owner_scope(
+            &self,
+            owner: &crate::application::request_registry::RegistryOwnerScope,
+        ) -> Result<(), ApprovalRejection> {
+            self.inner.verify_owner_scope(owner)
+        }
+        fn authorize_decision<'a>(
+            &'a self,
+            actor: &'a Self::Actor,
+            target: EntityId,
+        ) -> crate::application::native_dispatch::BoxFuture<
+            'a,
+            Result<CurrentApprovalActor, ApprovalRejection>,
+        > {
+            self.inner.authorize_decision(actor, target)
+        }
+        fn authorize_decision_with_epoch<'a>(
+            &'a self,
+            actor: &'a Self::Actor,
+            target: EntityId,
+            expected_control_epoch: Option<u64>,
+        ) -> crate::application::native_dispatch::BoxFuture<
+            'a,
+            Result<CurrentApprovalActor, ApprovalRejection>,
+        > {
+            self.inner
+                .authorize_decision_with_epoch(actor, target, expected_control_epoch)
+        }
+        fn verify_approval_decide(
+            &self,
+            actor: &CurrentApprovalActor,
+            registration: ApprovalRegistrationId,
+            expected_control_epoch: Option<u64>,
+        ) -> Result<(), ApprovalRejection> {
+            let call = self.verify_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            if call == 3 {
+                self.control
+                    .takeover(
+                        self.preemptor,
+                        "Peer 1",
+                        r3_id(240),
+                        self.target,
+                        &self.root,
+                        Some(self.target),
+                    )
+                    .unwrap();
+            }
+            self.inner
+                .verify_approval_decide(actor, registration, expected_control_epoch)
+        }
+        fn authorize_read<'a>(
+            &'a self,
+            actor: &'a Self::Actor,
+        ) -> crate::application::native_dispatch::BoxFuture<
+            'a,
+            Result<CurrentApprovalReader, ApprovalRejection>,
+        > {
+            self.inner.authorize_read(actor)
+        }
+    }
+
+    r3_wss_case("source-create-replay-state", false, |f| {
+        Box::pin(async move {
+            sct_install_capacity_peer(f, "source-create-replay-state").await;
+            std::fs::write(f.area.directory.join("runtime-next-created-idle"), b"idle").unwrap();
+            let root = capacity_create(f, 10).await;
+            let root_target = r3_id(40);
+            let child_target = r3_id(41);
+            capacity_route_target(f, &root, root_target).await;
+            capacity_route_target(f, "runtime-child-leaf", child_target).await;
+            std::fs::write(
+                f.area.directory.join("runtime-emit-approval-tree"),
+                root.as_bytes(),
+            )
+            .unwrap();
+            let discovered = capacity_source_operation(
+                f,
+                20,
+                serde_json::json!({ "kind": "discover", "cursor": null }),
+            )
+            .await;
+            assert_eq!(discovered["ok"], true, "{discovered}");
+            assert_eq!(discovered["result"]["outcome"], "succeeded", "{discovered}");
+
+            let node = f.node.as_ref().unwrap();
+            let storage = node.storage.as_ref().unwrap();
+            let policy = node.application_policy().unwrap();
+            let actor_0 =
+                policy_actor(&policy, &f.peers[0].key, &f.peers[0].client_id, Id128::new([31; 16]))
+                    .await;
+            let actor_1 =
+                policy_actor(&policy, &f.peers[1].key, &f.peers[1].client_id, Id128::new([32; 16]))
+                    .await;
+            let approvals = node.session_services.as_ref().unwrap().approval.clone();
+
+            let display = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut all = approvals.list(&actor_0).await.unwrap();
+                    if let Some(value) = all.pop()
+                        && value.status().request_save.commit
+                            == crate::domain::approval_owner::CommitState::Confirmed
+                    {
+                        break value;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("confirmed approval");
+
+            let resolved = tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    if let Ok(r) = storage.request_registry().resolve_control_root(child_target).await
+                        && r.root.native_id() == root.as_str()
+                    {
+                        break r;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("child_target parent link persisted");
+
+            let reg_0 = approvals
+                .register_decision(
+                    &actor_0,
+                    RegisterDecision::new(display.id(), display.choices()[0].id()),
+                )
+                .await
+                .unwrap();
+
+            let wrapped = NativeApprovalService::create(
+                node.session_services.as_ref().unwrap().native.clone(),
+                Arc::new(PreemptOnThirdVerify {
+                    inner: node.request_authority().unwrap(),
+                    control: storage.session_control(),
+                    preemptor: EntityId::decode(&f.peers[1].client_id).unwrap(),
+                    target: child_target,
+                    root: resolved.root,
+                    verify_calls: AtomicUsize::new(0),
+                }),
+            )
+            .unwrap();
+
+            let rejected = wrapped
+                .decide(&actor_0, SubmitDecision::new(reg_0))
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(
+                    rejected,
+                    NecessaryWriteError::Rejected(ApprovalRejection::SessionNotControlled)
+                ),
+                "expected SessionNotControlled from pre-commit verify, got {rejected:?}"
+            );
+
+            let count_before: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM main.node_approval_decisions WHERE approval_id = ?",
+            )
+            .bind(display.id().encode())
+            .fetch_one(storage.pool_for_test())
+            .await
+            .unwrap();
+            assert_eq!(count_before, 0);
+
+            let reg_1 = approvals
+                .register_decision(
+                    &actor_1,
+                    RegisterDecision::new(display.id(), display.choices()[0].id()),
+                )
+                .await
+                .unwrap();
+            let accepted = approvals
+                .decide(&actor_1, SubmitDecision::new(reg_1))
+                .await
+                .unwrap();
+            assert!(matches!(accepted, DecisionAcceptance::Accepted(_)));
+
+            let count_after: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM main.node_approval_decisions WHERE approval_id = ?",
+            )
+            .bind(display.id().encode())
+            .fetch_one(storage.pool_for_test())
+            .await
+            .unwrap();
+            assert_eq!(count_after, 1);
         })
     })
     .await;
