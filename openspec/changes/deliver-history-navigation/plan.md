@@ -84,7 +84,7 @@ mode: required
 
 HN-018 的并发定位与失败不留下半截代际已由独立 tester 实测。HN-021 原探针使用 product.status，在既有平台返回 platform_unimplemented。按增量规格对「实际可用会话操作」的要求，改以同一连接上的 session.capacity.inspect 与会话列表验证，保留原失败记录。首次运行中，pure_memory 收到首轮 input.consume 响应后，20 秒内对端未收到 session/prompt，该次初始化失败记录保留。独立 tester 复验时，在新建纯内存根会话的同一原生连接投递 25 组用户与助手帧，确认 50 帧落盘后重启。三页离线读取、显式刷新后复用旧游标、淘汰后返回 unsupported_capability、同一管理连接查询容量与会话列表均通过。纯内存冷快照标明 continuable=false；直接提交输入返回 settled/queued，对端未收到 resume 或 prompt。resume_only 则实际恢复会话并将新提示送达对端。复验探针已集成（53dfbc95），两种能力在集成分支复跑通过。
 
-HN-001 在 871593b 的全仓检查被 HN-028 验收驱动的两处 Clippy 错误阻断（default_trait_access、too_many_lines），已交由该驱动负责人修复；全仓检查待重跑。
+HN-001 在 871593b 的全仓检查被 HN-028 验收驱动的两处 Clippy 错误阻断（default_trait_access、too_many_lines），随后独立 tester 在干净检出 234a7eca 运行 npm run check，退出 0。Cargo 单编译作业、Rust 三个测试线程；Web 46 个文件共 1072 项通过，Rust 主库 1114 项全部通过（494.01 秒），其余默认目标通过。日志 all-check-234a7eca-jobs1-t3.log。该提交早于独立子历史查询与多视图集成。
 
 独立预验收逐项报告已在集成工作区保留副本 testing/runs/deliver-history-navigation/independent-precheck/39b14237-results.md。HN-008 后续独立补测中，基线 4dd96797 的测试二进制打开 v2 WAL 库，完成配对、提示与批准。物理关闭后数据库 SHA-256 不变，临时目录已移除。候选版本上的 v3 库和迁移事务冲突两个场景也通过。HN-016 的子方向逐帧遍历后续实测见上。HN-018 强制倒序时的原始失败与独立复验见 HN-F05。HN-023 已覆盖双客户端交错翻页和撤权，1799/1800 秒边界已有容量领域证据，实节点 1799 秒仍占 1 名额、1830 秒扫描后为 0，库中确认 idle_timeout、finished 和物理关闭。收尾时合法控制变更通知先到，未验证本次撤权 4410，待带有序屏障的真实计时复跑。其余复合步骤的覆盖范围以逐项记录为准。
 
