@@ -68,6 +68,7 @@ mode: required
 | HN-R03 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 游标范围编码与方向校验 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
 | HN-R04 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 旧页遗漏迟到的工具补丁 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
 | HN-R05 | 独立 reviewer | 中 | 4dd96797 + 规划工作区 | 子首页与重新定位语义混用 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
+| HN-F01 | 独立 tester / HN-022 | 高 | 1808ce2 | 冷读旧页时，页内工具能显示最终状态，但指向页后 rawOutput 的引用缺少可读取的原始字节 | 待修复 | open | 已由真实 WSS 探针复现，待原 tester 对修复提交复测 |
 
 ## Verification Results
 
