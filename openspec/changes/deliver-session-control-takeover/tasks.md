@@ -18,7 +18,7 @@
 
 ## 4. 集成验收与交付检视门禁（WP4）
 
-- [ ] 4.1 WP4 完成 `WP1`–`WP3`（含需入库的端到端自动化验收脚本）并锁定受跟踪文件干净的本地分支集成 `commit SHA`，并行执行独立 `tester` 正式验收（`SCT-001`–`SCT-016`，含真实 `acp-remote.exe` 双浏览器上下文闭环）与独立 `reviewer` 全量 diff 交付检视；完成判据：`PV1`–`PV5` 全部通过、所有阻断问题闭环、`plan.md` 中 `Code Review` 集成交付门禁登记为 `passed` 且 `Verification Results` 完成精简证据回填。
+- [x] 4.1 WP4 完成 `WP1`–`WP3`（含需入库的端到端自动化验收脚本）并锁定受跟踪文件干净的本地分支集成 `commit SHA`，并行执行独立 `tester` 正式验收（`SCT-001`–`SCT-016`，含真实 `acp-remote.exe` 双浏览器上下文闭环）与独立 `reviewer` 全量 diff 交付检视；完成判据：`PV1`–`PV5` 全部通过、所有阻断问题闭环、`plan.md` 中 `Code Review` 集成交付门禁登记为 `passed` 且 `Verification Results` 完成精简证据回填。
 
 ## Workflow follow-up
 

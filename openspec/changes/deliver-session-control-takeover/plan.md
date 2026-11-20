@@ -44,7 +44,7 @@
 | Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes |
 | --- | --- | --- | --- | --- | --- |
 | 编码前门禁 | 独立 reviewer | 一次性合审 `proposal.md`、`specs/`、`design.md`、`tests.md`、`plan.md`、`tasks.md`：用户确认依据完整性、线上协议动作与闭合错误码/推送帧契约、主执行树根解析与两步代际校验、SQLite 冻结表/禁触表边界、Web 650 行模块预算及 `SCT-001`–`SCT-016` 可证伪性 | `verify-suite.mjs --change deliver-session-control-takeover` 与 `npm run check:spec` 通过，且独立 reviewer 无未闭环阻断问题 | passed | 基线 `HEAD` `bc92997c` 之上规划产物经独立 `reviewer` 增量复核通过（`RV-PRE-001`–`RV-PRE-004` 全部闭环 `closed`），审查记录见本地忽略路径 `testing/runs/deliver-session-control-takeover/reviewer/pre-code-gate-review.md` |
-| 集成交付门禁 | 独立 reviewer | 针对受测集成 `commit SHA` 全量 diff 审查：控制权互斥门与并发竞态安全性、核心改动 Red Check 证据、只读与上传通道零副作用、审批托管交付与撤销/释放清理、Web 模块行数与无环约束、验收代码防假阳性及 `Verification Results` 真实性 | 全部阻断问题在修复 commit 上经原独立提出者增量复核关闭 | pending | 待 `WP1`–`WP3` 完成并锁定干净集成 `commit SHA` 后执行 |
+| 集成交付门禁 | 独立 reviewer | 针对受测集成 `commit SHA` 全量 diff 审查：控制权互斥门与并发竞态安全性、核心改动 Red Check 证据、只读与上传通道零副作用、审批托管交付与撤销/释放清理、Web 模块行数与无环约束、验收代码防假阳性及 `Verification Results` 真实性 | 全部阻断问题在修复 commit 上经原独立提出者增量复核关闭 | passed | 经独立 `reviewer` 对 `33bbdaeb..9a47a199` 全量检视及 `9a47a199..ba71482f` 增量复核通过（`0 blocker`、`0 major`、`2 minor` 观察项；`RV-INT-001` 已于 `ba71482f` 闭环），记录见本地忽略路径 `testing/runs/deliver-session-control-takeover/reviewer/delivery-gate-review.md` |
 
 ## Main E2E
 
@@ -78,16 +78,30 @@ mode: required
 | RV-PRE-002 | reviewer | blocker | bc92997c | `design.md` §2.1/§2.2/§3.3 与 `tests.md` `SCT-015` 在进程内 `capacity_closed`/源关闭/冷会话预接管超时后删除记录将 `controlEpoch` 倒退归零为 `"0"`，违反 `specs/session-control-takeover/spec.md`“单调递增控制代际”要求，在同进程“释放后再由原主控接管（`1 -> 0 -> 1`）”时产生旧两步请求与旧 `expectedControlEpoch` 的 ABA 绕过，并导致前端 `session.control.changed` 与并发 `session.control.inspect` 单调收敛竞态；同一 `NodeRuntime` 进程内释放归零须仅清空 `controllerClientId` 并单调递增 `controlEpoch`（若淘汰条目须保留全局代际下界水位），仅从未受控会话与节点进程重启后为 `"0"` | working-tree | closed | 独立 reviewer 增量复核确认：`design.md` §2.1/§2.2/§3.3/§4.1、`tasks.md` 1.1/1.2/3.2 与 `tests.md` `SCT-008`/`SCT-015` 已冻结同进程单调递增与 `evicted_epoch_floor` 水位及 ABA 拦截断言，闭环关闭 |
 | RV-PRE-003 | reviewer | blocker | bc92997c | `plan.md` `WP1`–`WP3` 的 `Write Scope` 含不存在目录 `app/src/application/request_registry/*`（实际为 `request_registry.rs`），且遗漏 `app/src/node.rs`、`app/src/application/mod.rs`、`app/src/application/queue_owner.rs`、`app/src/application/native_dispatch/source_sessions/operations.rs`、`app/src/node/session_services.rs`、承载既有节点队列/WSS/审批测试的 `app/src/node/**` 及 `clients/web/src/**/*.test.ts`，按此写边界执行无法完成编译与 `npm run check:rust` | working-tree | closed | 独立 reviewer 增量复核确认：`plan.md` `WP1`–`WP3` `Write Scope` 已修正为真实模块路径与递归通配，且 `WP2` 与 `WP3` 保持正交零冲突，闭环关闭 |
 | RV-PRE-004 | reviewer | major | bc92997c | `design.md` 需明确冻结三项实现安全契约：① `SessionControlCoordinator` 在 `NodeRuntime`/`ApplicationPolicy`/`Storage` 层保持单实例以覆盖 `NodeRuntime::request_authority()` 与 `approval_owner()` 组件入口；② `TrustStore::revoke` 在单连接 `SqliteRequestRegistry` 下严禁在归还连接前新开 SQLite 连接或持协调器锁跨 `.await`（缓存 `root_target_id` 并复用原事务或归还后写审计），且队列/审批两步代际复核落在提交点同时放行已落库结果的幂等读取；③ `expectedControlEpoch` 在 Rust/Web 闭集解析器中仅允许省略或合法十进制 `u64` 字符串（显式 `null` 与未知键均拒绝） | working-tree | closed | 独立 reviewer 增量复核确认：`design.md` §1.1/§2.1/§2.3/§3.2/§4.1、`tasks.md` 1.1–3.1 与 `tests.md` `SCT-001`/`SCT-014` 已完整冻结三项安全与协议闭合契约，闭环关闭 |
+| RV-INT-001 | reviewer | major | 9a47a199 | `NativeApprovalService::decide` 在释放 `slot.state` 锁后进入 `source.jobs.spawn_guarded` 落库前未再次复核 `verify_approval_decide`，存在释放锁至 `approval_begin` 获取 SQLite 事务锁窗口内的跨代际落库竞态 | ba71482f | closed | 在 `spawn_guarded` 任务内部落库前执行 `authority.verify_approval_decide` 二次复核，并新增并发回归用例 `sct_rv_int_001_approval_decide_rechecks_control_before_commit_and_releases_admission` 经独立 `reviewer` 与 `tester` 增量复验关闭 |
+| ACT-001 | tester | blocker | 9a47a199 | `SCT-016` 双浏览器 E2E 中 `pageA` 首条 `first streaming prompt` 短暂处于等待队列时提前放行，`pageB` 在第二条 `input.consume` 落库前读到空等待队列导致超时 | ba71482f | closed | `sct-016-browser-driver.mjs` 改为等待 `pageA` 呈现 2 个队列条目并在 `pageB` 轮询刷新等待队列，连续两次实跑通过（6.23s、5.78s） |
+| ACT-002 | tester | major | 9a47a199 | `sct_red_check_approval_uncontrolled_and_cross_epoch_two_step_rejected` 仅等待审批确认而未等待 `discover` 伴随 `node_session_parents` 父链落库导致串行偶发 `session_not_controlled` | ba71482f | closed | `session_control_takeover_acceptance.rs` 与 `session_control_lifecycle_acceptance.rs` 补充 `resolve_control_root` 就绪等待，`r3_source_wss_development::sct` 8/8 全绿 |
+| RV-INT-002 | reviewer | minor | 9a47a199 | `session_commands.rs` 与 `source_sessions/operations.rs` 中控制权切换先修改内存/广播后再异步写 `security_audit` | — | open-minor | 非阻断 `minor` 观察项，记入交付检视报告供后续演进 |
+| RV-INT-003 | reviewer | minor | 9a47a199 | 仅点击“打开共享视图”而未“载入队列”时审批控制权横幅停留在“正在读取会话控制权…”（写按钮保持闭锁禁用） | — | open-minor | 非阻断 `minor` 观察项，记入交付检视报告供后续演进 |
 
 ## Verification Results
 
-- 受测版本：pending（待 `WP1`–`WP3` 实现完成并锁定受跟踪文件干净的本地分支集成 `commit SHA` 后由独立 `tester` 回填）
-- 执行者与环境：pending
-- 验证命令及退出码：pending
+- 受测版本：本地分支 `v2` 集成提交 `ba71482fa339094d7ffa02e0c48f661bd0cc573e`（受跟踪工作区干净；初始集成 `9a47a19921341b4255be912da0a1bd2c4e3be3b4`，修复闭环 `ba71482fa339094d7ffa02e0c48f661bd0cc573e`）
+- 执行者与环境：独立 `tester`（Windows 11 / PowerShell 5.1 / `CARGO_BUILD_JOBS=2`，清除继承 `NoDefaultCurrentDirectoryInExePath` / Edge Headless + Playwright + Rust debug 二进制 `acp-remote.exe`），完整记录见本地忽略路径 `testing/runs/deliver-session-control-takeover/tester/acceptance-report.md` 与 `testing/runs/deliver-session-control-takeover/coder/sct-016-e2e.json`
+- 验证命令及退出码：
+  - `PV1`：`npm run check:web`（`tsc --noEmit`、Vitest 43 文件 / 1054 用例、`vite build`）及前端静态行数/零环路脚本 -> `0`（继承自 `9a47a199`，`ba71482f` 未改 Web 生产源码）
+  - `PV2`：`npm run check:rust` -> `0`（`cargo fmt --all --check`、`cargo clippy --all-targets --locked -- -D warnings`、`lib` 1055 passed、`main` 2 passed 及全部默认集成测试通过）；`--features native-dispatch-dev-fixtures` `r3_source_wss_development::sct -- --test-threads=1` -> `0`（8 passed, 0 failed）；`registration-acceptance-fixtures`（56 passed）与 `acp-runtime-acceptance-fixtures`（50 passed）-> `0`（继承自 `9a47a199`）
+  - `PV3`：`node testing/runs/deliver-session-control-takeover/coder/run-wv13-16.mjs` 与 `FIXTURE-SHA256.md` 校验 -> `0`（`WV-13`–`WV-16` 全过，继承自 `9a47a199`）
+  - `PV4`：`cargo test --manifest-path app/Cargo.toml --test session_control_e2e_acceptance --locked -- --ignored --nocapture` 连续两次 -> `0`（1 passed, 0 failed，耗时 6.23s / 5.78s）
+  - `PV5`：`npm run check:spec`、`node testing/suites/verify-suite.mjs --change deliver-session-control-takeover`、`git diff --check` -> `0`
 
 | Case ID | Executor | Commit SHA | Status | Evidence / Limitations |
 | --- | --- | --- | --- | --- |
-| SCT-001..SCT-016 | pending | pending | not-run | 当前处于编码前规划就绪阶段，尚未进入代码实现与集成验收；详细运行日志届时落盘于本地 `testing/runs/deliver-session-control-takeover/` |
+| SCT-001 | tester | ba71482f | passed | Rust `session_protocol::tests`（`npm run check:rust`）与 Web `session-control.test.ts`（`npm run check:web`）通过 |
+| SCT-002 | tester | ba71482f | passed | `session-control.test.ts`、`workbench-controllers.test.ts`、`run-wv13-16.mjs`（`WV-13`–`WV-16`）与静态行数/零环路检查通过 |
+| SCT-003..SCT-015 | tester | ba71482f | passed | `npm run check:rust`、`queue_u2_`（8 passed）、`sctm_*` + `sctl_*` + `sct_red_check_*` + `sct_rv_int_001_*`（`native-dispatch-dev-fixtures` 22 passed）全绿 |
+| SCT-016 (Controlled ACP V2) | tester | ba71482f | passed | `session_control_e2e_acceptance` 真实 `acp-remote.exe` + 双独立 Edge 上下文连续两次通过（`sct-016-e2e.json`） |
+| SCT-016 (Real Codex Harness) | tester | ba71482f | not-run | 受测环境未配置隔离测试用已认证 Codex CLI 凭据，严禁触碰个人配置，如实记为 `not-run` |
 
-- 未执行项与已知限制：当前仅完成编码前 6 份规划产物与机器结构门禁，业务代码实现与 `SCT-001`–`SCT-016` 验收待编码前门禁放行后在新会话执行。
-- 问题关闭依据：编码前门禁 `RV-PRE-001`–`RV-PRE-004` 已于基线 `bc92997c` 规划修订后经原独立 `reviewer` 增量复核全部关闭（记录见 `testing/runs/deliver-session-control-takeover/reviewer/pre-code-gate-review.md`）
+- 未执行项与已知限制：`SCT-016` 真实 Codex CLI Harness 子项因缺隔离测试凭据记为 `not-run`；`r3_source_wss_development::sct` 等 L5 验收处于 `native-dispatch-dev-fixtures` 特性门控下，日常仅执行默认 `npm run check:rust` 不会自动触发该扩展套件。
+- 问题关闭依据：`RV-PRE-001`–`RV-PRE-004` 于基线 `bc92997c` 关闭；`RV-INT-001`、`ACT-001`、`ACT-002` 于修复提交 `ba71482f` 经原独立 `reviewer` 与 `tester` 增量复核全部关闭（记录见 `testing/runs/deliver-session-control-takeover/reviewer/delivery-gate-review.md` 与 `testing/runs/deliver-session-control-takeover/tester/acceptance-report.md`）。
