@@ -285,6 +285,7 @@ where
             self.ensure_child_read(
                 subject,
                 path,
+                false,
                 Arc::new(plan.into_source()),
                 read,
                 move || proof.require_current(),
@@ -333,6 +334,7 @@ where
                 .ensure_child_read(
                     subject,
                     path,
+                    true,
                     Arc::new(plan.into_source()),
                     read,
                     move || queue.verify_read_target(&proof),
@@ -376,6 +378,7 @@ where
     pub(super) async fn ensure_source_read(
         self: &Arc<Self>,
         proof: super::SourceReadSelectionProof,
+        history: bool,
         read: Arc<super::read_source::ReadAcquisitionState<P>>,
     ) -> Result<(Arc<SourceSlot<P, L>>, Arc<super::SourceReadCapability<P>>), DispatchError>
     where
@@ -405,7 +408,7 @@ where
         if let Some(path) = path.filter(|path| !path.ancestors.is_empty()) {
             let subject = proof.native().clone();
             return self
-                .ensure_child_read(subject, path, Arc::new(plan), read, move || {
+                .ensure_child_read(subject, path, history, Arc::new(plan), read, move || {
                     proof.require_current()
                 })
                 .await;

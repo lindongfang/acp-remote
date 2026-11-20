@@ -30,6 +30,7 @@ pub enum ReadTargetKind {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ColdReadMetadata {
+    pub(crate) configuration: (super::EntityId, u64),
     pub(crate) key: super::NativeSessionKey,
 }
 
@@ -71,6 +72,22 @@ impl<P: crate::application::native_dispatch::NativeApprovalPort> std::ops::Deref
     }
 }
 impl<P: crate::application::native_dispatch::NativeApprovalPort> SourceReadCapability<P> {
+    pub(crate) fn claim_child_history(
+        &self,
+    ) -> Result<super::capacity::ChildHistoryLease, ViewError> {
+        self.require_current()?;
+        if !self.is_child_auto_delivered() {
+            return Err(ViewError::InvalidTarget);
+        }
+        self.capacity_admission.claim_child_history()
+    }
+    pub(crate) fn source_configuration(&self) -> (super::EntityId, u64) {
+        let metadata = self.pre_source.metadata();
+        (metadata.config_identity, metadata.config_revision)
+    }
+    pub(crate) fn root_native(&self) -> &super::NativeSessionKey {
+        &self.native
+    }
     pub(crate) const fn is_child_auto_delivered(&self) -> bool {
         matches!(self, Self::ChildAutoDelivered(_))
     }
@@ -321,6 +338,7 @@ where
         &self,
         parent: &super::NativeSessionKey,
         child: &str,
+        root: Option<&super::NativeSessionKey>,
     ) -> Result<super::NativeSessionKey, DispatchError> {
         let key = super::NativeSessionKey::from_config(Some(parent.source().0), child)
             .map_err(|_| DispatchError::SessionTreeUnverified)?;
@@ -329,7 +347,10 @@ where
             .repository
             .resolve_session_tree(&key, &self.core.deadline()?)
             .await?;
-        if path.subject != key || !path.ancestors.contains(parent) {
+        if path.subject != key
+            || !path.ancestors.contains(parent)
+            || root.is_some_and(|root| path.root.as_ref() != Some(root))
+        {
             return Err(DispatchError::SessionTreeUnverified);
         }
         Ok(key)
@@ -453,6 +474,13 @@ where
         proof: SourceReadSelectionProof,
         _reason: ReadReason,
     ) -> Result<NativeReadAcquisition<P>, DispatchError> {
+        self.acquire_source_view(proof, false)
+    }
+    pub(crate) fn acquire_source_view(
+        &self,
+        proof: SourceReadSelectionProof,
+        history: bool,
+    ) -> Result<NativeReadAcquisition<P>, DispatchError> {
         self.core.running()?;
         proof.require_current()?;
         let state = Arc::new(ReadAcquisitionState::new());
@@ -461,7 +489,9 @@ where
         let core = Arc::clone(&self.core);
         self.core.tasks.spawn_guarded(
             async move {
-                let result = core.ensure_source_read(proof, Arc::clone(&completed)).await;
+                let result = core
+                    .ensure_source_read(proof, history, Arc::clone(&completed))
+                    .await;
                 completed.finish(result.map(|_| ()));
             },
             move || failed.finish(Err(DispatchError::RequiredStateUnavailable)),
@@ -487,6 +517,7 @@ where
             return Err(DispatchError::InvalidConfiguration);
         }
         Ok(ColdReadMetadata {
+            configuration: (plan.configuration.identity, plan.configuration.revision),
             key: proof.native().clone(),
         })
     }
@@ -511,6 +542,7 @@ where
         }
         proof.require_current()?;
         Ok(ColdReadMetadata {
+            configuration: (plan.configuration.identity, plan.configuration.revision),
             key: proof.native().clone(),
         })
     }

@@ -803,6 +803,16 @@ fn setup_equal(a: &SessionSetup, b: &SessionSetup) -> Result<bool, d::DispatchEr
 }
 
 impl n::NativeLifecyclePort for AcpNativeAdapter {
+    fn has_child_history(&self, source: &Self::Source) -> bool {
+        source
+            .connection()
+            .ok()
+            .and_then(|c| c.strategy())
+            .is_some_and(|s| {
+                s.child_history_enabled
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+    }
     fn capacity_observation(
         &self,
         lease: &Self::Lease,

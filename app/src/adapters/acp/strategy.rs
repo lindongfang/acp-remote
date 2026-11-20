@@ -21,6 +21,7 @@ pub enum RequestKind {
     Resume(SessionId),
     Replay(SessionId),
     ListSessions,
+    ChildHistory,
     Close(SessionId),
 }
 pub struct Request {
@@ -53,6 +54,7 @@ impl fmt::Debug for Request {
 pub struct Strategy {
     pub(super) scope: ConnectionScope,
     negotiated: Negotiated,
+    pub(super) child_history_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 pub(super) fn at<'a>(
     mut v: RawValueRef<'a>,
@@ -164,6 +166,11 @@ impl Strategy {
         };
         Ok(Self {
             scope,
+            child_history_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                at(caps, &["_meta", super::child_history::KEY, "version"])?
+                    .and_then(RawValueRef::unsigned)
+                    == Some(1),
+            )),
             negotiated: Negotiated {
                 offered: offer,
                 version,
@@ -180,7 +187,7 @@ impl Strategy {
     pub const fn version(&self) -> Version {
         self.negotiated.version
     }
-    fn request(
+    pub(super) fn request(
         &self,
         method: &'static str,
         kind: RequestKind,
@@ -676,7 +683,19 @@ pub(super) fn initialize(scope: ConnectionScope, offer: Version) -> Result<Reque
             } else {
                 "capabilities"
             },
-            raw::literal("{}")?,
+            raw::object(
+                [(
+                    "_meta",
+                    &raw::object(
+                        [(
+                            super::child_history::KEY,
+                            &raw::literal(r#"{"version":1}"#)?,
+                        )],
+                        None,
+                    )?,
+                )],
+                None,
+            )?,
         ),
         (
             if offer == Version::V1 {

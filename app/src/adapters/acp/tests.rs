@@ -1,5 +1,6 @@
 //! Parameterized standard protocol fixtures. These are not real Harness compatibility evidence.
 mod approval_owner_data;
+mod child_history;
 mod discovery;
 mod message_id;
 mod permission_subject;
@@ -896,4 +897,25 @@ async fn acp_r002_foreign_and_stale_strategy_requests_rejected_before_registrati
     })
     .await
     .expect("bounded R002 regression");
+}
+
+#[tokio::test]
+async fn child_history_offer_uses_versioned_client_metadata() {
+    for version in [Version::V1, Version::V2] {
+        let (client, mut peer) = pair();
+        client
+            .initialize(version, deadline())
+            .await
+            .expect("initialize");
+        let request = sent(&mut peer).await;
+        let capabilities = if version == Version::V1 {
+            "clientCapabilities"
+        } else {
+            "capabilities"
+        };
+        assert_eq!(
+            request["params"][capabilities]["_meta"]["io.github.lindongfang.acp-remote/child-history"],
+            json!({"version":1})
+        );
+    }
 }

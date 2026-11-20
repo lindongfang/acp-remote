@@ -430,6 +430,38 @@ impl TranscriptCacheStore {
         capability_profile: CapabilityProfile,
         frames: Vec<(RawMessage, u64)>,
     ) -> Result<ReplaceOutcome, TranscriptCacheError> {
+        self.replace_checked(
+            key,
+            protocol_version,
+            capability_profile,
+            frames,
+            None,
+            async { Ok(()) },
+        )
+        .await
+    }
+
+    pub(crate) async fn history_generation(
+        &self,
+        key: &NativeSessionKey,
+    ) -> Result<super::HistoryGeneration, TranscriptCacheError> {
+        let (pool, _) = self
+            .open_handles()
+            .await
+            .ok_or(TranscriptCacheError::DatabaseUnavailable)?;
+        Ok(super::HistoryGeneration(sqlx::query_as("SELECT generation_token, content_digest FROM transcript_sessions WHERE source_id=? AND native_session_id=?")
+            .bind(entity_id_to_bytes(key.source().0)?.as_slice()).bind(key.native_id()).fetch_optional(&pool).await?))
+    }
+
+    pub(crate) async fn replace_checked<T>(
+        &self,
+        key: &NativeSessionKey,
+        protocol_version: Version,
+        capability_profile: CapabilityProfile,
+        frames: Vec<(RawMessage, u64)>,
+        expected_token: Option<super::HistoryGeneration>,
+        publish: impl Future<Output = Result<T, crate::domain::shared_view::ViewError>>,
+    ) -> Result<ReplaceOutcome, TranscriptCacheError> {
         let raw_only: Vec<RawMessage> = frames.iter().map(|(raw, _)| raw.clone()).collect();
         let new_digest = compute_content_digest(protocol_version, &raw_only)?;
 
@@ -438,7 +470,9 @@ impl TranscriptCacheStore {
             .await
             .ok_or(TranscriptCacheError::DatabaseUnavailable)?;
 
-        self.inner.writer.reset_key(key).await;
+        if expected_token.is_none() {
+            self.inner.writer.reset_key(key).await;
+        }
         let _tx_lock = write_mutex.lock().await;
         let now_ms = self.inner.clock.now_millis();
         apply_replay_generation(
@@ -448,7 +482,11 @@ impl TranscriptCacheStore {
             capability_profile,
             &new_digest,
             &frames,
-            now_ms,
+            ReplayPublication {
+                now_ms,
+                expected_token,
+                publish,
+            },
         )
         .await
     }
@@ -685,15 +723,28 @@ impl TranscriptCacheStore {
     }
 }
 
-async fn apply_replay_generation(
+struct ReplayPublication<F> {
+    now_ms: i64,
+    expected_token: Option<super::HistoryGeneration>,
+    publish: F,
+}
+
+async fn apply_replay_generation<T>(
     pool: &SqlitePool,
     key: &NativeSessionKey,
     protocol_version: Version,
     capability_profile: CapabilityProfile,
     new_digest: &[u8; 32],
     frames: &[(RawMessage, u64)],
-    now_ms: i64,
+    publication: ReplayPublication<
+        impl Future<Output = Result<T, crate::domain::shared_view::ViewError>>,
+    >,
 ) -> Result<ReplaceOutcome, TranscriptCacheError> {
+    let ReplayPublication {
+        now_ms,
+        expected_token,
+        publish,
+    } = publication;
     let source_id_bytes = entity_id_to_bytes(key.source().0)?;
     let source_bytes = source_id_bytes.as_slice();
     let native_id = key.native_id();
@@ -702,10 +753,10 @@ async fn apply_replay_generation(
         Version::V2 => 2_i64,
     };
 
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let existing = sqlx::query(
         r"
-        SELECT active_generation, content_digest
+        SELECT active_generation, content_digest, generation_token
         FROM transcript_sessions
         WHERE source_id = ? AND native_session_id = ?
         ",
@@ -715,6 +766,20 @@ async fn apply_replay_generation(
     .fetch_optional(&mut *tx)
     .await?;
 
+    if let Some(expected) = expected_token {
+        let current = existing
+            .as_ref()
+            .map(|row| {
+                Ok::<_, sqlx::Error>((
+                    row.try_get::<Vec<u8>, _>("generation_token")?,
+                    row.try_get::<Vec<u8>, _>("content_digest")?,
+                ))
+            })
+            .transpose()?;
+        if expected.0 != current {
+            return Err(crate::domain::shared_view::ViewError::StaleCursor.into());
+        }
+    }
     let next_generation = if let Some(row) = existing {
         let prev_generation: i64 = row.try_get("active_generation")?;
         let existing_digest: Vec<u8> = row.try_get("content_digest")?;
@@ -734,7 +799,9 @@ async fn apply_replay_generation(
             .bind(native_id)
             .execute(&mut *tx)
             .await?;
+            let permit = publish.await?;
             tx.commit().await?;
+            drop(permit);
             return Ok(ReplaceOutcome::UnchangedDigest);
         }
         prev_generation.checked_add(1).ok_or_else(|| {
@@ -757,7 +824,9 @@ async fn apply_replay_generation(
     )
     .await?;
 
+    let permit = publish.await?;
     tx.commit().await?;
+    drop(permit);
     Ok(ReplaceOutcome::Updated)
 }
 

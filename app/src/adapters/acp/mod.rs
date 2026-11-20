@@ -1,4 +1,5 @@
 //! Shared ACP transport and negotiated version strategies; no process or authorization authority.
+pub mod child_history;
 mod configuration;
 mod model;
 pub mod native_dispatch;

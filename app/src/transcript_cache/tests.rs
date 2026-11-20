@@ -1182,3 +1182,126 @@ async fn assert_index_absent(pool: &sqlx::SqlitePool, native: &str) {
             .is_empty()
     );
 }
+
+#[tokio::test]
+async fn child_history_transaction_keeps_previous_generation_until_authorized_commit() {
+    let temp = TempDirGuard::new("child-history-publish");
+    let clock = Arc::new(ManualRetentionClock::new(1000));
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::default(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let child = sample_key(8, "child");
+    let frames = |turn| {
+        let frame = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"child","update":{"sessionUpdate":"user_message_chunk","messageId":turn,"content":{"type":"text","text":turn}}}});
+        vec![(raw_msg(&frame.to_string()), 1)]
+    };
+    let profile = CapabilityProfile::ReplayCapable;
+    cache
+        .replace_with_replay(&child, Version::V1, profile, frames("first"))
+        .await
+        .unwrap();
+    let original = cache.history_generation(&child).await.unwrap();
+    clock.advance_millis(2000);
+    let outcome = cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("first"),
+            Some(HistoryGeneration(original.0.clone())),
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, ReplaceOutcome::UnchangedDigest);
+    assert_eq!(
+        cache.history_generation(&child).await.unwrap().0,
+        original.0
+    );
+    assert_eq!(
+        cache
+            .load_snapshot(&child)
+            .await
+            .unwrap()
+            .unwrap()
+            .session
+            .last_updated_at_ms,
+        1000
+    );
+    let (ready, staged) = tokio::sync::oneshot::channel();
+    let (reject, decision) = tokio::sync::oneshot::channel();
+    let attempt = cache.replace_checked(
+        &child,
+        Version::V1,
+        profile,
+        frames("second"),
+        Some(HistoryGeneration(original.0.clone())),
+        async {
+            ready.send(()).unwrap();
+            decision.await.unwrap()
+        },
+    );
+    let inspect = async {
+        staged.await.unwrap();
+        let snapshot = cache.load_snapshot(&child).await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.records[0].raw.bytes(),
+            frames("first")[0].0.bytes()
+        );
+        reject.send(Err::<(), _>(ViewError::Revoked)).unwrap();
+    };
+    let (outcome, ()) = tokio::join!(attempt, inspect);
+    assert!(matches!(
+        outcome,
+        Err(TranscriptCacheError::View(ViewError::Revoked))
+    ));
+    assert_eq!(
+        cache.history_generation(&child).await.unwrap().0,
+        original.0
+    );
+    cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("second"),
+            Some(HistoryGeneration(original.0.clone())),
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        cache.history_generation(&child).await.unwrap().0,
+        original.0
+    );
+    let stale = cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("late"),
+            Some(original),
+            async { Ok(()) },
+        )
+        .await;
+    assert!(matches!(
+        stale,
+        Err(TranscriptCacheError::View(ViewError::StaleCursor))
+    ));
+    let page = cache
+        .read_turn_page(&child, |_, _| Ok(None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(
+        page.snapshot.records[0].raw.bytes(),
+        frames("second")[0].0.bytes()
+    );
+    cache.shutdown().await.unwrap();
+}

@@ -65,7 +65,11 @@ struct AdmittedNativeView {
     target: NativeSessionKey,
     reader: Arc<AcpReadService>,
 }
+type SocketReadCapability = crate::application::native_dispatch::SourceReadCapability<
+    crate::adapters::acp::native_dispatch::AcpNativeAdapter,
+>;
 struct AdmittedSocketNativeView {
+    capability: Arc<SocketReadCapability>,
     target: NativeSessionKey,
     reader: Arc<AcpSocketReadService>,
 }
@@ -111,6 +115,7 @@ trait SocketNativeViewAdmission: Send + Sync {
         &'a self,
         parent: &'a NativeSessionKey,
         child: &'a str,
+        root: Option<&'a NativeSessionKey>,
     ) -> BoxReadFuture<'a, Result<NativeSessionKey, ViewError>>;
     fn admit_socket<'a>(
         &'a self,
@@ -124,13 +129,14 @@ trait SocketNativeViewAdmission: Send + Sync {
         client: &'a SocketViewClient,
         selection: SourceLaunchSelection,
         native_session_id: String,
-        reason: ReadReason,
+        history: bool,
     ) -> BoxReadFuture<'a, Result<AdmittedSocketNativeView, ViewError>>;
     fn verify_cold_target<'a>(
         &'a self,
         client: &'a SocketViewClient,
         target: EntityId,
         reason: ReadReason,
+        configuration: Option<(EntityId, u64)>,
     ) -> BoxReadFuture<'a, Result<NativeSessionKey, ViewError>>;
     fn verify_cold_source<'a>(
         &'a self,
@@ -790,6 +796,7 @@ where
                 }
             }
             Ok(AdmittedSocketNativeView {
+                capability: capability.clone(),
                 target: capability.native().clone(),
                 reader,
             })
@@ -800,7 +807,7 @@ where
         client: &'a SocketViewClient,
         selection: SourceLaunchSelection,
         native_session_id: String,
-        reason: ReadReason,
+        history: bool,
     ) -> BoxReadFuture<'a, Result<AdmittedSocketNativeView, ViewError>> {
         Box::pin(async move {
             let (_actor, gate) = self.authority.current_actor_guard(client).await?;
@@ -810,7 +817,7 @@ where
                     .map_err(dispatch_error)?;
             let acquisition = self
                 .native
-                .acquire_source_read(proof, reason)
+                .acquire_source_view(proof, history)
                 .map_err(dispatch_error)?;
             let capability = acquisition.source_capability().await?;
             crate::adapters::acp::native_views::admit_replay_capacity(&capability).await?;
@@ -855,6 +862,7 @@ where
             }
             drop(attachment);
             Ok(AdmittedSocketNativeView {
+                capability: capability.clone(),
                 target: capability.native().clone(),
                 reader,
             })
@@ -864,10 +872,11 @@ where
         &'a self,
         parent: &'a NativeSessionKey,
         child: &'a str,
+        root: Option<&'a NativeSessionKey>,
     ) -> BoxReadFuture<'a, Result<NativeSessionKey, ViewError>> {
         Box::pin(async move {
             self.native
-                .verify_history_child(parent, child)
+                .verify_history_child(parent, child, root)
                 .await
                 .map_err(|error| match error {
                     DispatchError::SessionTreeUnverified => ViewError::InvalidTarget,
@@ -880,6 +889,7 @@ where
         client: &'a SocketViewClient,
         target: EntityId,
         reason: ReadReason,
+        configuration: Option<(EntityId, u64)>,
     ) -> BoxReadFuture<'a, Result<NativeSessionKey, ViewError>> {
         Box::pin(async move {
             let (actor, gate) = self.authority.current_actor_guard(client).await?;
@@ -894,6 +904,9 @@ where
                 .verify_cold_target_read(&proof)
                 .await
                 .map_err(dispatch_error)?;
+            if configuration.is_some_and(|expected| expected != metadata.configuration) {
+                return Err(ViewError::InvalidConfiguration);
+            }
             self.authority
                 .register_verified_source(metadata.key.source())?;
             Ok(metadata.key)
@@ -1385,7 +1398,9 @@ impl NodeNativeViewsService {
             return Err(ViewError::InvalidClient);
         }
         if let Some(tc) = &self.transcript_cache {
-            let key = admission.verify_cold_target(client, target, reason).await?;
+            let key = admission
+                .verify_cold_target(client, target, reason, None)
+                .await?;
             let (live_read, live_loaded) =
                 try_open_live_socket_read(tc, admission.as_ref(), client, &key, reason).await?;
             if let Some(read) = live_read {
@@ -1515,7 +1530,7 @@ impl NodeNativeViewsService {
             }
         }
         let admitted = admission
-            .admit_socket_source(client, selection, native_session_id, reason)
+            .admit_socket_source(client, selection, native_session_id, false)
             .await?;
         self.finish_live_socket_read(client, admitted, reason).await
     }
@@ -1857,7 +1872,7 @@ impl NativeSocketViewRead {
                                 client,
                                 selection.clone(),
                                 native_session_id.clone(),
-                                ReadReason::ExplicitRefresh,
+                                false,
                             )
                             .await?;
                         (admitted.reader, admitted.target)

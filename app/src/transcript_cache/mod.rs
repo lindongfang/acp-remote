@@ -32,6 +32,8 @@ use crate::{
 pub use coordinator::{
     CachedViewHandle, RevalidationOutcome, TranscriptCacheCoordinator, encode_cache_state_json,
 };
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HistoryGeneration(Option<(Vec<u8>, Vec<u8>)>);
 pub(crate) use digest::IncrementalDigest;
 pub use digest::compute_content_digest;
 pub use store::{CachedPage, PageReadError, TranscriptCacheStore};

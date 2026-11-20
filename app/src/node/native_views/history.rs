@@ -145,37 +145,29 @@ impl NodeNativeViewsService {
                 client,
                 reason,
                 request.input.child.as_deref(),
+                None,
             )
             .await?;
         let tc = self
             .transcript_cache
             .as_ref()
             .ok_or(ViewError::CaptureUnavailable)?;
+        let cached = CachedHistory {
+            tc,
+            admission,
+            authority,
+            client,
+            key: key.clone(),
+            target: target.clone(),
+        };
         let live = admission.try_open_live_socket(&key).await?;
         if live.is_some() {
             let _ = tc.store().writer().flush().await;
         }
-        if request.open.is_none() || live.is_none() {
-            let cached = tc
-                .store()
-                .read_turn_page(&key, |g, t| request.select(Generation::Cache(g), t))
-                .await;
-            match cached {
-                Ok(Some(page)) => {
-                    return CachedHistory {
-                        tc,
-                        admission,
-                        authority,
-                        client,
-                        key,
-                        target,
-                    }
-                    .open(request, page)
-                    .await;
-                }
-                Err(PageReadError::Page(e)) => return Err(e.into()),
-                Ok(None) | Err(PageReadError::Cache(_)) => {}
-            }
+        if (request.open.is_none() || live.is_none())
+            && let Some(page) = cached.page(&request).await?
+        {
+            return cached.open(request, page, "transcript_cache").await;
         }
         let (read, source) = if let Some(live) = live.filter(|candidate| {
             (candidate.is_loaded || candidate.replay_complete)
@@ -211,7 +203,8 @@ impl NodeNativeViewsService {
                     request.input.child.as_deref(),
                 )
                 .await?;
-            let read = self
+            let cap = admitted.capability.clone();
+            let replay = self
                 .finish_history_replay(
                     client,
                     admitted,
@@ -220,7 +213,15 @@ impl NodeNativeViewsService {
                     tc,
                     request.input.child.is_some(),
                 )
-                .await?;
+                .await;
+            let read = match replay {
+                Err(HistoryError::View(ViewError::UnsupportedCapability))
+                    if request.input.child.is_some() =>
+                {
+                    return cached.query_child(request, parent, cap, reason).await;
+                }
+                other => other?,
+            };
             (read, "replay")
         };
         request.select_live(client, read, &key, tc, source).await
@@ -241,14 +242,22 @@ impl NodeNativeViewsService {
             .await?;
         let mode = read.reader.wait_read_mode(client, &read.read, true).await?;
         if mode == ReadMode::CurrentOnly {
-            if !child
-                || read
-                    .reader
-                    .history_records(client, &read.read)?
-                    .records
-                    .len()
-                    == 0
-            {
+            if !child {
+                return Err(ViewError::UnsupportedCapability.into());
+            }
+            let (version, _) = tc
+                .known_source_capabilities(key.source())
+                .ok_or(ViewError::UnsupportedCapability)?;
+            let journal = read.reader.history_records(client, &read.read)?;
+            let mut turns = TurnIndexer::default();
+            for position in 0..journal.records.len() {
+                let record = journal.records.get(position)?;
+                turns.observe(crate::adapters::acp::turn_classify::classify(
+                    version,
+                    record.raw.message(),
+                ));
+            }
+            if !turns.provable() {
                 return Err(ViewError::UnsupportedCapability.into());
             }
         } else {
@@ -376,10 +385,76 @@ struct CachedHistory<'a> {
     target: SocketRebindTarget,
 }
 impl CachedHistory<'_> {
+    async fn page(
+        &self,
+        request: &HistoryRequest,
+    ) -> Result<Option<crate::transcript_cache::CachedPage>, HistoryError> {
+        match self
+            .tc
+            .store()
+            .read_turn_page(&self.key, |g, t| request.select(Generation::Cache(g), t))
+            .await
+        {
+            Ok(page) => Ok(page),
+            Err(PageReadError::Page(e)) => Err(e.into()),
+            Err(PageReadError::Cache(_)) => Ok(None),
+        }
+    }
+    async fn query_child(
+        self,
+        request: HistoryRequest,
+        parent: NativeSessionKey,
+        cap: Arc<super::SocketReadCapability>,
+        reason: ReadReason,
+    ) -> Result<NativeSocketViewRead, HistoryError> {
+        let views = cap.source().views()?;
+        let verify_target = self.target.clone();
+        let verify_admission = self.admission.clone();
+        let context = self.client.context.clone();
+        let expected = (parent, self.key.clone());
+        let child = request.input.child.clone();
+        let root = cap.root_native().clone();
+        let configuration = cap.source_configuration();
+        let check: Arc<crate::adapters::acp::native_views::child_history::Check> =
+            Arc::new(move || {
+                let target = verify_target.clone();
+                let admission = verify_admission.clone();
+                let client = context.client();
+                let expected = expected.clone();
+                let child = child.clone();
+                let root = root.clone();
+                Box::pin(async move {
+                    let actual = target
+                        .authorize(
+                            admission.as_ref(),
+                            &client,
+                            reason,
+                            child.as_deref(),
+                            Some((&root, configuration)),
+                        )
+                        .await?;
+                    if actual != expected {
+                        return Err(ViewError::InvalidTarget);
+                    }
+                    if !admission.history_replay_allowed(&actual.0)? {
+                        return Err(ViewError::InvalidStage);
+                    }
+                    client
+                        .context
+                        .authority()
+                        .current_guard(&client, &actual.1)
+                        .await
+                })
+            });
+        views.child_history(cap, check, self.tc.clone()).await?;
+        let page = self.page(&request).await?.ok_or(ViewError::ReadFailure)?;
+        self.open(request, page, "replay").await
+    }
     async fn open(
         self,
         request: HistoryRequest,
         mut page: crate::transcript_cache::CachedPage,
+        source: &str,
     ) -> Result<NativeSocketViewRead, HistoryError> {
         let Self {
             tc,
@@ -407,14 +482,8 @@ impl CachedHistory<'_> {
             unprovable: page.range.is_none(),
             invalidated: None,
         };
-        let metadata = request.metadata(
-            generation,
-            page.total,
-            page.range,
-            &window,
-            "transcript_cache",
-            prelude,
-        );
+        let metadata =
+            request.metadata(generation, page.total, page.range, &window, source, prelude);
         page.prior_tool_anchors.append(&mut page.snapshot.records);
         page.snapshot.records = page.prior_tool_anchors;
         page.snapshot.records.append(&mut page.tool_updates);
@@ -507,20 +576,33 @@ impl SocketRebindTarget {
         client: &SocketViewClient,
         reason: ReadReason,
         child: Option<&str>,
+        binding: Option<(&NativeSessionKey, (crate::domain::EntityId, u64))>,
     ) -> Result<(NativeSessionKey, NativeSessionKey), ViewError> {
+        let configuration = binding.map(|(_, config)| config);
         let parent = match self {
-            Self::Target(id) => admission.verify_cold_target(client, *id, reason).await?,
+            Self::Target(id) => {
+                admission
+                    .verify_cold_target(client, *id, reason, configuration)
+                    .await?
+            }
             Self::Source {
                 selection,
                 native_session_id,
             } => {
+                if configuration.is_some_and(|expected| {
+                    expected != (selection.profile.id(), selection.profile.revision())
+                }) {
+                    return Err(ViewError::InvalidConfiguration);
+                }
                 admission
                     .verify_cold_source(client, selection.clone(), native_session_id.clone())
                     .await?
             }
         };
         let key = if let Some(child) = child {
-            admission.history_child(&parent, child).await?
+            admission
+                .history_child(&parent, child, binding.map(|(root, _)| root))
+                .await?
         } else {
             parent.clone()
         };
@@ -547,7 +629,12 @@ impl SocketRebindTarget {
             }
             Self::Source { selection, .. } => {
                 admission
-                    .admit_socket_source(client, selection, key.native_id().to_owned(), reason)
+                    .admit_socket_source(
+                        client,
+                        selection,
+                        key.native_id().to_owned(),
+                        child.is_some(),
+                    )
                     .await?
             }
         })

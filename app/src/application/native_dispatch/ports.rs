@@ -438,6 +438,9 @@ pub struct ObservationView<'a, S, R> {
     pub incoming: NativeIncoming,
 }
 pub trait NativeLifecyclePort: NativeProtocolPort + Sized {
+    fn has_child_history(&self, _source: &Self::Source) -> bool {
+        false
+    }
     /// Observes standard activity without requiring a platform execution target.
     /// # Errors
     /// Rejects ambiguous fields without including source content in errors.

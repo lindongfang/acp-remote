@@ -15,3 +15,7 @@ SessionSetup 要求有版本和来源的完整 cwd/MCP/additionalDirectories 快
 `view_observations` 与 `tool_projection` 为旧可选预算显示适配器。公开入口必须真实 Received、核相同连接来源；它们的 ViewWindows/history/anchor/key 预算尚未整体消除，不能成为真实 IO 必经门槛，也不声称长键完整历史投影。开发旧同步单元仅验证同生产私有数据算法/旧布局和计费；新增真实客户端用例另验公开品牌，测试不提供 fake Received。
 
 对外约束见 [ACP 平台约束规格](../../../../openspec/specs/acp-platform-constraints/spec.md)，详细内部契约见归档 [public-acp-runtime-contract.md](../../../../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/acp-runtime/revision2/public-acp-runtime-contract.md) 与 [empty-constructor.md](../../../../openspec/changes/archive/2026-11-16-deliver-codex-session-loop/acp-runtime/revision2-supplements/empty-constructor.md)。协议夹具和受控子进程的真实管道仅验证本模块协议与 IO 收敛边界，不替代真实 Harness、Windows Job 进程树、派发账本、持久审批或 Node/WSS 集成验证。
+
+独立子历史使用当前连接初始化时双方声明的 `io.github.lindongfang.acp-remote/child-history` 版本 1。策略在 v1 的 `clientCapabilities._meta` 或 v2 的 `capabilities._meta` 发出声明，并分别从响应的 `agentCapabilities._meta` 或 `capabilities._meta` 读取确认。固定只读方法为 `_io.github.lindongfang.acp-remote/child-history`。当前连接返回 JSON-RPC method-not-found 后，后续查询直接报告能力限制。未实现扩展的来源仍可使用已保存的子快照及原生自动投递的子事件。
+
+原连接按 RPC ID 接收每批结果。解码器验证根、子、快照、序号与游标，跨块拼接完整 ACP 通知并保留原始字节。根资源持有查询任务，获准的管理读者共享任务，各自复核权限。完整子快照与轮次索引在同一事务发布，续页通过平台快照令牌读取。受控 ACP v1/v2 的正向测试使用节点的管理 WSS 入口。扩展合同见[历史导航设计第 8 节](../../../../openspec/changes/deliver-history-navigation/design.md)。

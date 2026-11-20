@@ -95,18 +95,21 @@ let sessionSeq = Number(process.env.ACP_PEER_SESSION_START || "1");
 async function handleRequest(msg) {
   const cfg = readCfg();
   const { id, method, params } = msg;
-  logEvent({ method, params });
+  const key = "io.github.lindongfang.acp-remote/child-history";
+  logEvent(method === "_"+key ? {method, first: params.cursor===null} : { method, params });
 
   if (method === "initialize") {
     const version = Number(cfg.protocolVersion ?? 1);
     const mode = cfg.capabilityMode ?? "replay_capable";
+    const clientCaps = params.clientCapabilities ?? params.capabilities;
+    const ext = cfg.childHistory && clientCaps?._meta?.[key]?.version === 1 ? {_meta:{[key]:{version:1}}} : {};
     if (version === 2) {
       send({
         id,
         result: {
           protocolVersion: 2,
           info: { name: "controlled-acp", version: "2.0.0" },
-          capabilities: { session: {} },
+          capabilities: { session: {}, ...ext },
         },
       });
       return;
@@ -121,9 +124,35 @@ async function handleRequest(msg) {
       result: {
         protocolVersion: 1,
         agentInfo: { name: "controlled-acp", version: "1.0.0" },
-        agentCapabilities: { loadSession, sessionCapabilities },
+        agentCapabilities: { loadSession, sessionCapabilities, ...ext },
       },
     });
+    return;
+  }
+
+  if (method === "_"+key && cfg.childHistory) {
+    if(cfg.childEof) process.exit(0);
+    if(cfg.childError) {send({id,error:{code:-32000,message:'private history error'}});return;}
+    if(cfg.childRefused) {send({id,error:{code:-32601,message:"not implemented"}});return;}
+    const sessionId = cfg.wrongChild ? "sibling" : params.sessionId;
+    const updates = Array.from({length:12}, (_,i)=>({sessionUpdate:"user_message_chunk",messageId:String(i+1),content:{type:"text",text:i===0?"字".repeat(6000):"turn"+i},unknown:1}));
+    updates.splice(1,0,{sessionUpdate:"tool_call",toolCallId:"tool",title:"fixture",status:"completed",rawInput:{future:true}});
+    if(cfg.childTurns) {
+      updates.length=0;
+      for(let turn=1;turn<=cfg.childTurns;turn++){
+        updates.push({sessionUpdate:"user_message_chunk",content:{type:"text",text:"child-turn-"+turn}},{sessionUpdate:"agent_message_chunk",messageId:"agent-"+turn,content:{type:"text",text:"reply"}});
+      }
+    }
+    const bytes=Buffer.from(updates.map(update=>JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{sessionId,update}}).replace('"unknown":1','"unknown" : 1.00')+"\n").join(""));
+    const index = params.cursor === null ? 0 : Number(params.cursor);
+    if(index===cfg.childBarrierIndex && cfg.childBarrierFile) {
+      while (!fs.existsSync(cfg.childBarrierFile)) {
+        // Keep the query pending while stdin is open. Let EOF end the peer at node shutdown.
+        await new Promise(resolve => setTimeout(resolve, 10).unref());
+      }
+    }
+    const end = Math.min(bytes.length,(index+1)*16384);
+    send({id,result:{rootSessionId:params.rootSessionId,sessionId:params.sessionId,sequence:String(index),snapshotId:"fixture-generation",chunk:bytes.subarray(index*16384,end).toString("base64url"),nextCursor:end===bytes.length?null:String(index+1)}});
     return;
   }
 
@@ -241,6 +270,7 @@ async function handleRequest(msg) {
   }
 
   if (method === "session/prompt") {
+    if(cfg.promptBarrierFile) while (!fs.existsSync(cfg.promptBarrierFile)) await new Promise(r=>setTimeout(r,10));
     const sid = params.sessionId;
     const version = Number(cfg.protocolVersion ?? 1);
     const promptItems = Array.isArray(params.prompt) ? params.prompt : [];
@@ -2623,3 +2653,5 @@ async fn stc_010_revoke_during_cached_and_revalidating_stream_closes_4410() {
 }
 
 mod history_acceptance;
+#[path = "child_history_wss_cases.rs"]
+mod child_history_wss_cases;
