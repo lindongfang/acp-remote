@@ -1127,12 +1127,14 @@ mod tests {
         let mut stop_signal = runtime.control.stop_receiver();
         let mut report = runtime.control.shutdown_receiver();
         let address = runtime.ipc_address().clone();
+        // `wait_stop()` starts the `StopRequest` budget as soon as `ipc::stop` sets the stop
+        // signal, so capture `started` before spawning `ipc::stop` rather than after waking.
+        let started = tokio::time::Instant::now();
         let owner_stop = tokio::spawn(async move { ipc::stop(&address).await });
         timeout(Duration::from_secs(2), stop_signal.changed())
             .await
             .expect("owner stop reaches node")
             .expect("stop signal");
-        let started = tokio::time::Instant::now();
         let shutdown = tokio::spawn(runtime.shutdown(None));
         timeout(Duration::from_secs(2), barrier.wait_until_entered())
             .await

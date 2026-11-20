@@ -809,6 +809,16 @@ fn selection_json(sel: &SourceLaunchSelection) -> serde_json::Value {
     })
 }
 
+async fn takeover_target(sock: &mut ManagementSocket, target_id: EntityId) {
+    let take = send_command_wait(
+        sock,
+        "session.control.takeover",
+        serde_json::json!({ "targetId": target_id.encode() }),
+    )
+    .await;
+    assert_eq!(take["ok"], true, "session.control.takeover failed: {take}");
+}
+
 async fn submit_prompt_turn(
     sock: &mut ManagementSocket,
     target_id: EntityId,
@@ -1552,6 +1562,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
     .await;
 
     // Part B (`STC-006` + `STC-014`): Occupy 50/50 capacity slots (`target_release` + 49 created).
+    takeover_target(&mut sock_fill, target_release).await;
     let active_seed =
         submit_prompt_turn(&mut sock_fill, target_release, "active-slot-holder").await;
     assert_eq!(active_seed["ok"], true, "active_seed: {active_seed}");
@@ -1713,6 +1724,7 @@ async fn stc_007_and_stc_008_and_stc_009_resume_only_pure_memory_unrecoverable_a
         "STC-007: view only must not invoke session/resume"
     );
 
+    takeover_target(&mut sock2, target_id).await;
     let followup = submit_prompt_turn(&mut sock2, target_id, "followup-only-text").await;
     assert_eq!(followup["ok"], true, "followup failed: {followup}");
     wait_for_peer_method(&fixture, "session/prompt", 1).await;
@@ -1734,6 +1746,7 @@ async fn stc_007_and_stc_008_and_stc_009_resume_only_pure_memory_unrecoverable_a
     resume_cfg.write(&fixture.cfg_path);
     let _ = std::fs::remove_file(&fixture.log_path);
 
+    takeover_target(&mut sock2, target_id).await;
     let _ = submit_prompt_turn(&mut sock2, target_id, "after-remote-expiry").await;
     tokio::time::sleep(Duration::from_millis(120)).await;
     let logs_after_err = fixture.peer_logs();
