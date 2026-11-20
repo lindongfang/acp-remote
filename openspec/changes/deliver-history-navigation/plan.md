@@ -80,6 +80,7 @@ mode: required
 | HN-F08 | 最终独立 tester / HN-029 | 高 | 65b4659c | 两名读者共用查询，撤销发起者后仍有权的另一读者收到 read_failed，预期为 replay 子页 | 6a3c682c | closed | 67 项矩阵 66 通过、1 失败；同一测试二进制单例复跑通过。原始 matrix.log 对应第二个夹具（ACP v2）。撤权打断只读配置连接关闭确认，B 发布前授权复核失败；原报告人已确认关闭 |
 | HN-F09 | 最终独立 tester / HN-029 | 高 | 65b4659c | 两线程并行时根页的 lastTurn 取值为 null，预期 25；已复现 ok=false、read_failed，配置复核被未确认的关闭回执阻塞 | 6a3c682c | closed | 同一测试二进制并行运行两例共 8 批，第 4、8 批在 Device、terminal=false 分支完成状态变更后的父页读取失败（independent.rs 调用点 866）。共享查询用例在这 8 批均通过。证据 child-pair-4.log、child-pair-8.log |
 | HN-R08 | 最终 reviewer | 低 | 8d05b619 | 本机跟随测试若提前失败，对端等待屏障直到节点关闭 | 0fa004b | 非阻断，已修复 | 析构时幂等释放文件屏障，正常路径仍检查释放结果 |
+| HN-F10 | 独立 tester / HN-030 | 验收阻断 | 75e01228 | 双 Edge 驱动在请求失败分支未实际投递首次尝试的迟到快照；切换目标、同内容追加第 13 轮的显示仅有模拟 DOM 断言 | 待补证 | open | 需分别确认重试挂起及成功后真实投递与正文保持，补齐真实浏览器场景后由原 tester 复验 |
 | HN-PR01 | 独立 reviewer | 高 | 1feb0075 | 发起者撤权与共用查询终止条件冲突 | 405957a1 | closed | 原审查人复核通过，A 撤权即时关闭，仍有权的 B 完成原查询 |
 
 ## Verification Results
