@@ -604,8 +604,10 @@ async fn list_catalog(config_path: &Path) -> Result<(), AppError> {
 #[cfg(test)]
 mod lifecycle_development_tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
     use tokio::time::timeout;
+    static NEXT_AREA: AtomicU64 = AtomicU64::new(0);
     struct Area {
         directory: PathBuf,
         config: NodeConfig,
@@ -616,8 +618,11 @@ mod lifecycle_development_tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let directory =
-                std::env::temp_dir().join(format!("acp-main-life-{}-{nonce}", std::process::id()));
+            let sequence = NEXT_AREA.fetch_add(1, Ordering::Relaxed);
+            let directory = std::env::temp_dir().join(format!(
+                "acp-main-life-{}-{nonce}-{sequence}",
+                std::process::id()
+            ));
             std::fs::create_dir(&directory).unwrap();
             let cert = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
             let tls_cert = directory.join("cert.pem");
