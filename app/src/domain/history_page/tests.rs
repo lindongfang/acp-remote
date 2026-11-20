@@ -87,7 +87,7 @@ fn history_page_incremental_and_batch_keep_the_same_boundaries() {
 }
 
 #[test]
-fn history_page_size_and_bidirectional_ranges() {
+fn history_page_sizes_require_canonical_bounded_decimals() {
     assert_eq!(PageSize::parse(None).unwrap().get(), 10);
     for ok in [1, 3, 5, 10, 50] {
         assert_eq!(PageSize::parse(Some(&ok.to_string())).unwrap().get(), ok);
@@ -107,6 +107,10 @@ fn history_page_size_and_bidirectional_ranges() {
     ] {
         assert_eq!(PageSize::parse(Some(bad)), Err(PageError::InvalidRequest));
     }
+}
+
+#[test]
+fn history_page_bidirectional_ranges() {
     for (total, n, child) in [
         (25, 10, false),
         (25, 10, true),
