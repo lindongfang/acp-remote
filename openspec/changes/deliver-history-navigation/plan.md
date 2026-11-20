@@ -40,7 +40,7 @@
 
 | Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes |
 | --- | --- | --- | --- | --- | --- |
-| 编码前门禁 | 独立 reviewer | 父步骤入口、游标权限、轮次证明与用例充分性 | PV1 通过且语义阻断清零 | pending | 7aeff9a2 原范围已通过；独立子历史查询增量须复审后编码 |
+| 编码前门禁 | 独立 reviewer | 父步骤入口、游标权限、轮次证明与用例充分性 | PV1 通过且语义阻断清零 | passed | 原范围 7aeff9a2 及子查询增量 405957a1 经独立 reviewer 通过；HN-PR01 由原提出者关闭 |
 | 集成交付门禁 | 独立 reviewer | 受测提交、真实链路、资源与安全 | 独立验收通过且阻断项关闭 | pending | 尚无受测提交 |
 
 ## Main E2E
@@ -71,6 +71,7 @@ mode: required
 | HN-F01 | 独立 tester / HN-022 | 高 | 1808ce2 | 冷读旧页时，页内工具能显示最终状态，但指向页后 rawOutput 的引用缺少可读取的原始字节 | 待修复 | open | 已由真实 WSS 探针复现，待原 tester 对修复提交复测 |
 | HN-F02 | 独立 tester / HN-012 | 高 | 1808ce2 | 根忙时按要求拒绝；根空闲但仅有根重放能力、无子快照或子事件时，子首次读取返回 unsupported_capability。原用例预期成功 | 用户已确认独立子历史查询 | open | 待分别验证有、无子数据路径及根名额 |
 | HN-F03 | 独立 tester / HN-027 | 高 | 74e7c2bb | 双浏览器跨代定位到正确的 11–15 轮后提示读取或展示准备失败，第 15 轮新正文未显示 | 待修复 | open | 待真实浏览器复测 |
+| HN-PR01 | 独立 reviewer | 高 | 1feb0075 | 发起者撤权与共用查询终止条件冲突 | 405957a1 | closed | 原审查人复核通过，A 撤权即时关闭，仍有权的 B 完成原查询 |
 
 ## Verification Results
 
