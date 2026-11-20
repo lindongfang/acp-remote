@@ -420,6 +420,8 @@ mod tests {
     mod queue_management_development {
         include!("node/queue_management/development_tests.rs");
         include!("node/session_services/queue_read_development_tests.rs");
+        include!("node/session_services/session_control_queue_acceptance.rs");
+        include!("node/session_services/session_control_queue_matrix_acceptance.rs");
     }
     #[cfg(windows)]
     mod document_transfer_development {
@@ -540,6 +542,8 @@ mod tests {
         include!("node/session_services/capacity_extended_acceptance.rs");
         include!("node/session_services/capacity_additional_acceptance.rs");
         include!("node/session_services/capacity_restart_acceptance.rs");
+        include!("node/session_services/session_control_takeover_acceptance.rs");
+        include!("node/session_services/session_control_lifecycle_acceptance.rs");
     }
 
     mod catalog_development {

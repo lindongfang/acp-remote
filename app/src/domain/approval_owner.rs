@@ -67,11 +67,24 @@ pub fn choice_fingerprint(
 pub struct RegisterDecision {
     approval: ApprovalId,
     choice: ChoiceId,
+    expected_control_epoch: Option<u64>,
 }
 impl RegisterDecision {
     #[must_use]
     pub const fn new(approval: ApprovalId, choice: ChoiceId) -> Self {
-        Self { approval, choice }
+        Self {
+            approval,
+            choice,
+            expected_control_epoch: None,
+        }
+    }
+    #[must_use]
+    pub const fn with_expected_control_epoch(
+        mut self,
+        expected_control_epoch: Option<u64>,
+    ) -> Self {
+        self.expected_control_epoch = expected_control_epoch;
+        self
     }
     #[must_use]
     pub const fn approval(&self) -> ApprovalId {
@@ -81,20 +94,40 @@ impl RegisterDecision {
     pub const fn choice(&self) -> ChoiceId {
         self.choice
     }
+    #[must_use]
+    pub const fn expected_control_epoch(&self) -> Option<u64> {
+        self.expected_control_epoch
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
 pub struct SubmitDecision {
     registration: ApprovalRegistrationId,
+    expected_control_epoch: Option<u64>,
 }
 impl SubmitDecision {
     #[must_use]
     pub const fn new(registration: ApprovalRegistrationId) -> Self {
-        Self { registration }
+        Self {
+            registration,
+            expected_control_epoch: None,
+        }
+    }
+    #[must_use]
+    pub const fn with_expected_control_epoch(
+        mut self,
+        expected_control_epoch: Option<u64>,
+    ) -> Self {
+        self.expected_control_epoch = expected_control_epoch;
+        self
     }
     #[must_use]
     pub const fn registration(&self) -> ApprovalRegistrationId {
         self.registration
+    }
+    #[must_use]
+    pub const fn expected_control_epoch(&self) -> Option<u64> {
+        self.expected_control_epoch
     }
 }
 
@@ -102,6 +135,10 @@ impl SubmitDecision {
 pub enum ApprovalRejection {
     #[error("approval actor is invalid")]
     InvalidActor,
+    #[error("session is not controlled by this client or control epoch changed")]
+    SessionNotControlled,
+    #[error("session tree verification failed")]
+    SessionTreeUnverified,
     #[error("approval registration is unknown")]
     UnknownRegistration,
     #[error("approval metadata conflicts")]

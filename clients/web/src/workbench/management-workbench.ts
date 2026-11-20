@@ -25,6 +25,7 @@ import {
 import { managementErrorMessage } from "./error-formatting";
 import { PairingAccessController } from "./pairing-access-controller";
 import { QueuedBodyController, type QueuedBodyReaderFactory } from "./queued-body-controller";
+import { SessionControlController } from "./session-control-controller";
 import { SessionQueueController } from "./session-queue-controller";
 import { SharedViewController, type SharedViewDisplayFactory } from "./shared-view-controller";
 import { SourceSessionController } from "./source-session-controller";
@@ -77,6 +78,7 @@ export class ManagementWorkbench {
   readonly devices: DeviceTrustController;
   readonly sharedView: SharedViewController;
   readonly queuedBody: QueuedBodyController;
+  readonly sessionControl: SessionControlController;
   readonly sessionQueue: SessionQueueController;
   readonly approval: ApprovalController;
   readonly capacityRelease: CapacityReleaseController;
@@ -103,12 +105,20 @@ export class ManagementWorkbench {
     const getInspectedQueueTargetId = () => this.sessionQueue.inspectedQueueTargetId;
     const renderDashboard = (rec: IdentityRecord, notice?: string, failure?: string) =>
       this.showManagementDashboard(rec, notice, failure);
+    const getCurrentRecord = () => this.#currentRecord;
     const basePort = {
       getManagement,
       getManagementGeneration,
       getDocument: getDoc,
       renderDashboard,
     };
+
+    this.sessionControl = new SessionControlController({
+      ...basePort,
+      getCurrentRecord,
+      getActiveControlTargetId: () => this.#activeControlTargetId(),
+    });
+    const control = this.sessionControl.createIntegrationPort();
 
     this.sharedView = new SharedViewController({
       ...basePort,
@@ -129,6 +139,7 @@ export class ManagementWorkbench {
 
     this.sessionQueue = new SessionQueueController({
       ...basePort,
+      control,
       getOpenedSessionView: () => this.sharedView.openedSessionView,
       getSharedViewSpec: () => this.sharedView.sharedViewSpec,
       getBodyPreview: () => this.queuedBody.bodyPreview,
@@ -145,7 +156,7 @@ export class ManagementWorkbench {
         this.sharedView.openTargetSharedView(rec, tid, sub),
     });
 
-    this.approval = new ApprovalController(basePort);
+    this.approval = new ApprovalController({ ...basePort, control });
 
     this.capacityRelease = new CapacityReleaseController({
       ...basePort,
@@ -268,6 +279,7 @@ export class ManagementWorkbench {
     this.sharedView.clearSharedSourceViewSpec();
     this.sourceSession.clearOperationViewState();
     this.resetSessionInputUi();
+    this.sessionControl.resetAll();
     this.sessionQueue.reset();
     this.approval.reset();
     this.workspaceCatalog.resetInventory();
@@ -331,6 +343,16 @@ export class ManagementWorkbench {
     return generation === this.#managementGeneration && this.#management === connection;
   }
 
+  #activeControlTargetId(): string | null {
+    return (
+      this.sessionQueue.inspectedQueueTargetId ??
+      this.approval.selectedApprovalTargetId() ??
+      (this.sharedView.sharedViewSpec?.kind === "target"
+        ? this.sharedView.sharedViewSpec.targetId
+        : null)
+    );
+  }
+
   async openManagement(record: IdentityRecord, recoveringPending = false): Promise<void> {
     if (!this.#pageActive || this.#manuallyDisconnected || this.pairing.identityResetting) {
       return;
@@ -354,6 +376,7 @@ export class ManagementWorkbench {
     this.devices.reset();
     this.workspaceCatalog.resetInventory();
     this.capacityRelease.resetCapacity();
+    this.sessionControl.resetForConnection();
     this.sessionQueue.inspectedQueue = null;
     this.suspendForDisconnect();
     this.resetSessionInputUi();
@@ -377,6 +400,15 @@ export class ManagementWorkbench {
           onDevicesChanged: () => {
             if (authenticated && generation === this.#managementGeneration) {
               void this.devices.refreshDevices(true, generation);
+            }
+          },
+          onSessionControlChanged: (frame) => {
+            if (authenticated && this.#isActiveConnection(generation, connection)) {
+              this.sessionControl.handleControlChanged(
+                this.#currentRecord ?? record,
+                generation,
+                frame,
+              );
             }
           },
           onViewData: (frame) => {

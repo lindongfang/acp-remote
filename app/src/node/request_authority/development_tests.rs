@@ -120,12 +120,23 @@ async fn authority_dev_real_proof_clone_clock_and_replay() {
     )
     .await
     .unwrap();
+    target(&runtime, "auth-proof-native").await;
     let key = SigningKey::from_slice(&[31; 32]).unwrap();
     let client = pair_browser(&runtime, &key, "authority proof development").await;
     let policy = runtime.application_policy().unwrap();
     let (actor, connection, compact) = signed_actor(&policy, &key, &client).await;
     assert!(policy.authenticate(connection, &compact).await.is_err());
     let authority = runtime.request_authority().unwrap();
+    let client_entity = EntityId::decode(&client).unwrap();
+    let root_key =
+        crate::domain::native::NativeSessionKey::from_config(Some(id(1)), "auth-proof-native")
+            .unwrap();
+    authority.session_control().claim_initial(
+        &root_key,
+        client_entity,
+        "authority proof development",
+        true,
+    );
     let context = authority
         .authorize(&actor.clone(), id(2), QueueAction::Submit)
         .await

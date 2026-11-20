@@ -1503,23 +1503,63 @@ where
                     .await?;
                 let capacity = native.core.capacity_resource(&source, &key)?;
                 *capacity.record.lock().map_err(|_| DispatchError::Stopped)? = Some(record);
-                let mut activity = source
-                    .capacity_activity
-                    .lock()
-                    .map_err(|_| DispatchError::Stopped)?;
-                activity.created(key.native_id(), wire, std::time::Instant::now());
-                activity.verify_root(key.native_id())?;
-                let _gate = source
-                    .pre
-                    .authority
-                    .gate
-                    .lock()
-                    .map_err(|_| DispatchError::Stopped)?;
-                source
-                    .pre
-                    .authority
-                    .quarantined
-                    .store(activity.has_unowned(), std::sync::atomic::Ordering::Release);
+                {
+                    let mut activity = source
+                        .capacity_activity
+                        .lock()
+                        .map_err(|_| DispatchError::Stopped)?;
+                    activity.created(key.native_id(), wire, std::time::Instant::now());
+                    activity.verify_root(key.native_id())?;
+                    let _gate = source
+                        .pre
+                        .authority
+                        .gate
+                        .lock()
+                        .map_err(|_| DispatchError::Stopped)?;
+                    source
+                        .pre
+                        .authority
+                        .quarantined
+                        .store(activity.has_unowned(), std::sync::atomic::Ordering::Release);
+                }
+                if let Some(display_name) = native
+                    .core
+                    .repository
+                    .trusted_client_display_name(
+                        operation.registration.actor,
+                        &native.core.deadline()?,
+                    )
+                    .await?
+                {
+                    let claimed = native.core.session_control.claim_initial(
+                        &key,
+                        operation.registration.actor,
+                        &display_name,
+                        true,
+                    );
+                    let outcome_json = serde_json::json!({
+                        "controllerClientId": operation.registration.actor.encode(),
+                        "controllerDisplayName": display_name,
+                        "controlEpoch": claimed.snapshot.control_epoch.to_string(),
+                        "rootTargetId": claimed.snapshot.root_target_id.map(EntityId::encode),
+                    })
+                    .to_string();
+                    let occurred_at = native.core.clock.unix_millis().div_euclid(1000);
+                    native
+                        .core
+                        .repository
+                        .record_control_security_audit(
+                            Some(operation.registration.actor),
+                            "session.control.initial",
+                            &key,
+                            outcome_json,
+                            occurred_at,
+                            &native.core.deadline()?,
+                        )
+                        .await?;
+                } else {
+                    native.core.session_control.mark_loaded(&key);
+                }
             }
             return write_fact(
                 native,

@@ -288,6 +288,8 @@ where
                     } else {
                         let reason = match rejection {
                             ApprovalRejection::InvalidActor => "invalid_actor",
+                            ApprovalRejection::SessionNotControlled => "session_not_controlled",
+                            ApprovalRejection::SessionTreeUnverified => "session_tree_unverified",
                             ApprovalRejection::UnknownRegistration => "unknown_registration",
                             ApprovalRejection::Conflict => "conflict",
                             ApprovalRejection::AlreadyDecided => "already_decided",

@@ -259,13 +259,47 @@ where
         target: EntityId,
         action: Option<QueueAction>,
     ) -> Result<CurrentRequestActor, RegistryError> {
+        self.actor_with_epoch(actor, target, action, None, None)
+            .await
+    }
+    async fn actor_with_epoch(
+        &self,
+        actor: &A::Actor,
+        target: EntityId,
+        action: Option<QueueAction>,
+        registration: Option<RegistrationId>,
+        expected_control_epoch: Option<u64>,
+    ) -> Result<CurrentRequestActor, RegistryError> {
         self.inner.core.running()?;
-        let context = match action {
-            Some(a) => self.inner.authority.authorize(actor, target, a).await?,
-            None => self.inner.authority.authorize_read(actor, target).await?,
+        let (context, control_root, control_epoch) = match (action, registration) {
+            (Some(a), Some(reg_id)) => {
+                self.inner
+                    .authority
+                    .authorize_input_consume(actor, target, a, reg_id, expected_control_epoch)
+                    .await?
+            }
+            (Some(a), None) => {
+                self.inner
+                    .authority
+                    .authorize_with_epoch(actor, target, a, expected_control_epoch)
+                    .await?
+            }
+            (None, _) => {
+                let context = self.inner.authority.authorize_read(actor, target).await?;
+                let native = self.inner.authority.resolve_target(target).await?;
+                return Ok(CurrentRequestActor::new(context, target, native, None));
+            }
         };
         let native = self.inner.authority.resolve_target(target).await?;
-        Ok(CurrentRequestActor::new(context, target, native, action))
+        Ok(CurrentRequestActor::with_control(
+            context,
+            target,
+            native,
+            action,
+            control_root,
+            control_epoch,
+            expected_control_epoch,
+        ))
     }
     /// # Errors
     /// The trusted validator rejects invalid complete structures without exposing their body.
@@ -306,11 +340,31 @@ where
         mutation: &ValidatedMutation<V::Body>,
         requested: Option<RegistrationId>,
     ) -> impl Future<Output = Result<RegistrationFact, RegistryError>> + Send + 'a {
+        self.register_with_id_and_epoch(actor, target, mutation, requested, None)
+    }
+    /// # Errors
+    /// Returns a registry error when authorization, identity validation, or registration fails.
+    pub fn register_with_id_and_epoch<'a>(
+        &'a self,
+        actor: &'a A::Actor,
+        target: EntityId,
+        mutation: &ValidatedMutation<V::Body>,
+        requested: Option<RegistrationId>,
+        expected_control_epoch: Option<u64>,
+    ) -> impl Future<Output = Result<RegistrationFact, RegistryError>> + Send + 'a {
         // Copy metadata synchronously so the async future never requires Body: Sync or Clone.
         let descriptor = mutation.intent(EntityId::from_bytes([0; 16]), target);
         async move {
             let descriptor = descriptor?;
-            let current = self.actor(actor, target, Some(descriptor.action())).await?;
+            let current = self
+                .actor_with_epoch(
+                    actor,
+                    target,
+                    Some(descriptor.action()),
+                    None,
+                    expected_control_epoch,
+                )
+                .await?;
             let intent = RegisteredIntent::new(
                 current.context().client_id,
                 descriptor.action(),
@@ -344,6 +398,12 @@ where
                 };
                 match deadline.run(registration).await {
                     Err(RegistryError::Conflict) if requested.is_none() => {}
+                    Ok(fact) => {
+                        self.inner
+                            .authority
+                            .record_input_registration(&current, fact.id());
+                        return Ok(fact);
+                    }
                     result => return result,
                 }
             }
@@ -356,18 +416,124 @@ where
         id: RegistrationId,
         mutation: ValidatedMutation<V::Body>,
     ) -> ConsumeReply<V::Body> {
-        self.consume_inner(actor, target, id, mutation, None).await
+        self.consume_inner(actor, target, id, mutation, None, None)
+            .await
     }
-    pub(crate) async fn consume_observed(
+    pub async fn consume_with_epoch(
+        &self,
+        actor: &A::Actor,
+        target: EntityId,
+        id: RegistrationId,
+        mutation: ValidatedMutation<V::Body>,
+        expected_control_epoch: Option<u64>,
+    ) -> ConsumeReply<V::Body> {
+        self.consume_inner(actor, target, id, mutation, None, expected_control_epoch)
+            .await
+    }
+    pub(crate) async fn consume_observed_with_epoch(
         &self,
         actor: &A::Actor,
         target: EntityId,
         id: RegistrationId,
         mutation: ValidatedMutation<V::Body>,
         custody: Arc<super::ConsumptionCustody>,
+        expected_control_epoch: Option<u64>,
     ) -> ConsumeReply<V::Body> {
-        self.consume_inner(actor, target, id, mutation, Some(custody))
+        self.consume_inner(
+            actor,
+            target,
+            id,
+            mutation,
+            Some(custody),
+            expected_control_epoch,
+        )
+        .await
+    }
+    pub(crate) async fn preflight_register_control(
+        &self,
+        actor: &A::Actor,
+        target: EntityId,
+        action: QueueAction,
+        expected_control_epoch: Option<u64>,
+    ) -> Result<(), RegistryError> {
+        self.inner.core.running()?;
+        self.inner
+            .authority
+            .authorize_with_epoch(actor, target, action, expected_control_epoch)
+            .await?;
+        Ok(())
+    }
+    pub(crate) async fn preflight_consume_control(
+        &self,
+        actor: &A::Actor,
+        target: EntityId,
+        action: QueueAction,
+        registration: RegistrationId,
+        expected_control_epoch: Option<u64>,
+    ) -> Result<(), RegistryError> {
+        self.inner.core.running()?;
+        self.inner
+            .authority
+            .authorize_input_consume(actor, target, action, registration, expected_control_epoch)
+            .await?;
+        Ok(())
+    }
+    async fn try_settled_replay(
+        &self,
+        actor: &A::Actor,
+        target: EntityId,
+        id: RegistrationId,
+        mutation: ValidatedMutation<V::Body>,
+    ) -> ConsumeReply<V::Body> {
+        let reader = match self.actor(actor, target, None).await {
+            Ok(reader) => reader,
+            Err(error) => {
+                return ConsumeReply::Refused {
+                    error,
+                    returned: mutation,
+                };
+            }
+        };
+        let intent = match mutation.intent(reader.context().client_id, target) {
+            Ok(intent) => intent,
+            Err(error) => {
+                return ConsumeReply::Refused {
+                    error,
+                    returned: mutation,
+                };
+            }
+        };
+        let deadline = io_deadline();
+        match deadline
+            .run(self.inner.repository.read(&reader, target, id, &deadline))
             .await
+        {
+            Ok(fact) if matches!(fact, RequestFact::Settled { .. }) => {
+                let matched = matches!(
+                    &fact,
+                    RequestFact::Settled { registration, .. } if registration.intent() == &intent
+                );
+                if matched {
+                    ConsumeReply::Resolved {
+                        fact,
+                        returned: Some(mutation),
+                    }
+                } else {
+                    ConsumeReply::Refused {
+                        error: RegistryError::Conflict,
+                        returned: mutation,
+                    }
+                }
+            }
+            Ok(_) | Err(RegistryError::UnknownRegistration) => ConsumeReply::Refused {
+                error: RegistryError::SessionNotControlled,
+                returned: mutation,
+            },
+            Err(error) => ConsumeReply::Refused {
+                error,
+                returned: mutation,
+            },
+        }
     }
     async fn consume_inner(
         &self,
@@ -376,9 +542,25 @@ where
         id: RegistrationId,
         mutation: ValidatedMutation<V::Body>,
         custody: Option<Arc<super::ConsumptionCustody>>,
+        expected_control_epoch: Option<u64>,
     ) -> ConsumeReply<V::Body> {
-        let current = match self.actor(actor, target, Some(mutation.action())).await {
+        let current = match self
+            .actor_with_epoch(
+                actor,
+                target,
+                Some(mutation.action()),
+                Some(id),
+                expected_control_epoch,
+            )
+            .await
+            .and_then(|current| {
+                self.inner.authority.reverify_consume(&current, id)?;
+                Ok(current)
+            }) {
             Ok(actor) => Arc::new(actor),
+            Err(RegistryError::SessionNotControlled) => {
+                return self.try_settled_replay(actor, target, id, mutation).await;
+            }
             Err(error) => {
                 return ConsumeReply::Refused {
                     error,
@@ -412,6 +594,12 @@ where
             let installed =
                 match self.install_pending(&owner, current.clone(), id, &intent, &mut mutation) {
                     Ok(value) => value,
+                    Err(RegistryError::SessionNotControlled) => {
+                        if let Some(returned) = mutation.take() {
+                            return self.try_settled_replay(actor, target, id, returned).await;
+                        }
+                        return refused(RegistryError::SessionNotControlled, mutation, id);
+                    }
                     Err(error) => return refused(error, mutation, id),
                 };
             match installed {
@@ -472,6 +660,7 @@ where
             }
             Some(_) => Installation::Wait,
             None => {
+                self.inner.authority.reverify_consume(&current, id)?;
                 let operation = random_id()?;
                 let context = self.context();
                 let ticket = Arc::new(());
@@ -671,6 +860,14 @@ where
         let Some((actor, probe, at)) = args else {
             return;
         };
+        if let Err(error) = self
+            .inner
+            .authority
+            .reverify_consume(&actor, probe.registration_id())
+        {
+            Self::record_error(&owner, operation, &ticket, error);
+            return;
+        }
         let deadline = io_deadline();
         let result = deadline
             .run(self.inner.repository.begin_consume(
@@ -915,6 +1112,8 @@ where
             && matches!(
                 error,
                 RegistryError::InvalidActor
+                    | RegistryError::SessionNotControlled
+                    | RegistryError::SessionTreeUnverified
                     | RegistryError::InvalidTarget
                     | RegistryError::InvalidIntent
                     | RegistryError::UnknownRegistration

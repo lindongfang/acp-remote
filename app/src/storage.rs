@@ -39,6 +39,7 @@ struct StorageInner {
     #[cfg(test)]
     product_store: crate::session_storage::product_commands::ProductStore,
     request_registry: crate::session_storage::request_registry::SqliteRequestRegistry,
+    session_control: Arc<crate::application::session_control::SessionControlCoordinator>,
     coordinator: runtime_coordinator::StorageRuntimeCoordinator,
     #[cfg(test)]
     queue_randoms: Arc<crate::application::request_registry::random_hooks::Controller>,
@@ -69,6 +70,12 @@ impl Storage {
             self.request_registry(),
             configuration,
         )
+    }
+    #[must_use]
+    pub(crate) fn session_control(
+        &self,
+    ) -> Arc<crate::application::session_control::SessionControlCoordinator> {
+        self.inner.session_control.clone()
     }
     #[must_use]
     pub fn request_registry(
@@ -469,6 +476,9 @@ impl Storage {
                         pool.clone(),
                         Arc::downgrade(scope),
                     ),
+                session_control: Arc::new(
+                    crate::application::session_control::SessionControlCoordinator::new(),
+                ),
                 coordinator: runtime_coordinator::StorageRuntimeCoordinator::new(),
                 #[cfg(test)]
                 queue_randoms: Arc::default(),
@@ -658,7 +668,10 @@ impl Storage {
 
     #[must_use]
     pub(crate) fn trust_store(&self) -> crate::trust::TrustStore {
-        crate::trust::TrustStore::new(self.request_registry())
+        crate::trust::TrustStore::new_with_session_control(
+            self.request_registry(),
+            self.session_control(),
+        )
     }
 
     #[cfg(test)]

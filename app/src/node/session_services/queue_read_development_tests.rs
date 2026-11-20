@@ -227,9 +227,15 @@ async fn queue_read_call(
     payload: serde_json::Value,
 ) -> serde_json::Value {
     send_json(&mut f.peers[socket], &serde_json::json!({"v":1,"type":"command","requestId":Id128::new([marker;16]),"action":action,"payload":payload})).await;
-    let value = next_json(&mut f.peers[socket], Duration::from_secs(5)).await;
-    assert_eq!(value["requestId"], Id128::new([marker; 16]).to_base64url());
-    value
+    let expected = Id128::new([marker; 16]).to_base64url();
+    loop {
+        let value = next_json(&mut f.peers[socket], Duration::from_secs(5)).await;
+        if value["type"] != "result" {
+            continue;
+        }
+        assert_eq!(value["requestId"], expected);
+        return value;
+    }
 }
 
 async fn acpi_begin(f: &mut Case, socket: usize, marker: u8) -> Id128 {
@@ -2717,6 +2723,16 @@ async fn queue_command_wss_applies_edit_cancel_prioritize_and_resume() {
                 registrations.push(registration);
             }
 
+            let takeover = queue_read_call(
+                f,
+                2,
+                149,
+                "session.control.takeover",
+                serde_json::json!({"targetId": target_id}),
+            )
+            .await;
+            assert_eq!(takeover["ok"], true, "{takeover}");
+
             let edited_body = body_for(
                 f,
                 2,
@@ -3004,6 +3020,16 @@ async fn queue_command_resume_preserves_three_suspended_items_and_same_identity(
             let paused = stopped["result"]["waiting"].as_array().unwrap();
             assert_eq!(paused.len(), 3);
             assert!(paused.iter().all(|entry| entry["suspended"] == true));
+
+            let takeover = queue_read_call(
+                f,
+                2,
+                235,
+                "session.control.takeover",
+                serde_json::json!({"targetId": target_id}),
+            )
+            .await;
+            assert_eq!(takeover["ok"], true, "{takeover}");
 
             let resume_payload = serde_json::json!({
                 "targetId": target_id,
@@ -3357,6 +3383,16 @@ async fn queue_read_device_revoked_actor_keeps_accepted_items_and_other_actors_l
             assert_eq!(waiting[0].as_object().unwrap().len(), 5);
             assert!(waiting[0].get("body").is_none());
             assert!(waiting[0].get("digest").is_none());
+
+            let takeover = queue_read_call(
+                f,
+                2,
+                236,
+                "session.control.takeover",
+                serde_json::json!({"targetId": target_id}),
+            )
+            .await;
+            assert_eq!(takeover["ok"], true, "{takeover}");
 
             let other_body = body_for(f, 2, UploadPurpose::Submit, b"[]").await;
             let other_accepted = queue_read_call(

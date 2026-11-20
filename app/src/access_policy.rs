@@ -20,6 +20,7 @@ pub struct AuthenticatedActor {
     node_id: String,
     actor_issuer: Arc<()>,
     pub(crate) client_id_string: String,
+    pub(crate) display_name: String,
     pub(crate) public_key: Vec<u8>,
     pub(crate) auth_generation: i64,
 }
@@ -54,6 +55,11 @@ impl AuthenticatedActor {
     #[must_use]
     pub fn client_id(&self) -> &str {
         &self.client_id_string
+    }
+
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        &self.display_name
     }
 }
 
@@ -220,6 +226,7 @@ impl ApplicationPolicy {
             node_id: self.node_id.clone(),
             actor_issuer: Arc::clone(&self.actor_issuer),
             client_id_string: record.client_id,
+            display_name: record.display_name,
             public_key: record.public_key,
             auth_generation: record.auth_generation,
         })

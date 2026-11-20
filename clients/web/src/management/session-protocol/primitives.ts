@@ -138,6 +138,38 @@ export function closed<S extends Shape>(
   ) as ShapeValue<S>;
 }
 
+export function closedWithOptional<S extends Shape, O extends Shape>(
+  value: JsonValue | undefined,
+  requiredShape: S,
+  optionalShape: O,
+): ShapeValue<S> & { readonly [K in keyof O]?: ReturnType<O[K]> } {
+  const source = object(value);
+  const requiredKeys = Object.keys(requiredShape);
+  const optionalKeys = Object.keys(optionalShape);
+  const actual = Object.keys(source);
+  if (
+    requiredKeys.some((key) => !Object.hasOwn(source, key)) ||
+    actual.some(
+      (key) =>
+        !Object.hasOwn(requiredShape, key) && !Object.hasOwn(optionalShape, key),
+    )
+  ) {
+    throw new SessionProtocolError("invalid_command");
+  }
+  const validated: Record<string, unknown> = {};
+  for (const key of requiredKeys) {
+    validated[key] = requiredShape[key]!(source[key]);
+  }
+  for (const key of optionalKeys) {
+    if (Object.hasOwn(source, key)) {
+      validated[key] = optionalShape[key]!(source[key]);
+    }
+  }
+  return Object.freeze(validated) as ShapeValue<S> & {
+    readonly [K in keyof O]?: ReturnType<O[K]>;
+  };
+}
+
 export function oneOf<const T extends readonly string[]>(...values: T) {
   return (value: JsonValue | undefined): T[number] => {
     if (typeof value !== "string" || !values.includes(value)) {

@@ -115,6 +115,7 @@ async fn automatic_scan_failed_registration_never_reports_enabled() {
         service.native_clock(),
         runtime_epoch,
         claim,
+        Arc::default(),
         options(),
     );
     core.status.store(1, Ordering::Release);

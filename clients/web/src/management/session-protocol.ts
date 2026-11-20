@@ -74,3 +74,6 @@ export type {
 export {
   decodeSessionServerBinary, encodeSessionCommand, parseSessionCommand,
 } from "./session-protocol/wire-codec";
+
+export type { SessionControlSnapshot } from "./session-protocol/control";
+export { parseSessionControlSnapshot } from "./session-protocol/control";

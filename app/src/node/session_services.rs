@@ -256,6 +256,46 @@ impl NodeManagementSessionServices {
     pub(crate) fn source_sessions(&self) -> super::source_sessions::NodeSourceSessionManagement {
         self.source_sessions.clone()
     }
+    #[must_use]
+    pub(crate) fn session_control(
+        &self,
+    ) -> Arc<crate::application::session_control::SessionControlCoordinator> {
+        self.release_authority.session_control().clone()
+    }
+    pub(crate) async fn control_actor(
+        &self,
+        actor: &AuthenticatedActor,
+    ) -> Result<crate::domain::ActorContext, RegistryError> {
+        self.release_authority.current(actor).await
+    }
+    pub(crate) async fn resolve_control_root(
+        &self,
+        target: EntityId,
+    ) -> Result<crate::session_storage::request_registry::ResolvedControlRoot, RegistryError> {
+        self.release_authority.resolve_control_root(target).await
+    }
+    pub(crate) async fn trusted_client_display_name(
+        &self,
+        client_id: EntityId,
+    ) -> Result<Option<String>, RegistryError> {
+        self.release_authority
+            .registry()
+            .trusted_client_display_name(client_id)
+            .await
+    }
+    pub(crate) async fn append_control_security_audit(
+        &self,
+        actor_id: Option<&str>,
+        action: &str,
+        target_id: &str,
+        outcome: &str,
+        occurred_at: i64,
+    ) -> Result<(), RegistryError> {
+        self.release_authority
+            .registry()
+            .append_control_security_audit(actor_id, action, target_id, outcome, occurred_at)
+            .await
+    }
     pub(crate) async fn register_workspace(
         &self,
         actor: &AuthenticatedActor,
@@ -272,7 +312,8 @@ impl NodeManagementSessionServices {
         native_session_id: &str,
         workspace: EntityId,
     ) -> Result<ProductTargetRecord, CatalogFailure> {
-        self.catalog
+        let record = self
+            .catalog
             .register_target(
                 actor,
                 source,
@@ -280,7 +321,18 @@ impl NodeManagementSessionServices {
                 workspace,
                 &native_release_deadline(),
             )
+            .await?;
+        if let Ok(resolved) = self
+            .release_authority
+            .resolve_control_root(record.target_id)
             .await
+            && resolved.root_target_id == Some(record.target_id)
+        {
+            self.release_authority
+                .session_control()
+                .update_root_target_id(&resolved.root, record.target_id);
+        }
+        Ok(record)
     }
     pub(crate) async fn catalog_inventory(
         &self,

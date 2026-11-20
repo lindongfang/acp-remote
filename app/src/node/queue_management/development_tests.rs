@@ -76,6 +76,17 @@ impl Case {
         }
         let key = SigningKey::from_slice(&[69; 32]).unwrap();
         self.client_id = pair_browser(node, &key, "Upload author fixture").await;
+        let client_entity = crate::domain::EntityId::decode(&self.client_id).unwrap();
+        let session_control = storage.session_control();
+        for n in [2u8, 3] {
+            let root_key = crate::domain::native::NativeSessionKey::from_config(
+                Some(target(1)),
+                &format!("upload-native-{n}"),
+            )
+            .unwrap();
+            session_control.claim_initial(&root_key, client_entity, "Upload author fixture", true);
+            session_control.update_root_target_id(&root_key, target(n));
+        }
         for _ in 0..2 {
             let observed = node
                 .management

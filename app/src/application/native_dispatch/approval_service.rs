@@ -701,7 +701,8 @@ where
         actor: &A::Actor,
         input: SubmitDecision,
     ) -> Result<DecisionAcceptance, NecessaryWriteError> {
-        self.authority.authorize_read(actor).await?;
+        let reader = self.authority.authorize_read(actor).await?;
+        self.verify_reader(&reader)?;
         let sources = self
             .native
             .core
@@ -755,14 +756,38 @@ where
             }
             changed.await;
         }
-        let actor = self
-            .authority
-            .authorize_decision(actor, Self::association_target(&slot)?)
-            .await?;
-        self.verify_actor(&actor, &source, &permission, &slot)?;
-        if actor.context.client_id != registration.probe.metadata().actor {
+        if reader.context.client_id != registration.probe.metadata().actor {
             return Err(ApprovalRejection::InvalidActor.into());
         }
+        let existing_decision = {
+            let state = slot.state.lock().map_err(|_| unavailable())?;
+            state.decision.as_ref().and_then(|stored| {
+                if stored.record().actor == reader.context.client_id
+                    && stored.record().registration == input.registration()
+                {
+                    Some(decision_summary(stored, &slot))
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(summary) = existing_decision {
+            return Ok(DecisionAcceptance::Existing(summary));
+        }
+        let actor = self
+            .authority
+            .authorize_decision_with_epoch(
+                actor,
+                Self::association_target(&slot)?,
+                input.expected_control_epoch(),
+            )
+            .await?;
+        self.verify_actor(&actor, &source, &permission, &slot)?;
+        self.authority.verify_approval_decide(
+            &actor,
+            input.registration(),
+            input.expected_control_epoch(),
+        )?;
         let choice = slot
             .choices
             .iter()
@@ -781,6 +806,11 @@ where
             if let Some(operation) = &state.admission {
                 operation.clone()
             } else {
+                self.authority.verify_approval_decide(
+                    &actor,
+                    input.registration(),
+                    input.expected_control_epoch(),
+                )?;
                 if !original_waiting {
                     return Err(ApprovalRejection::InvalidRequest.into());
                 }
@@ -904,7 +934,9 @@ where
                             match &result {
                                 Ok(stored) => state.decision = Some(stored.clone()),
                                 Err(NecessaryWriteError::Rejected(
-                                    ApprovalRejection::InvalidActor,
+                                    ApprovalRejection::InvalidActor
+                                    | ApprovalRejection::SessionNotControlled
+                                    | ApprovalRejection::SessionTreeUnverified,
                                 )) => {
                                     if state
                                         .admission
@@ -923,6 +955,8 @@ where
                                 result,
                                 Err(NecessaryWriteError::Rejected(
                                     ApprovalRejection::InvalidActor
+                                        | ApprovalRejection::SessionNotControlled
+                                        | ApprovalRejection::SessionTreeUnverified
                                 ))
                             )
                         {
@@ -957,7 +991,15 @@ where
                                     &retained,
                                 )
                                 .await;
-                        } else if let Err(error) = result {
+                        } else if let Err(error) = result
+                            && !matches!(
+                                error,
+                                NecessaryWriteError::Rejected(
+                                    ApprovalRejection::SessionNotControlled
+                                        | ApprovalRejection::SessionTreeUnverified
+                                )
+                            )
+                        {
                             let _ = core
                                 .cancel_actual_approval_save_failure(
                                     &original_source,
@@ -1023,7 +1065,11 @@ where
             .await?;
         let actor = self
             .authority
-            .authorize_decision(actor, Self::association_target(&slot)?)
+            .authorize_decision_with_epoch(
+                actor,
+                Self::association_target(&slot)?,
+                input.expected_control_epoch(),
+            )
             .await?;
         self.verify_actor(&actor, &source, &permission, &slot)?;
         let choice = slot
@@ -1144,7 +1190,15 @@ where
                     }
                     retained.changed.notify_waiters();
                     approval.publish_change();
-                    if let Err(error) = result {
+                    if let Err(error) = result
+                        && !matches!(
+                            error,
+                            NecessaryWriteError::Rejected(
+                                ApprovalRejection::SessionNotControlled
+                                    | ApprovalRejection::SessionTreeUnverified
+                            )
+                        )
+                    {
                         let _ = core
                             .cancel_actual_approval_save_failure(
                                 &original_source,
@@ -1175,6 +1229,8 @@ where
             let result = operation.result.lock().map_err(|_| unavailable())?.clone();
             if let Some(result) = result {
                 result?;
+                self.authority
+                    .record_approval_registration(&actor, registration);
                 return Ok(registration);
             }
             changed.await;

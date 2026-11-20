@@ -232,7 +232,12 @@ impl R3WssCase {
             }),
         )
         .await;
-        let response = next_json(&mut self.peers[peer_idx].socket, Duration::from_secs(15)).await;
+        let response = loop {
+            let frame = next_json(&mut self.peers[peer_idx].socket, Duration::from_secs(15)).await;
+            if frame["type"] == "result" {
+                break frame;
+            }
+        };
         assert_eq!(
             response["requestId"],
             request_id.to_base64url(),

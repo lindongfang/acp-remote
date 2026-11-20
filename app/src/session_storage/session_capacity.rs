@@ -348,6 +348,44 @@ impl CapacityRepository for SqliteNativeDispatch {
             Ok(())
         })
     }
+
+    fn trusted_client_display_name<'a>(
+        &'a self,
+        client: EntityId,
+        deadline: &'a RegistryDeadline,
+    ) -> BoxFuture<'a, Result<Option<String>, DispatchError>> {
+        Box::pin(async move {
+            deadline
+                .run(self.registry.trusted_client_display_name(client))
+                .await
+                .map_err(DispatchError::from)
+        })
+    }
+
+    fn record_control_security_audit<'a>(
+        &'a self,
+        actor: Option<EntityId>,
+        action: &'static str,
+        root: &'a NativeSessionKey,
+        outcome_json: String,
+        occurred_at: i64,
+        deadline: &'a RegistryDeadline,
+    ) -> BoxFuture<'a, Result<(), DispatchError>> {
+        Box::pin(async move {
+            let actor_encoded = actor.map(EntityId::encode);
+            let target_id = format!("{}:{}", root.source().0.encode(), root.native_id());
+            deadline
+                .run(self.registry.append_control_security_audit(
+                    actor_encoded.as_deref(),
+                    action,
+                    &target_id,
+                    &outcome_json,
+                    occurred_at,
+                ))
+                .await
+                .map_err(DispatchError::from)
+        })
+    }
 }
 
 async fn release_basis(

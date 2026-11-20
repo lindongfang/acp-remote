@@ -265,6 +265,7 @@ where
     pub(super) close_progress: Arc<super::tasks::CloseProgress>,
     pub(super) last_shutdown: Mutex<Option<super::NativeShutdownReport>>,
     pub(super) claim: Arc<AtomicBool>,
+    pub(super) session_control: Arc<crate::application::session_control::SessionControlCoordinator>,
     pub(super) workers: Mutex<HashMap<NativeSessionKey, Arc<Notify>>>,
     pub(super) runs: Mutex<HashMap<NativeSessionKey, Arc<super::dispatch::RunningDispatch<P>>>>,
 }
@@ -465,6 +466,7 @@ where
         clock: Arc<dyn NodeClock>,
         runtime: RuntimeEpoch,
         claim: Arc<AtomicBool>,
+        session_control: Arc<crate::application::session_control::SessionControlCoordinator>,
         options: NativeRuntimeOptions,
     ) -> Arc<Self> {
         driver.enable_native_extension();
@@ -504,6 +506,7 @@ where
             close_progress,
             last_shutdown: Mutex::new(None),
             claim,
+            session_control,
             workers: Mutex::new(HashMap::new()),
             runs: Mutex::new(HashMap::new()),
         })

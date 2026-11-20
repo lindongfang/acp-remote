@@ -363,3 +363,306 @@ async fn registry_full_u64_binding_and_wrong_outcome_never_alias() {
     storage.close().await;
     area.observe().await;
 }
+
+async fn seed_sct_004_catalog_and_targets(
+    pool: &sqlx::SqlitePool,
+    source: EntityId,
+    actor_id: EntityId,
+    instance_id: EntityId,
+    runtime_epoch: EntityId,
+    conn_epoch: EntityId,
+    profile_id: EntityId,
+) {
+    let catalog_req_id = id(44);
+    let profile_rev = 1_u64.to_be_bytes().to_vec();
+    sqlx::query(
+        "INSERT INTO node_catalog_commands(request_id,actor_id,register_auth_generation,action,state,registered_at_ms,intent_cipher,intent_digest) VALUES(?,?,7,'harness.install','registered',0,X'01',zeroblob(32))",
+    )
+    .bind(catalog_req_id.encode())
+    .bind(actor_id.encode())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO node_launch_profiles(profile_id,revision,harness_id,source_id,payload_format,protected_payload,payload_digest,created_by_request_id,created_at_ms) VALUES(?,?,'old-h',?,1,X'01',zeroblob(32),?,0)",
+    )
+    .bind(profile_id.encode())
+    .bind(&profile_rev)
+    .bind(source.encode())
+    .bind(catalog_req_id.encode())
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO node_native_source_instances(instance_id,source_id,runtime_epoch,connection_epoch,config_identity,config_revision,owner_kind,lifecycle,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,'test_owned_stream','reserved',0,0)",
+    )
+    .bind(instance_id.encode())
+    .bind(source.encode())
+    .bind(runtime_epoch.encode())
+    .bind(conn_epoch.encode())
+    .bind(profile_id.encode())
+    .bind(&profile_rev)
+    .execute(pool)
+    .await
+    .unwrap();
+
+    for (tid, nid) in [
+        (id(20), "unverified-top"),
+        (id(21), "child-of-old"),
+        (id(22), "child-of-unreg-root"),
+        (id(23), "child-of-unverified"),
+        (id(24), "standalone-top"),
+        (id(25), "cycle-a"),
+        (id(26), "verified-child"),
+    ] {
+        sqlx::query("INSERT INTO product_targets(target_id,source_id,native_id,workspace_id) VALUES(?,?,?,NULL)")
+            .bind(tid.encode())
+            .bind(source.encode())
+            .bind(nid)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+
+async fn seed_sct_004_operations_and_capacity(
+    pool: &sqlx::SqlitePool,
+    source: EntityId,
+    actor_id: EntityId,
+    instance_id: EntityId,
+    runtime_epoch: EntityId,
+    conn_epoch: EntityId,
+    profile_id: EntityId,
+) {
+    let profile_rev = 1_u64.to_be_bytes().to_vec();
+    for (op_id, nid) in [
+        (id(60), "old-native"),
+        (id(61), "unreg-root"),
+        (id(62), "verified-child"),
+    ] {
+        sqlx::query(
+            "INSERT INTO node_source_session_registrations(operation_id,action,actor_id,register_auth_generation,source_id,harness_id,profile_id,profile_revision,workspace_id,launch_path,intent_digest,registered_at_ms) VALUES(?,'create',?,7,?,'old-h',?,?,'old-w','D:/synthetic-unused',zeroblob(32),0)",
+        )
+        .bind(op_id.encode())
+        .bind(actor_id.encode())
+        .bind(source.encode())
+        .bind(profile_id.encode())
+        .bind(&profile_rev)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO node_source_session_operations(operation_id,action,runtime_epoch,admission_auth_generation,admitted_at_ms,operation_state,outcome,source_instance_id,connection_epoch,protocol_version,rpc_id_kind,rpc_id_bytes,frame_length,accepted_length,transport_state,transport_recorded_at_ms,response_kind,native_session_id,response_sequence,response_receipt,response_evidence,result_bytes,ack_state,updated_at_ms,terminal_at_ms) VALUES(?,'create',?,7,0,'terminal','succeeded',?,?,2,'string',?,X'0000000000000001',X'0000000000000001','written',1,'created',?,X'0000000000000001',X'0000000000000001',zeroblob(32),X'0000000000000001','confirmed',2,2)",
+        )
+        .bind(op_id.encode())
+        .bind(runtime_epoch.encode())
+        .bind(instance_id.encode())
+        .bind(conn_epoch.encode())
+        .bind(op_id.encode().into_bytes())
+        .bind(nid)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    for (res_id, nid, create_op, verified) in [
+        (id(50), "old-native", Some(id(60)), 1_i64),
+        (id(51), "unreg-root", Some(id(61)), 1_i64),
+        (id(52), "unverified-top", None, 0_i64),
+        (id(53), "verified-child", Some(id(62)), 1_i64),
+    ] {
+        sqlx::query("INSERT INTO node_session_capacity(reservation_id,source_id,instance_id,runtime_epoch,native_id,create_operation,root_verified,physically_closed,released) VALUES(?,?,?,?,?,?,?,0,0)")
+            .bind(res_id.encode())
+            .bind(source.encode())
+            .bind(instance_id.encode())
+            .bind(runtime_epoch.encode())
+            .bind(nid)
+            .bind(create_op.map(EntityId::encode))
+            .bind(verified)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+
+async fn seed_sct_004_tree(pool: &sqlx::SqlitePool, source: EntityId) {
+    let actor_id = id(1);
+    let instance_id = id(40);
+    let runtime_epoch = id(41);
+    let conn_epoch = id(42);
+    let profile_id = id(43);
+
+    seed_sct_004_catalog_and_targets(
+        pool,
+        source,
+        actor_id,
+        instance_id,
+        runtime_epoch,
+        conn_epoch,
+        profile_id,
+    )
+    .await;
+    seed_sct_004_operations_and_capacity(
+        pool,
+        source,
+        actor_id,
+        instance_id,
+        runtime_epoch,
+        conn_epoch,
+        profile_id,
+    )
+    .await;
+    seed_sct_004_parents(pool, source, instance_id, runtime_epoch, conn_epoch).await;
+}
+
+async fn seed_sct_004_parents(
+    pool: &sqlx::SqlitePool,
+    source: EntityId,
+    instance_id: EntityId,
+    runtime_epoch: EntityId,
+    conn_epoch: EntityId,
+) {
+    for (idx, (child, parent)) in [
+        ("child-of-old", "old-native"),
+        ("child-of-unreg-root", "unreg-root"),
+        ("child-of-unverified", "unverified-top"),
+        ("cycle-a", "cycle-b"),
+        ("cycle-b", "cycle-a"),
+        ("verified-child", "old-native"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        sqlx::query("INSERT INTO node_session_parents(source_id,child_native_id,parent_native_id,observed_instance,runtime_epoch,connection_epoch,sequence,receipt,fingerprint,observed_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?)")
+            .bind(source.encode())
+            .bind(child)
+            .bind(parent)
+            .bind(instance_id.encode())
+            .bind(runtime_epoch.encode())
+            .bind(conn_epoch.encode())
+            .bind((u64::try_from(idx + 1).unwrap()).to_be_bytes().to_vec())
+            .bind(1_u64.to_be_bytes().to_vec())
+            .bind(vec![7_u8; 32])
+            .bind(100_i64)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn sct_004_resolve_control_root_boundaries() {
+    let area = Area::new();
+    schema4(&area).await;
+    {
+        let c = connect(&area).await;
+        let storage_tmp = area.open().await.unwrap();
+        storage_tmp.close().await;
+        c.close().await.unwrap();
+    }
+    area.observe().await;
+
+    let storage = area.open().await.unwrap();
+    let pool = storage.pool_for_test().clone();
+    let source = id(5);
+    seed_sct_004_tree(&pool, source).await;
+
+    let repository = storage.request_registry();
+    assert_eq!(
+        repository.resolve_control_root(id(21)).await,
+        Ok(ResolvedControlRoot {
+            root: NativeSessionKey::from_config(Some(source), "old-native").unwrap(),
+            root_target_id: Some(id(4)),
+        })
+    );
+    assert_eq!(
+        repository.resolve_control_root(id(22)).await,
+        Ok(ResolvedControlRoot {
+            root: NativeSessionKey::from_config(Some(source), "unreg-root").unwrap(),
+            root_target_id: None,
+        })
+    );
+    assert_eq!(
+        repository.resolve_control_root(id(24)).await,
+        Ok(ResolvedControlRoot {
+            root: NativeSessionKey::from_config(Some(source), "standalone-top").unwrap(),
+            root_target_id: Some(id(24)),
+        })
+    );
+    assert_eq!(
+        repository.resolve_control_root(id(20)).await,
+        Err(RegistryError::SessionTreeUnverified)
+    );
+    assert_eq!(
+        repository.resolve_control_root(id(23)).await,
+        Err(RegistryError::SessionTreeUnverified)
+    );
+    assert_eq!(
+        repository.resolve_control_root(id(99)).await,
+        Err(RegistryError::InvalidTarget)
+    );
+    assert_eq!(
+        repository.resolve_control_root(id(25)).await,
+        Err(RegistryError::CorruptState)
+    );
+    assert_eq!(
+        repository.resolve_control_root(id(26)).await,
+        Err(RegistryError::CorruptState)
+    );
+
+    storage.close().await;
+    area.observe().await;
+}
+
+#[tokio::test]
+async fn sct_004_security_audit_boundaries() {
+    let area = Area::new();
+    schema4(&area).await;
+    {
+        let c = connect(&area).await;
+        let storage_tmp = area.open().await.unwrap();
+        storage_tmp.close().await;
+        c.close().await.unwrap();
+    }
+    area.observe().await;
+
+    let storage = area.open().await.unwrap();
+    let pool = storage.pool_for_test().clone();
+    let source = id(5);
+    let repository = storage.request_registry();
+    let actor_str = id(1).encode();
+    repository
+        .append_control_security_audit(
+            Some(&actor_str),
+            "session.control.takeover",
+            &format!("{}:old-native", source.encode()),
+            "{\"controlEpoch\":\"1\"}",
+            1234,
+        )
+        .await
+        .unwrap();
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM security_audit WHERE action='session.control.takeover'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1);
+    let legacy_exists: i64 = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM main.sqlite_schema WHERE name='session_commands')",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(legacy_exists, 0);
+    let mut audit_conn = pool.acquire().await.unwrap();
+    assert!(
+        crate::session_storage::schema::validate_management_audit(&mut audit_conn)
+            .await
+            .is_ok()
+    );
+    drop(audit_conn);
+
+    storage.close().await;
+    area.observe().await;
+}

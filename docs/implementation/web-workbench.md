@@ -8,11 +8,11 @@
 
 1. **基础协议与视图内核层（`src/protocol/*`、`src/views/*`、`src/pairing/*`）**：承载 JWS/WebCrypto 原语、流式时间线与原始载荷检查器、IndexedDB 身份保险库与配对会话状态机，不依赖 `src/management/*`、`src/workbench/*` 或 `src/main.ts`。
 2. **管理协议与客户端传输层（`src/management/`）**：
-   - `session-protocol/` 将会话管理协议按职责拆分为 6 个子模块：`primitives.ts`（闭合对象与基础标量校验原语）、`queue-and-input.ts`（输入队列与正文上传解析）、`catalog.ts`（工作区、Harness、Profile 与 Target 清单解析）、`view-and-approval.ts`（共享视图与严格权限审批解析）、`source-and-capacity.ts`（来源会话发现/创建、原生释放与容量快照解析）、`wire-codec.ts`（36 个线上命令 `SHAPES` 编解码与二进制帧分发）。`session-protocol.ts` 保留为纯 barrel 重导出入口，维持既有公共导出集不变。
+   - `session-protocol/` 将会话管理协议按职责拆分为 7 个子模块：`primitives.ts`（闭合对象与基础标量校验原语，含严格非 `null` 可选 `u64` 辅助 `closedWithOptional`）、`control.ts`（`SessionControlSnapshot` 解析器与校验）、`queue-and-input.ts`（输入队列与正文上传解析）、`catalog.ts`（工作区、Harness、Profile 与 Target 清单解析）、`view-and-approval.ts`（共享视图与严格权限审批解析）、`source-and-capacity.ts`（来源会话发现/创建、原生释放与容量快照解析）、`wire-codec.ts`（线上命令 `SHAPES` 编解码与二进制帧分发）。`session-protocol.ts` 保留为纯 barrel 重导出入口（`<= 120` 行），维持既有公共导出集不变。
    - `catalog-documents.ts` 负责安装 Harness 与初始绑定 Target 的 JSON 文档构造及 `utf16leBase64` 启动环境变量编码；`upload-transfer.ts` 负责输入正文与目录文档共用的分块发送与单在途确认流控；`client.ts` 聚合 `ManagementConnection` 状态机并保持既有公共导出兼容。
 3. **工作台领域控制器层（`src/workbench/`）**：
    - 无状态基础模块：`dom-primitives.ts`（纯 DOM 构造辅助及 WV-15 聚焦输入控件选区快照保存/恢复）与 `error-formatting.ts`（配对、管理请求/连接与会话输入动作错误中性文案映射）。
-   - 领域控制器：`pairing-access-controller.ts`、`device-trust-panel.ts`、`shared-view-controller.ts`、`queued-body-controller.ts`、`session-queue-controller.ts`、`approval-controller.ts`、`capacity-release-controller.ts`、`workspace-catalog-controller.ts`、`source-session-controller.ts`。所有控制器导入零 DOM 副作用，仅通过显式宿主回调端口（Host Port）读取活动连接、连接代际（`managementGeneration`）并触发重绘。
+   - 领域控制器：`pairing-access-controller.ts`、`device-trust-panel.ts`、`shared-view-controller.ts`、`queued-body-controller.ts`、`session-control-controller.ts`（单根会话控制权快照单调代际收敛、三态横幅与只读写按钮禁用门禁）、`session-queue-controller.ts`、`approval-controller.ts`、`capacity-release-controller.ts`、`workspace-catalog-controller.ts`、`source-session-controller.ts`。所有控制器导入零 DOM 副作用，仅通过显式宿主回调端口（Host Port）读取活动连接、连接代际（`managementGeneration`）并触发重绘。
    - 顶层协调器：`management-workbench.ts` 持有连接代际与各领域控制器实例，统一编排认证握手、固定顺序仪表盘渲染、二进制流帧路由与断线/卸载清理钩子。
 4. **浏览器薄启动入口（`src/main.ts`）**：仅负责查找 `#app`、挂载壳层 DOM、绑定明暗主题切换与 `pagehide` / `pageshow` / `online` 浏览器事件并调用 `workbench.boot()`。
 
@@ -26,4 +26,4 @@
 ## 测试边界
 
 - Node 单元测试（`clients/web/tests/*.test.ts`）直接导入 `src/management/*` 与 `src/workbench/*` 实例化控制器并注入轻量替身，不使用 `readFileSync("../src/main.ts")` 源码切片或 `new Function` 动态执行。
-- 真实浏览器生产入口与独立 DOM 验证继续由 `clients/web/tests/browser/session-view-main.ts` 通过 `await import("../../src/main.ts")` 覆盖 WV-13..WV-16 契约，`clients/web/tests/browser/` 全目录保持只读零改动。
+- 真实浏览器生产入口与独立 DOM 验证由 `clients/web/tests/browser/session-view-main.ts` 通过 `await import("../../src/main.ts")` 覆盖 WV-13..WV-16 契约；`clients/web/tests/browser/independent-dom/management-peer.ts` 与 `clients/web/tests/browser/independent-dom/FIXTURE-SHA256.md` 随管理协议扩展同步维护并校验一致性。

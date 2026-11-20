@@ -45,8 +45,12 @@ fn resolve_or_build_dev_child(
         return cached.clone();
     }
     let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    let isolated_target = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("target")
+        .join("dev-child-bins");
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| std::ffi::OsString::from("cargo"));
     let output = std::process::Command::new(cargo)
+        .env("CARGO_TARGET_DIR", &isolated_target)
         .arg("build")
         .arg("--manifest-path")
         .arg(&manifest)
@@ -98,6 +102,17 @@ pub fn native_dispatch_dev_child(env_vars: &[&str]) -> std::path::PathBuf {
         env_vars,
         &BIN,
         "native_dispatch_dev_child",
+        "native-dispatch-dev-fixtures",
+    )
+}
+
+#[cfg(all(windows, feature = "native-dispatch-dev-fixtures"))]
+pub fn session_capacity_acceptance_peer() -> std::path::PathBuf {
+    static BIN: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    resolve_or_build_dev_child(
+        &["SESSION_CAPACITY_ACCEPTANCE_PEER"],
+        &BIN,
+        "session_capacity_acceptance_peer",
         "native-dispatch-dev-fixtures",
     )
 }

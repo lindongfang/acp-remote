@@ -137,12 +137,16 @@ pub enum SessionAction {
     InputRegister {
         target_id: Id128,
         operation: QueueMutation,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_control_epoch: Option<DecimalU64>,
     },
     #[serde(rename = "input.consume")]
     InputConsume {
         target_id: Id128,
         registration_id: Id128,
         body_id: Option<Id128>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_control_epoch: Option<DecimalU64>,
     },
     #[serde(rename = "input.request")]
     InputRequest {
@@ -194,9 +198,25 @@ pub enum SessionAction {
     ApprovalRegister {
         approval_id: Id128,
         choice_id: Id128,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_control_epoch: Option<DecimalU64>,
     },
     #[serde(rename = "approval.decide")]
-    ApprovalDecide { approval_registration_id: Id128 },
+    ApprovalDecide {
+        approval_registration_id: Id128,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_control_epoch: Option<DecimalU64>,
+    },
+    #[serde(rename = "session.control.inspect")]
+    SessionControlInspect { target_id: Id128 },
+    #[serde(rename = "session.control.takeover")]
+    SessionControlTakeover { target_id: Id128 },
+    #[serde(rename = "session.control.release")]
+    SessionControlRelease {
+        target_id: Id128,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expected_control_epoch: Option<DecimalU64>,
+    },
     #[serde(rename = "approval.status")]
     ApprovalStatus { approval_id: Id128 },
     #[serde(rename = "native.release.register")]
@@ -309,6 +329,29 @@ fn closed(value: &Map<String, Value>, fields: &[&str]) -> Result<(), SessionProt
         return Err(SessionProtocolError::InvalidCommand);
     }
     Ok(())
+}
+fn closed_with_optional(
+    value: &Map<String, Value>,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<(), SessionProtocolError> {
+    if required.iter().any(|field| !value.contains_key(*field))
+        || value
+            .keys()
+            .any(|key| !required.contains(&key.as_str()) && !optional.contains(&key.as_str()))
+    {
+        return Err(SessionProtocolError::InvalidCommand);
+    }
+    Ok(())
+}
+fn optional_decimal(
+    value: &Map<String, Value>,
+    key: &str,
+) -> Result<Option<DecimalU64>, SessionProtocolError> {
+    if !value.contains_key(key) {
+        return Ok(None);
+    }
+    decimal(value.get(key)).map(Some)
 }
 fn object(value: Option<&Value>) -> Result<&Map<String, Value>, SessionProtocolError> {
     value
@@ -484,6 +527,9 @@ fn parse_action(
         | "source.session.reconcile"
         | "source.session.result.open"
         | "source.session.result.release" => parse_source_session_action(action, p),
+        "session.control.inspect" | "session.control.takeover" | "session.control.release" => {
+            parse_session_control_action(action, p)
+        }
         "view.open" | "view.open_source" | "view.close" | "view.original" | "view.rebind" => {
             parse_view_action(action, p)
         }
@@ -528,14 +574,19 @@ fn parse_input_action(
             }
         }
         "input.register" => {
-            closed(p, &["targetId", "operation"])?;
+            closed_with_optional(p, &["targetId", "operation"], &["expectedControlEpoch"])?;
             SessionAction::InputRegister {
                 target_id: id(p.get("targetId"))?,
                 operation: mutation(p.get("operation"))?,
+                expected_control_epoch: optional_decimal(p, "expectedControlEpoch")?,
             }
         }
         "input.consume" => {
-            closed(p, &["targetId", "registrationId", "bodyId"])?;
+            closed_with_optional(
+                p,
+                &["targetId", "registrationId", "bodyId"],
+                &["expectedControlEpoch"],
+            )?;
             let body_id = match p.get("bodyId") {
                 Some(Value::Null) => None,
                 value => Some(id(value)?),
@@ -544,6 +595,7 @@ fn parse_input_action(
                 target_id: id(p.get("targetId"))?,
                 registration_id: id(p.get("registrationId"))?,
                 body_id,
+                expected_control_epoch: optional_decimal(p, "expectedControlEpoch")?,
             }
         }
         "input.request" => {
@@ -655,16 +707,18 @@ fn parse_approval_action(
             }
         }
         "approval.register" => {
-            closed(p, &["approvalId", "choiceId"])?;
+            closed_with_optional(p, &["approvalId", "choiceId"], &["expectedControlEpoch"])?;
             SessionAction::ApprovalRegister {
                 approval_id: id(p.get("approvalId"))?,
                 choice_id: id(p.get("choiceId"))?,
+                expected_control_epoch: optional_decimal(p, "expectedControlEpoch")?,
             }
         }
         "approval.decide" => {
-            closed(p, &["approvalRegistrationId"])?;
+            closed_with_optional(p, &["approvalRegistrationId"], &["expectedControlEpoch"])?;
             SessionAction::ApprovalDecide {
                 approval_registration_id: id(p.get("approvalRegistrationId"))?,
+                expected_control_epoch: optional_decimal(p, "expectedControlEpoch")?,
             }
         }
         "approval.status" => {
@@ -744,6 +798,34 @@ fn parse_source_session_action(
             closed(p, &["sourceOperationId"])?;
             SessionAction::SourceSessionResultRelease {
                 source_operation_id: id(p.get("sourceOperationId"))?,
+            }
+        }
+        _ => return Err(SessionProtocolError::InvalidCommand),
+    })
+}
+
+fn parse_session_control_action(
+    action: &str,
+    p: &Map<String, Value>,
+) -> Result<SessionAction, SessionProtocolError> {
+    Ok(match action {
+        "session.control.inspect" => {
+            closed(p, &["targetId"])?;
+            SessionAction::SessionControlInspect {
+                target_id: id(p.get("targetId"))?,
+            }
+        }
+        "session.control.takeover" => {
+            closed(p, &["targetId"])?;
+            SessionAction::SessionControlTakeover {
+                target_id: id(p.get("targetId"))?,
+            }
+        }
+        "session.control.release" => {
+            closed_with_optional(p, &["targetId"], &["expectedControlEpoch"])?;
+            SessionAction::SessionControlRelease {
+                target_id: id(p.get("targetId"))?,
+                expected_control_epoch: optional_decimal(p, "expectedControlEpoch")?,
             }
         }
         _ => return Err(SessionProtocolError::InvalidCommand),

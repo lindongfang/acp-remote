@@ -449,6 +449,15 @@ describe("ManagementWorkbench coordinator, dashboard order, frame routing, and l
           occupied: 1,
           remaining: 3,
         })),
+        inspectSessionControl: vi.fn(async (targetId: string) => ({
+          targetId,
+          rootTargetId: targetId,
+          sourceId: id16(1),
+          rootNativeSessionId: "native-1",
+          controllerClientId: record.clientId!,
+          controllerDisplayName: "Workbench Test Client",
+          controlEpoch: "1",
+        })),
         registerNativeRelease: vi.fn(async (targetId: string) => ({
           releaseOperationId: id16(64),
           targetId,

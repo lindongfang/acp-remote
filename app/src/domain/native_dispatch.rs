@@ -119,6 +119,7 @@ impl From<crate::domain::request_registry::RegistryError> for DispatchError {
             R::NodeStopping => Self::NodeStopping,
             R::RuntimeAlreadyStarted => Self::RuntimeAlreadyStarted,
             R::InvalidTarget => Self::InvalidTarget,
+            R::SessionTreeUnverified => Self::SessionTreeUnverified,
             _ => Self::StorageUnavailable,
         }
     }

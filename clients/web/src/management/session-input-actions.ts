@@ -110,6 +110,7 @@ export async function submitSessionText(
   connection: ManagementConnection,
   targetId: string,
   text: string,
+  expectedControlEpoch?: string,
 ): Promise<RegisteredSessionInput> {
   const upload = await uploadSessionText(
     connection,
@@ -123,6 +124,7 @@ export async function submitSessionText(
       targetId,
       { kind: "submit", bodyId: upload.bodyId },
       upload,
+      expectedControlEpoch,
     );
   } catch (error) {
     await releaseAfterRegistrationFailure(connection, upload.uploadId);
@@ -136,6 +138,7 @@ export async function editSessionText(
   itemId: string,
   expectedRevision: string,
   text: string,
+  expectedControlEpoch?: string,
 ): Promise<RegisteredSessionInput> {
   const upload = await uploadSessionText(
     connection,
@@ -154,6 +157,7 @@ export async function editSessionText(
         bodyId: upload.bodyId,
       },
       upload,
+      expectedControlEpoch,
     );
   } catch (error) {
     await releaseAfterRegistrationFailure(connection, upload.uploadId);
@@ -166,12 +170,18 @@ export async function cancelSessionInput(
   targetId: string,
   itemId: string,
   expectedRevision: string,
+  expectedControlEpoch?: string,
 ): Promise<SessionInputFact> {
-  return await registerControlAndConsume(connection, targetId, {
-    kind: "cancel",
-    itemId,
-    expectedRevision,
-  });
+  return await registerControlAndConsume(
+    connection,
+    targetId,
+    {
+      kind: "cancel",
+      itemId,
+      expectedRevision,
+    },
+    expectedControlEpoch,
+  );
 }
 
 export async function prioritizeSessionInput(
@@ -179,12 +189,18 @@ export async function prioritizeSessionInput(
   targetId: string,
   itemId: string,
   expectedRevision: string,
+  expectedControlEpoch?: string,
 ): Promise<SessionInputFact> {
-  return await registerControlAndConsume(connection, targetId, {
-    kind: "prioritize",
-    itemId,
-    expectedRevision,
-  });
+  return await registerControlAndConsume(
+    connection,
+    targetId,
+    {
+      kind: "prioritize",
+      itemId,
+      expectedRevision,
+    },
+    expectedControlEpoch,
+  );
 }
 
 async function waitForPreparedUpload(
@@ -217,18 +233,31 @@ async function registerControlAndConsume(
     QueueMutationDto,
     { readonly kind: "cancel" | "prioritize" }
   >,
+  expectedControlEpoch?: string,
 ): Promise<SessionInputFact> {
   const registrationId = randomId128();
-  const registration = await connection.registerSessionInput(
-    targetId,
-    mutation,
-    registrationId,
-  );
-  const consumed = await connection.consumeSessionInput(
-    targetId,
-    registration.registrationId,
-    null,
-  );
+  const registration =
+    expectedControlEpoch === undefined
+      ? await connection.registerSessionInput(targetId, mutation, registrationId)
+      : await connection.registerSessionInput(
+          targetId,
+          mutation,
+          registrationId,
+          expectedControlEpoch,
+        );
+  const consumed =
+    expectedControlEpoch === undefined
+      ? await connection.consumeSessionInput(
+          targetId,
+          registration.registrationId,
+          null,
+        )
+      : await connection.consumeSessionInput(
+          targetId,
+          registration.registrationId,
+          null,
+          expectedControlEpoch,
+        );
   return extractConsumedFact(consumed);
 }
 
@@ -240,18 +269,31 @@ async function registerAndConsume(
     { readonly kind: "submit" | "edit" }
   >,
   upload: CompletedSessionUpload,
+  expectedControlEpoch?: string,
 ): Promise<RegisteredSessionInput> {
   const registrationId = randomId128();
-  const registration = await connection.registerSessionInput(
-    targetId,
-    mutation,
-    registrationId,
-  );
-  const consumed = await connection.consumeSessionInput(
-    targetId,
-    registration.registrationId,
-    upload.bodyId,
-  );
+  const registration =
+    expectedControlEpoch === undefined
+      ? await connection.registerSessionInput(targetId, mutation, registrationId)
+      : await connection.registerSessionInput(
+          targetId,
+          mutation,
+          registrationId,
+          expectedControlEpoch,
+        );
+  const consumed =
+    expectedControlEpoch === undefined
+      ? await connection.consumeSessionInput(
+          targetId,
+          registration.registrationId,
+          upload.bodyId,
+        )
+      : await connection.consumeSessionInput(
+          targetId,
+          registration.registrationId,
+          upload.bodyId,
+          expectedControlEpoch,
+        );
   const fact = extractConsumedFact(consumed);
   return Object.freeze({ upload, registration, fact });
 }

@@ -21,6 +21,9 @@ pub struct CurrentRequestActor {
     target: EntityId,
     native: NativeSessionKey,
     action: Option<QueueAction>,
+    control_root: Option<NativeSessionKey>,
+    control_epoch: Option<u64>,
+    expected_control_epoch: Option<u64>,
 }
 impl CurrentRequestActor {
     pub(crate) const fn new(
@@ -34,6 +37,28 @@ impl CurrentRequestActor {
             target,
             native,
             action,
+            control_root: None,
+            control_epoch: None,
+            expected_control_epoch: None,
+        }
+    }
+    pub(crate) const fn with_control(
+        context: ActorContext,
+        target: EntityId,
+        native: NativeSessionKey,
+        action: Option<QueueAction>,
+        control_root: Option<NativeSessionKey>,
+        control_epoch: Option<u64>,
+        expected_control_epoch: Option<u64>,
+    ) -> Self {
+        Self {
+            context,
+            target,
+            native,
+            action,
+            control_root,
+            control_epoch,
+            expected_control_epoch,
         }
     }
     #[must_use]
@@ -51,6 +76,18 @@ impl CurrentRequestActor {
     #[must_use]
     pub const fn action(&self) -> Option<QueueAction> {
         self.action
+    }
+    #[must_use]
+    pub const fn control_root(&self) -> Option<&NativeSessionKey> {
+        self.control_root.as_ref()
+    }
+    #[must_use]
+    pub const fn control_epoch(&self) -> Option<u64> {
+        self.control_epoch
+    }
+    #[must_use]
+    pub const fn expected_control_epoch(&self) -> Option<u64> {
+        self.expected_control_epoch
     }
 }
 
@@ -295,6 +332,47 @@ pub trait RequestAuthority: Send + Sync {
         target: EntityId,
         action: QueueAction,
     ) -> impl Future<Output = Result<ActorContext, RegistryError>> + Send;
+    fn authorize_with_epoch(
+        &self,
+        actor: &Self::Actor,
+        target: EntityId,
+        action: QueueAction,
+        _expected_control_epoch: Option<u64>,
+    ) -> impl Future<
+        Output = Result<(ActorContext, Option<NativeSessionKey>, Option<u64>), RegistryError>,
+    > + Send {
+        async move {
+            let context = self.authorize(actor, target, action).await?;
+            Ok((context, None, None))
+        }
+    }
+    fn authorize_input_consume(
+        &self,
+        actor: &Self::Actor,
+        target: EntityId,
+        action: QueueAction,
+        _registration: RegistrationId,
+        expected_control_epoch: Option<u64>,
+    ) -> impl Future<
+        Output = Result<(ActorContext, Option<NativeSessionKey>, Option<u64>), RegistryError>,
+    > + Send {
+        self.authorize_with_epoch(actor, target, action, expected_control_epoch)
+    }
+    fn record_input_registration(
+        &self,
+        _actor: &CurrentRequestActor,
+        _registration: RegistrationId,
+    ) {
+    }
+    /// # Errors
+    /// Returns a registry error when session control changed before commit.
+    fn reverify_consume(
+        &self,
+        _actor: &CurrentRequestActor,
+        _registration: RegistrationId,
+    ) -> Result<(), RegistryError> {
+        Ok(())
+    }
     fn authorize_read(
         &self,
         actor: &Self::Actor,
