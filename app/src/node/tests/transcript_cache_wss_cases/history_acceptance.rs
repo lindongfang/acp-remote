@@ -2347,3 +2347,101 @@ async fn check_unprovable_prompt_history(mixed: bool) {
     reader.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
 }
+
+#[tokio::test]
+async fn hn_f06_reopen_reads_external_history() {
+    check_external_history("reopen").await;
+}
+
+#[tokio::test]
+async fn hn_f06_reconnect_reads_external_history() {
+    check_external_history("reconnect").await;
+}
+
+async fn check_external_history(reason: &str) {
+    use serde_json::json;
+    let f = HarnessFixture::new(reason);
+    configure(&f, &json!({"replayTurns":25}));
+    let root = cold_root(&f).await;
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let mut first = connected(&f, &node, &root.key, &root.id).await;
+    let reader_key = SigningKey::from_slice(&[96; 32]).unwrap();
+    let reader_id = pair_browser(&node, &reader_key, "Live reader").await;
+    let mut held = connected(&f, &node, &reader_key, &reader_id).await;
+    let page = send_command_wait(
+        &mut held,
+        "view.open",
+        json!({"targetId":root.target.encode(),"reason":"first_open","page":{"turns":"10"}}),
+    )
+    .await;
+    assert_eq!(page["result"]["page"]["lastTurn"], "25");
+    let stream = Id128::parse_base64url(page["result"]["streamId"].as_str().unwrap()).unwrap();
+    read_until_snapshot_end(&mut held, stream).await;
+    configure(&f, &json!({"replayTurns":26,"externalRewrite":true}));
+    let key = SigningKey::from_slice(&[98; 32]).unwrap();
+    let id = pair_browser(&node, &key, "Reopening reader").await;
+    let mut third = connected(&f, &node, &key, &id).await;
+    let loads = f
+        .peer_logs()
+        .iter()
+        .filter(|e| e["method"] == "session/load")
+        .count();
+    let opened = send_command_wait(
+        &mut third,
+        "view.open",
+        json!({"targetId":root.target.encode(),"reason":reason}),
+    )
+    .await;
+    let mut stream =
+        Id128::parse_base64url(opened["result"]["streamId"].as_str().unwrap()).unwrap();
+    let mut frames = read_until_snapshot_end(&mut third, stream).await;
+    wait_for_peer_method(&f, "session/load", loads + 1).await;
+    if frames.raw.len() != 26 {
+        if !frames
+            .statuses
+            .iter()
+            .any(|s| s["type"] == "stream_rebound")
+        {
+            read_next_status_matching(
+                &mut third,
+                stream,
+                |s| s["type"] == "stream_rebound",
+                Duration::from_secs(10),
+            )
+            .await;
+        }
+        let rebound =
+            send_command_wait(&mut third, "view.rebind", json!({"streamId":stream})).await;
+        stream = Id128::parse_base64url(rebound["result"]["streamId"].as_str().unwrap()).unwrap();
+        frames = read_until_snapshot_end(&mut third, stream).await;
+    }
+    assert_eq!(frames.raw.len(), 26);
+    for (frame, number) in frames.raw.iter().zip((1..=2).chain(5..=28)) {
+        let prefix = if number == 10 { "edited" } else { "U" };
+        assert_eq!(
+            frame["params"]["update"]["content"]["text"],
+            format!("{prefix}{number:04}")
+        );
+    }
+    // A second read verifies the same bytes. Its completion cannot grant a
+    // replacement stream backed by the preceding read's view epoch.
+    let same = send_command_wait(
+        &mut third,
+        "view.open",
+        json!({"targetId":root.target.encode(),"reason":reason}),
+    )
+    .await;
+    let same_stream = Id128::parse_base64url(same["result"]["streamId"].as_str().unwrap()).unwrap();
+    let unchanged = read_until_snapshot_end(&mut third, same_stream).await;
+    wait_for_peer_method(&f, "session/load", loads + 2).await;
+    assert_eq!(unchanged.raw, frames.raw);
+    let denied =
+        send_command_wait(&mut third, "view.rebind", json!({"streamId":same_stream})).await;
+    assert_eq!(denied["error"]["code"], "stale_cursor");
+    assert!(denied["result"].is_null());
+    third.close(None).await.unwrap();
+    held.close(None).await.unwrap();
+    first.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}

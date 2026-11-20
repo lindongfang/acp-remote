@@ -22,6 +22,7 @@ pub enum OriginalReadProgress {
     Pending,
     CandidateReady { read: ReadEpoch, epoch: ViewEpoch },
     Complete { read: ReadEpoch, epoch: ViewEpoch },
+    ConfirmedCurrent { read: ReadEpoch, epoch: ViewEpoch },
     Failed(ViewError),
 }
 #[derive(Clone)]
@@ -163,8 +164,12 @@ where
             .as_ref()
             .ok_or(ViewError::ReadFailure)?
             .descriptor;
+        let epoch = descriptor.view_epoch();
+        let confirmed_current = status.read_mode() == ReadMode::ReplayComplete
+            && epoch == handle.descriptor.view_epoch()
+            && request.confirms_view(epoch);
         if descriptor.source_stamp() != handle.descriptor.source_stamp()
-            || descriptor.read_epoch() != Some(read)
+            || (!confirmed_current && descriptor.read_epoch() != Some(read))
         {
             return Ok(OriginalReadProgress::Pending);
         }
@@ -178,15 +183,14 @@ where
         }
         self.check_original_handle(client, handle)?;
         Ok(match (status.read_mode(), descriptor.read_mode()) {
-            (ReadMode::Replaying, ReadMode::Replaying) => OriginalReadProgress::CandidateReady {
-                read,
-                epoch: descriptor.view_epoch(),
-            },
+            (ReadMode::ReplayComplete, ReadMode::ReplayComplete) if confirmed_current => {
+                OriginalReadProgress::ConfirmedCurrent { read, epoch }
+            }
+            (ReadMode::Replaying, ReadMode::Replaying) => {
+                OriginalReadProgress::CandidateReady { read, epoch }
+            }
             (ReadMode::ReplayComplete, ReadMode::ReplayComplete) => {
-                OriginalReadProgress::Complete {
-                    read,
-                    epoch: descriptor.view_epoch(),
-                }
+                OriginalReadProgress::Complete { read, epoch }
             }
             _ => OriginalReadProgress::Pending,
         })

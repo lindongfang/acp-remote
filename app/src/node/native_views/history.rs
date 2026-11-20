@@ -271,8 +271,13 @@ impl NodeNativeViewsService {
                 return Err(ViewError::UnsupportedCapability.into());
             }
         } else {
-            if !matches!(read.original_progress(client).await?,OriginalReadProgress::Complete{epoch,..} if epoch==read.descriptor().view_epoch())
-            {
+            let progress = read.original_progress(client).await?;
+            if !matches!(
+                progress,
+                OriginalReadProgress::Complete { epoch, .. }
+                    | OriginalReadProgress::ConfirmedCurrent { epoch, .. }
+                    if epoch == read.descriptor().view_epoch()
+            ) {
                 let next = read.rebind_original(client).await?;
                 let _ = read.release();
                 read = next;

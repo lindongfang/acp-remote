@@ -58,6 +58,7 @@ pub(crate) struct TargetGeneration<R> {
     pub custom_statuses: Mutex<AppendLog<super::segments::CustomStatusEvent>>,
 }
 pub(crate) struct TargetPublication<R> {
+    pub(super) comparison: Mutex<std::sync::Weak<super::read_control::ReadJob>>,
     pub key: NativeSessionKey,
     pub current: RwLock<Arc<TargetGeneration<R>>>,
     pub candidate: RwLock<std::sync::Weak<TargetGeneration<R>>>,
@@ -391,6 +392,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SharedViewOwner<S, R
             custom_statuses: Mutex::new(AppendLog::new()?),
         });
         catalog.append(TargetPublication {
+            comparison: Mutex::default(),
             key: key.clone(),
             current: RwLock::new(published),
             candidate: RwLock::new(std::sync::Weak::new()),
@@ -558,6 +560,12 @@ impl<S, R> SourceCore<S, R> {
             .target_publication(key)?
             .upgrade()
             .ok_or(ViewError::SourceReleased)?;
+        // A reader selecting the in-flight candidate needs its own read epoch
+        // to remain the published generation after completion.
+        let mut comparison = publication
+            .comparison
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?;
         let candidate = publication
             .candidate
             .read()
@@ -576,6 +584,10 @@ impl<S, R> SourceCore<S, R> {
         {
             return Err(ViewError::StaleCursor);
         }
+        if comparison.upgrade().is_some_and(|entry| entry.read == read) {
+            *comparison = std::sync::Weak::new();
+        }
+        drop(comparison);
         Ok(candidate)
     }
     #[allow(
@@ -1105,6 +1117,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
             .try_reserve(1)
             .map_err(|_| ViewError::AllocationFailure)?;
         let index = self.catalog.append(TargetPublication {
+            comparison: Mutex::default(),
             key: key.clone(),
             current: RwLock::new(Arc::clone(&current.published)),
             candidate: RwLock::new(std::sync::Weak::new()),
@@ -1428,6 +1441,18 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
                 .try_reserve(1)
                 .map_err(|_| ViewError::AllocationFailure)?;
             let candidate = target.candidate.take().ok_or(ViewError::ReadFailure)?;
+            if !self.core.probe.is_sealed()
+                && Self::confirm_current_replay(
+                    target,
+                    &candidate,
+                    marker.read,
+                    &records,
+                    self.revision,
+                )?
+            {
+                self.retired.push(candidate);
+                return Ok(());
+            }
             target.current.published.send.seal()?;
             *target
                 .published
@@ -1444,6 +1469,68 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
             target.live = None;
         }
         Ok(())
+    }
+    fn confirm_current_replay(
+        target: &TargetWorker<R>,
+        candidate: &GenerationWorker<R>,
+        read: ReadEpoch,
+        records: &LogSnapshot<SourceRecord<R>>,
+        revision: u64,
+    ) -> Result<bool, ViewError> {
+        let comparison = target
+            .published
+            .comparison
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?
+            .upgrade();
+        if let Some(comparison) = comparison.filter(|c| c.read == read)
+            && Self::unchanged_replay(&target.current, candidate)?
+        {
+            candidate.published.send.seal()?;
+            *target
+                .published
+                .candidate
+                .write()
+                .map_err(|_| ViewError::ReadFailure)? = std::sync::Weak::new();
+            let mut descriptor = target.current.principal.descriptor;
+            descriptor.revision = ViewRevision(revision);
+            Self::publish(&target.current, records, descriptor)?;
+            comparison
+                .confirmed
+                .set(descriptor.epoch)
+                .map_err(|_| ViewError::InvalidStage)?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+    fn unchanged_replay(
+        current: &GenerationWorker<R>,
+        candidate: &GenerationWorker<R>,
+    ) -> Result<bool, ViewError> {
+        let previous = current
+            .published
+            .snapshot
+            .read()
+            .map_err(|_| ViewError::ReadFailure)?
+            .clone();
+        if previous.descriptor.mode != ReadMode::ReplayComplete
+            || previous.descriptor.freshness != Freshness::Revalidating
+            || previous.descriptor.failure.is_some()
+            || candidate.principal.descriptor.failure.is_some()
+        {
+            return Ok(false);
+        }
+        let old = &previous.projection.records;
+        let new = candidate.journal.snapshot()?.records;
+        if old.len() != new.len() {
+            return Ok(false);
+        }
+        for i in 0..old.len() {
+            if old.get(i)?.raw.bytes() != new.get(i)?.raw.bytes() {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
     fn append_retired_segment(
         target: &mut TargetWorker<R>,

@@ -1581,7 +1581,10 @@ impl NativeLocalViewRead {
                 Some(OriginalReadProgress::CandidateReady { .. }) => {
                     NativeLocalReadProgress::CandidateReady
                 }
-                Some(OriginalReadProgress::Complete { .. }) => NativeLocalReadProgress::Complete,
+                Some(
+                    OriginalReadProgress::Complete { .. }
+                    | OriginalReadProgress::ConfirmedCurrent { .. },
+                ) => NativeLocalReadProgress::Complete,
                 Some(OriginalReadProgress::Failed(error)) => NativeLocalReadProgress::Failed(error),
             },
         )
