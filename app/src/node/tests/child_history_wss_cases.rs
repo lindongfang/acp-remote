@@ -190,6 +190,7 @@ enum Interrupt {
     Eof,
     RemoteError,
     LastReader,
+    LastReaderClosed,
     Busy,
     Relation,
     NewSnapshot,
@@ -204,6 +205,7 @@ async fn independent_child_history_aborts_before_publication_over_wss() {
         Interrupt::Eof,
         Interrupt::RemoteError,
         Interrupt::LastReader,
+        Interrupt::LastReaderClosed,
         Interrupt::Busy,
         Interrupt::Relation,
         Interrupt::NewSnapshot,
@@ -262,6 +264,10 @@ async fn interrupted(case: Interrupt) {
             send_json(&mut sock,&json!({"v":1,"type":"command","requestId":Id128::new([87;16]).to_base64url(),"action":"history.page","payload":payload})).await;
             wait_for_peer_method(&fixture, method, 1).await;
             node.shutdown(None).await.unwrap();
+            drop(owner);
+            drop(sock);
+            std::fs::remove_dir_all(&fixture.area.directory)
+                .expect("closed node releases its isolated temporary directory");
             return;
         }
         Interrupt::RemoteError | Interrupt::Eof => {
@@ -306,13 +312,34 @@ async fn interrupted(case: Interrupt) {
             .await
             .expect("child query after root work finished");
         }
-        Interrupt::LastReader => {
+        Interrupt::LastReader | Interrupt::LastReaderClosed => {
             send_json(&mut sock,&json!({"v":1,"type":"command","requestId":Id128::new([86;16]).to_base64url(),"action":"history.page","payload":payload})).await;
             wait_for_peer_method(&fixture, method, 1).await;
-            crate::ipc::device_revoke(node.ipc_address(), &id)
-                .await
-                .unwrap();
-            assert_eq!(next_close(&mut sock, Duration::from_secs(5)).await.0, 4410);
+            if matches!(case, Interrupt::LastReader) {
+                crate::ipc::device_revoke(node.ipc_address(), &id)
+                    .await
+                    .unwrap();
+                assert_eq!(next_close(&mut sock, Duration::from_secs(5)).await.0, 4410);
+            } else {
+                sock.close(None).await.unwrap();
+                drop(sock);
+            }
+            timeout(Duration::from_secs(8), async {
+                while node
+                    .session_services
+                    .as_ref()
+                    .unwrap()
+                    .native
+                    .all_active_protocol_sources()
+                    .iter()
+                    .filter_map(|source| source.views().ok())
+                    .any(|views| views.child_observers(&child) != 0)
+                {
+                    tokio::time::sleep(Duration::from_millis(15)).await;
+                }
+            })
+            .await
+            .expect("the last reader left before the native response");
             std::fs::write(&gate, b"late reply").unwrap();
         }
         Interrupt::NewSnapshot | Interrupt::Relation => {
