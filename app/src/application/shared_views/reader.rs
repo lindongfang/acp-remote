@@ -1577,7 +1577,8 @@ where
                         super::segments::SegmentPhase::Update,
                     );
                 }
-                if let Some(window) = &data.history
+                if tail
+                    && let Some(window) = &data.history
                     && position.offset == 0
                     && position.marker != Some(position.index)
                 {

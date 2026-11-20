@@ -1314,7 +1314,11 @@ async fn history_page_cold_socket_selects_raw_and_tool_anchors() {
     let stream = Id128::parse_base64url(latest["result"]["streamId"].as_str().unwrap()).unwrap();
     let last = read_until_snapshot_end(&mut sock, stream).await;
     assert_eq!(last.raw.len(), 3);
-    assert_eq!(last.turns, json_array(&page["turns"]));
+    assert_eq!(
+        page["turns"],
+        json!([{"turn":"4","firstPosition":"2"},{"turn":"5","firstPosition":"3"}])
+    );
+    assert!(last.turns.is_empty());
     assert!(cache.is_protected(&native));
     let _ = send_command_wait(&mut sock, "view.close", json!({"streamId":stream})).await;
     let scope = json!({"kind":"target","targetId":target.encode()});
@@ -1367,7 +1371,11 @@ async fn history_page_cold_socket_selects_raw_and_tool_anchors() {
                 .iter()
                 .any(|f| f["field"] == "status" && f["enumCode"] == 2)))
     );
-    assert_eq!(middle.turns, json_array(&older["result"]["page"]["turns"]));
+    assert_eq!(
+        older["result"]["page"]["turns"],
+        json!([{"turn":"2","firstPosition":"2"},{"turn":"3","firstPosition":"3"}])
+    );
+    assert!(middle.turns.is_empty());
     assert_eq!(
         middle
             .projections
@@ -1665,10 +1673,6 @@ async fn history_page_disconnect_during_locate_keeps_original_replay_owned() {
     );
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
-}
-
-fn json_array(value: &serde_json::Value) -> Vec<serde_json::Value> {
-    value.as_array().unwrap().clone()
 }
 
 #[tokio::test]
