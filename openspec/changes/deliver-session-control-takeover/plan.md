@@ -86,13 +86,13 @@ mode: required
 
 ## Verification Results
 
-- 受测版本：本地分支 `v2` 集成提交 `ba71482fa339094d7ffa02e0c48f661bd0cc573e`（受跟踪工作区干净；初始集成 `9a47a19921341b4255be912da0a1bd2c4e3be3b4`，修复闭环 `ba71482fa339094d7ffa02e0c48f661bd0cc573e`）
-- 执行者与环境：独立 `tester`（Windows 11 / PowerShell 5.1 / `CARGO_BUILD_JOBS=2`，清除继承 `NoDefaultCurrentDirectoryInExePath` / Edge Headless + Playwright + Rust debug 二进制 `acp-remote.exe`），完整记录见本地忽略路径 `testing/runs/deliver-session-control-takeover/tester/acceptance-report.md` 与 `testing/runs/deliver-session-control-takeover/coder/sct-016-e2e.json`
+- 受测版本：本地分支 `v2` 集成提交 `ba71482fa339094d7ffa02e0c48f661bd0cc573e`（主实现与 WP4 门禁）及 `593ec34d8a7588e42b15d632c87d1ca3bca06cfc`（补充真实 Codex Harness `SCT-016` E2E 测试，受跟踪工作区干净）
+- 执行者与环境：独立 `tester`（Windows 11 / PowerShell 5.1 / `CARGO_BUILD_JOBS=2`，清除继承 `NoDefaultCurrentDirectoryInExePath` / Edge Headless + Playwright + Rust debug 二进制 `acp-remote.exe`），完整记录见本地忽略路径 `testing/runs/deliver-session-control-takeover/tester/acceptance-report.md`、`testing/runs/deliver-session-control-takeover/coder/sct-016-e2e.json` 与 `testing/runs/deliver-session-control-takeover/coder/sct-016-real-codex-e2e.json`
 - 验证命令及退出码：
-  - `PV1`：`npm run check:web`（`tsc --noEmit`、Vitest 43 文件 / 1054 用例、`vite build`）及前端静态行数/零环路脚本 -> `0`（继承自 `9a47a199`，`ba71482f` 未改 Web 生产源码）
+  - `PV1`：`npm run check:web`（`tsc --noEmit`、Vitest 43 文件 / 1054 用例、`vite build`）及前端静态行数/零环路脚本 -> `0`（继承自 `9a47a199`，后续提交未改 Web 生产源码）
   - `PV2`：`npm run check:rust` -> `0`（`cargo fmt --all --check`、`cargo clippy --all-targets --locked -- -D warnings`、`lib` 1055 passed、`main` 2 passed 及全部默认集成测试通过）；`--features native-dispatch-dev-fixtures` `r3_source_wss_development::sct -- --test-threads=1` -> `0`（8 passed, 0 failed）；`registration-acceptance-fixtures`（56 passed）与 `acp-runtime-acceptance-fixtures`（50 passed）-> `0`（继承自 `9a47a199`）
   - `PV3`：`node testing/runs/deliver-session-control-takeover/coder/run-wv13-16.mjs` 与 `FIXTURE-SHA256.md` 校验 -> `0`（`WV-13`–`WV-16` 全过，继承自 `9a47a199`）
-  - `PV4`：`cargo test --manifest-path app/Cargo.toml --test session_control_e2e_acceptance --locked -- --ignored --nocapture` 连续两次 -> `0`（1 passed, 0 failed，耗时 6.23s / 5.78s）
+  - `PV4`：`cargo test --manifest-path app/Cargo.toml --test session_control_e2e_acceptance --locked -- --ignored --nocapture` -> `0`（2 passed, 0 failed，耗时 19.17s，覆盖受控 ACP V2 与真实 `@agentclientprotocol/codex-acp` + `codex.exe`）
   - `PV5`：`npm run check:spec`、`node testing/suites/verify-suite.mjs --change deliver-session-control-takeover`、`git diff --check` -> `0`
 
 | Case ID | Executor | Commit SHA | Status | Evidence / Limitations |
@@ -100,8 +100,8 @@ mode: required
 | SCT-001 | tester | ba71482f | passed | Rust `session_protocol::tests`（`npm run check:rust`）与 Web `session-control.test.ts`（`npm run check:web`）通过 |
 | SCT-002 | tester | ba71482f | passed | `session-control.test.ts`、`workbench-controllers.test.ts`、`run-wv13-16.mjs`（`WV-13`–`WV-16`）与静态行数/零环路检查通过 |
 | SCT-003..SCT-015 | tester | ba71482f | passed | `npm run check:rust`、`queue_u2_`（8 passed）、`sctm_*` + `sctl_*` + `sct_red_check_*` + `sct_rv_int_001_*`（`native-dispatch-dev-fixtures` 22 passed）全绿 |
-| SCT-016 (Controlled ACP V2) | tester | ba71482f | passed | `session_control_e2e_acceptance` 真实 `acp-remote.exe` + 双独立 Edge 上下文连续两次通过（`sct-016-e2e.json`） |
-| SCT-016 (Real Codex Harness) | tester | ba71482f | not-run | 受测环境未配置隔离测试用已认证 Codex CLI 凭据，严禁触碰个人配置，如实记为 `not-run` |
+| SCT-016 (Controlled ACP V2) | tester | 593ec34d | passed | `session_control_e2e_acceptance` 真实 `acp-remote.exe` + 双独立 Edge 上下文通过（`sct-016-e2e.json`） |
+| SCT-016 (Real Codex Harness) | coder (user-authorized) | 593ec34d | passed | 经用户授权在隔离临时 `CODEX_HOME` 下使用本机 `codex.exe` + `@agentclientprotocol/codex-acp` 2.5.0 跑通双浏览器接管、草稿保护与重启归零并验证临时目录全清（`sct-016-real-codex-e2e.json`） |
 
-- 未执行项与已知限制：`SCT-016` 真实 Codex CLI Harness 子项因缺隔离测试凭据记为 `not-run`；`r3_source_wss_development::sct` 等 L5 验收处于 `native-dispatch-dev-fixtures` 特性门控下，日常仅执行默认 `npm run check:rust` 不会自动触发该扩展套件。
+- 未执行项与已知限制：`r3_source_wss_development::sct` 等 L5 验收处于 `native-dispatch-dev-fixtures` 特性门控下，日常仅执行默认 `npm run check:rust` 不会自动触发该扩展套件；真实 Codex Harness 验收依赖本机已安装 `codex.exe`、`@agentclientprotocol/codex-acp` 与用户 `~/.codex/auth.json`（测试期间仅复制至独占临时目录并在结束后自动物理删除）。
 - 问题关闭依据：`RV-PRE-001`–`RV-PRE-004` 于基线 `bc92997c` 关闭；`RV-INT-001`、`ACT-001`、`ACT-002` 于修复提交 `ba71482f` 经原独立 `reviewer` 与 `tester` 增量复核全部关闭（记录见 `testing/runs/deliver-session-control-takeover/reviewer/delivery-gate-review.md` 与 `testing/runs/deliver-session-control-takeover/tester/acceptance-report.md`）。
