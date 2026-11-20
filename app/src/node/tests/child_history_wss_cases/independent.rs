@@ -450,6 +450,64 @@ async fn hn_020_auto_delivered_agent_only_child_requires_a_paging_limit() {
     Box::pin(check_native_children(true)).await;
 }
 
+#[tokio::test]
+async fn hn_020_cached_agent_only_child_keeps_parent_and_empty_history_readable() {
+    let mut s = Box::pin(Scenario::new(1, json!({"childHistory":false}))).await;
+    release_target(&mut s.control, s.root).await;
+    let mut b = s.observer(140).await;
+    let previous = s.f.peer_logs().len();
+    for native in [s.native.as_str(), CHILD] {
+        seed_turns(
+            &s.node,
+            &s.selection,
+            native,
+            4,
+            "cached",
+            "agent_message_chunk",
+        )
+        .await;
+    }
+    let child = send_command_wait(&mut b, "history.page", s.payload()).await;
+    assert_eq!(child["error"], json!({"code":"unsupported_capability"}));
+    assert!(child["result"].is_null());
+    let parent = send_command_wait(
+        &mut b,
+        "history.page",
+        json!({"target":{"kind":"target","targetId":s.root.encode()},"mode":{"kind":"first"}}),
+    )
+    .await;
+    assert_eq!(parent["result"]["page"]["turnStatus"], "unprovable");
+    assert_eq!(snapshot(&mut b, &parent).await.raw.len(), 4);
+    seed_turns(
+        &s.node,
+        &s.selection,
+        CHILD,
+        0,
+        "cached",
+        "agent_message_chunk",
+    )
+    .await;
+    let empty = send_command_wait(&mut b, "history.page", s.payload()).await;
+    assert_eq!(empty["result"]["page"]["turnStatus"], "unprovable");
+    assert_eq!(empty["result"]["page"]["totalTurns"], "0");
+    assert!(snapshot(&mut b, &empty).await.raw.is_empty());
+    assert_eq!(s.f.peer_logs().len(), previous);
+    assert_eq!(
+        s.node
+            .session_services
+            .as_ref()
+            .unwrap()
+            .native
+            .inspect_capacity()
+            .await
+            .unwrap()
+            .occupied,
+        0
+    );
+    b.close(None).await.unwrap();
+    s.shutdown().await;
+}
+
 async fn check_native_children(check_unprovable: bool) {
     let mut s = Box::pin(Scenario::new(
         1,
