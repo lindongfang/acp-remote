@@ -1818,9 +1818,64 @@ async fn check_original_view_append(interactive: bool) {
         );
     }
     let scope = json!({"kind":"target","targetId":root.target.encode()});
-    let mid=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":initial["result"]["page"]["olderCursor"]}})).await;
+    let mut static_reader = connected(&f, &node, &reader_key, &reader_id).await;
+    let mid=send_command_wait(&mut static_reader,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":initial["result"]["page"]["olderCursor"]}})).await;
     let p = &mid["result"]["page"];
-    snapshot(&mut a, &mid).await;
+    let static_stream =
+        Id128::parse_base64url(mid["result"]["streamId"].as_str().unwrap()).unwrap();
+    assert!(
+        read_until_snapshot_end(&mut static_reader, static_stream)
+            .await
+            .turns
+            .is_empty()
+    );
+    assert_eq!(p["liveTail"], false);
+    let ordinary_key = SigningKey::from_slice(&[98; 32]).unwrap();
+    let ordinary_id = pair_browser(&node, &ordinary_key, "Ordinary view observer").await;
+    let mut ordinary_reader = connected(&f, &node, &ordinary_key, &ordinary_id).await;
+    let ordinary = send_command_wait(
+        &mut ordinary_reader,
+        "view.open",
+        json!({"targetId":root.target.encode(),"reason":"reopen"}),
+    )
+    .await;
+    let mut ordinary_stream =
+        Id128::parse_base64url(ordinary["result"]["streamId"].as_str().unwrap()).unwrap();
+    let baseline = read_until_snapshot_end(&mut ordinary_reader, ordinary_stream).await;
+    assert!(baseline.turns.is_empty());
+    if baseline
+        .statuses
+        .iter()
+        .any(|v| v["type"] == "stream_rebound")
+    {
+        let rebound = send_command_wait(
+            &mut ordinary_reader,
+            "view.rebind",
+            json!({"streamId":ordinary_stream}),
+        )
+        .await;
+        ordinary_stream =
+            Id128::parse_base64url(rebound["result"]["streamId"].as_str().unwrap()).unwrap();
+        let unpaged = read_until_snapshot_end(&mut ordinary_reader, ordinary_stream).await;
+        assert!(unpaged.turns.is_empty());
+    }
+    let native_key =
+        NativeSessionKey::from_config(Some(root.selection.source), &root.native).unwrap();
+    let original_snapshot = node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store()
+        .load_snapshot(&native_key)
+        .await
+        .unwrap()
+        .unwrap();
+    let baseline_bytes: Vec<_> = original_snapshot
+        .records
+        .iter()
+        .map(|record| record.raw.bytes())
+        .collect();
     takeover_target(&mut a, root.target).await;
     let before = f.peer_logs().len();
     for i in 26..=27 {
@@ -1830,6 +1885,7 @@ async fn check_original_view_append(interactive: bool) {
     }
     let receipt = timeout(Duration::from_secs(8), async {
         let mut starts = Vec::new();
+        let mut positions = Vec::new();
         let mut content = Vec::new();
         loop {
             let msg = reader.next().await.unwrap().unwrap();
@@ -1849,9 +1905,14 @@ async fn check_original_view_append(interactive: bool) {
                 ))
                 .await
                 .unwrap();
+            if h.record_kind() == Some(RecordKind::Status) {
+                let val: serde_json::Value = serde_json::from_slice(payload).unwrap();
+                eprintln!("HN-014 held page received status {}", val["type"]);
+            }
             if h.record_kind() == Some(RecordKind::TurnStart) {
                 let val: serde_json::Value = serde_json::from_slice(payload).unwrap();
                 starts.push(val["turn"].as_str().unwrap().to_owned());
+                positions.push(val["firstPosition"].clone());
             } else if h.record_kind() == Some(RecordKind::OriginalRaw) {
                 let val: serde_json::Value = serde_json::from_slice(payload).unwrap();
                 content.push((
@@ -1862,21 +1923,95 @@ async fn check_original_view_append(interactive: bool) {
                         .to_owned(),
                 ));
                 if content.len() == 4 {
-                    break (starts, content);
+                    break (starts, positions, content);
                 }
             }
         }
     })
     .await;
-    let latest = send_command_wait(&mut a, "view.open", open).await;
-    let older=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":p["olderCursor"]}})).await;
-    let newer=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"newer","cursor":p["newerCursor"]}})).await;
+    let mut fresh = connected(&f, &node, &reader_key, &reader_id).await;
+    let latest = send_command_wait(&mut fresh, "view.open", open).await;
+    let live_bounds = &latest["result"]["page"];
+    assert_eq!(live_bounds["firstTurn"], "18");
+    assert_eq!(live_bounds["totalTurns"], "27");
+    let per_turn = if interactive { 2 } else { 1 };
+    for (direction, cursor, from, to) in [
+        ("older", &p["olderCursor"], 1, 5),
+        ("newer", &p["newerCursor"], 16, 25),
+    ] {
+        let result=send_command_wait(&mut fresh,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":direction,"cursor":cursor}})).await;
+        let bounds = &result["result"]["page"];
+        assert_eq!(bounds["firstTurn"], from.to_string());
+        assert_eq!(bounds["lastTurn"], to.to_string());
+        assert_eq!(bounds["generationId"], p["generationId"]);
+        let frames = snapshot(&mut fresh, &result).await;
+        let mut raw: Vec<_> = frames.raw_bytes.into_iter().collect();
+        raw.sort_by_key(|(n, _)| *n);
+        assert!(
+            raw.iter()
+                .map(|(_, v)| v.as_slice())
+                .eq(baseline_bytes[(from - 1) * per_turn..to * per_turn]
+                    .iter()
+                    .copied()),
+            "retained range changed"
+        );
+    }
+    let ordinary_has_marker = timeout(Duration::from_millis(300), async {
+        loop {
+            let Message::Binary(data) = ordinary_reader.next().await.unwrap().unwrap() else {
+                continue;
+            };
+            let (hdr, _) = TransferHeader::decode(&data).unwrap();
+            if hdr.stream() != ordinary_stream {
+                continue;
+            }
+            if hdr.record_kind() == Some(RecordKind::TurnStart) {
+                break;
+            }
+            ordinary_reader
+                .send(Message::Binary(
+                    TransferHeader::credit(ordinary_stream, hdr.packet())
+                        .encode(&[])
+                        .unwrap()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+        }
+    })
+    .await
+    .is_ok();
+    assert!(!ordinary_has_marker, "ordinary view received a turn marker");
+    assert!(
+        timeout(Duration::from_millis(250), async {
+            loop {
+                let Some(Ok(message)) = static_reader.next().await else {
+                    return;
+                };
+                if let Message::Binary(data) = message {
+                    let (hdr, _) = TransferHeader::decode(&data).unwrap();
+                    if hdr.stream() == static_stream
+                        && matches!(
+                            hdr.record_kind(),
+                            Some(RecordKind::OriginalRaw | RecordKind::TurnStart)
+                        )
+                    {
+                        return;
+                    }
+                }
+            }
+        })
+        .await
+        .is_err(),
+        "static stream received a new turn"
+    );
+    fresh.close(None).await.unwrap();
+    ordinary_reader.close(None).await.unwrap();
+    static_reader.close(None).await.unwrap();
     a.close(None).await.unwrap();
     reader.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
     assert_eq!(latest["result"]["page"]["lastTurn"], "27");
-    assert_eq!(older["result"]["page"]["firstTurn"], "1");
-    assert_eq!(newer["result"]["page"]["lastTurn"], "25");
     if interactive {
         let logs = f.peer_logs();
         let methods: Vec<_> = logs[before..]
@@ -1892,8 +2027,18 @@ async fn check_original_view_append(interactive: bool) {
             "native methods observed after takeover: {methods:?}"
         );
     }
-    let (starts, content) = receipt.expect("live view receives both complete appended turns");
+    let (starts, positions, content) =
+        receipt.expect("live view receives both complete appended turns");
     assert_eq!(starts, ["26", "27"]);
+    for (turn, position) in starts.iter().zip(positions) {
+        let entry = live_bounds["turns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["turn"].eq(turn))
+            .unwrap();
+        assert_eq!(entry["firstPosition"], position);
+    }
     let correct = content.iter().map(|(n, s)| (*n, s.as_str())).eq([
         (1, "U0026"),
         (1, "reply:U0026"),
