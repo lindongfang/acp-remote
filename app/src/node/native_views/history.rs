@@ -45,6 +45,16 @@ pub struct HistoryRequest {
     pub open: Option<ReadReason>,
 }
 impl HistoryRequest {
+    fn check_child_boundaries(
+        &self,
+        range: Option<TurnRange>,
+        has_records: bool,
+    ) -> Result<(), HistoryError> {
+        if self.input.child.is_some() && range.is_none() && has_records {
+            return Err(ViewError::UnsupportedCapability.into());
+        }
+        Ok(())
+    }
     fn scope(&self, direction: Direction) -> CursorScope {
         CursorScope {
             direction,
@@ -323,6 +333,7 @@ impl HistoryRequest {
             generation = Generation::Cache(token);
         }
         let range = request.select(generation, total)?;
+        request.check_child_boundaries(range, journal.records.len() > 0)?;
         let mut window = HistoryWindow {
             records: 0..journal.records.len(),
             turns: Vec::new(),
@@ -465,6 +476,7 @@ impl CachedHistory<'_> {
             target,
         } = self;
         let generation = Generation::Cache(page.generation);
+        request.check_child_boundaries(page.range, !page.snapshot.records.is_empty())?;
         let first = page.snapshot.records.first().map_or(1, |r| r.ordinal);
         let prelude = page
             .boundaries
