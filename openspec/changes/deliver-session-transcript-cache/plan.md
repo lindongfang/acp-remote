@@ -44,7 +44,7 @@
 | Gate / Scope | Reviewer Agent | Review Focus | Pass Condition | Status | Reviewed Snapshot / Notes |
 | --- | --- | --- | --- | --- | --- |
 | 编码前门禁 | 独立 reviewer | 合审 `proposal.md`、`specs/`、`design.md`、`tests.md`、`plan.md`、`tasks.md`：用户确认依据完整性、物理分库与不伪造上下文安全红线、50 名额/30 分钟计时解耦、Web 650 行与夹具保护、27 个增量场景 100% 映射及断言真实性 | `verify-suite.mjs --change deliver-session-transcript-cache` 与 `npm run check:spec` 通过，且独立 reviewer 零未闭环阻断问题 | passed | 基线 `bc92997c7ed36924f1ff8d79a17bab24ede2a564`（含工作树 6 份规划产物）；独立 `reviewer` 第 2 轮增量复核确认 `RV-PRE-001`–`RV-PRE-004` 全部闭环（0 未关闭问题），详见 `testing/runs/deliver-session-transcript-cache/reviewer/pre-code-review.md` |
-| 集成交付门禁 | 独立 reviewer | 审查受测集成 `commit SHA` 全量 `git diff`：协议与规范符合性、故障旁路与 Windows 句柄/进程树清理、密钥与敏感正文零泄漏、核心不变量 Red Check 证据、验收测试防假阳性及 `docs/pitfalls.md` 晋升核查 | 全部阻断问题在修复 commit 上经原提出者增量复查关闭 | pending | 待 `WP1`–`WP3` 完成后锁定干净集成 `commit SHA` 交付审查 |
+| 集成交付门禁 | 独立 reviewer | 审查受测集成 `commit SHA` 全量 `git diff`：协议与规范符合性、故障旁路与 Windows 句柄/进程树清理、密钥与敏感正文零泄漏、核心不变量 Red Check 证据、验收测试防假阳性及 `docs/pitfalls.md` 晋升核查 | 全部阻断问题在修复 commit 上经原提出者增量复查关闭 | passed | 锁定集成提交 `0dfbb4676a6a332bfdf3a3dcc04d057ef7af7679`；独立 `reviewer`（`a9a825d1`）静态代码审阅结论 `passed`（0 Critical / 0 Major / 0 Minor），详见 `testing/runs/deliver-session-transcript-cache/reviewer/code-review.md` |
 
 ## Main E2E
 
@@ -80,13 +80,24 @@ mode: required
 
 ## Verification Results
 
-- 受测版本：待 `WP1`–`WP3` 实现完成并提交干净集成 `commit SHA` 后锁定
-- 执行者与环境：待独立 `tester` 与独立 `reviewer` 在 `WP4` 集成交付门禁执行（详细日志存 `testing/runs/deliver-session-transcript-cache/`）
-- 验证命令及退出码：待集成交付门禁执行后逐项如实记录 `PV1`–`PV5`
+- 受测版本：`0dfbb4676a6a332bfdf3a3dcc04d057ef7af7679`（独立工作树 `.worktrees/deliver-session-transcript-cache`，分支 `feat/deliver-session-transcript-cache`，父基线 `bc92997c`）
+- 执行者与环境：独立 `reviewer`（`a9a825d1`）完成静态源码审查（`passed`）；独立 `tester`（`35366323`）在沙盒内因 `run_command`/`write_file` 权限审批超时（60s）仅完成静态核查，全部动态验证命令由主代理在同一干净提交 `0dfbb4676a6a332bfdf3a3dcc04d057ef7af7679` 上直接执行并记录（详见 `testing/runs/deliver-session-transcript-cache/`）。
+- 验证命令及退出码：
+  - `PV1`（`npm run check:spec`、`npm run check:web`、行数预算与零 `innerHTML`）：exit `0`（`openspec` 20+5 通过、`verify-suite.mjs` 17 用例通过、`tsc --noEmit` 0 错误、`vitest` 43 文件 / 1049 用例通过、`vite build` 成功；`main.ts` 62 行、`session-protocol.ts` 78 行、其余目标 TS 文件均 `<= 650` 行）
+  - `PV2`（`clients/web/tests/browser/` 夹具不变性与隔离存储测试）：exit `0`（`git diff --name-only bc92997c..0dfbb4676a6a3dcc04d057ef7af7679 -- clients/web/tests/browser` 为空；`cargo test --lib transcript_cache` 14 passed；`cargo test --test transcript_cache_acceptance` 4 passed）
+  - `PV3`（`app/src/storage.rs` `SCHEMA_VERSION == 15` 与 5 个真节点 HTTPS/WSS 验收）：exit `0`（`stc_003`–`stc_010`、`stc_014`、`stc_015` 全部通过，`node.sqlite3` 零 `transcript_*` 表）
+  - `PV4`（WP2 Red Check 与全量检查/构建）：`red-check-wp2.log` 记录 RED 失败（`0 passed; 1 failed`）与恢复后 GREEN 通过（`1 passed; 0 failed`）；`cargo fmt --check`、`cargo clippy --all-targets --locked -- -D warnings`、`npm run build:rust`、`git diff --check` 均 exit `0`
+  - `PV5`（`STC-017` 真实 Codex E2E）：`not-run`（当前隔离环境缺少已授权真实 Codex 凭据与配额，不以受控模拟对端冒充）
 
 | Case ID | Executor | Commit SHA | Status | Evidence / Limitations |
 | --- | --- | --- | --- | --- |
-| STC-001..STC-017 | pending | pending | not-run | 当前处于编码前门禁准备阶段，尚未开始业务编码与集成交付验收 |
+| `STC-001` | 主代理（复核 `tester` 静态检查） | `0dfbb4676` | passed | `config` / `data_dir` ACL / `transcript_cache::tests::stc_001`（`node.sqlite3` `SCHEMA_VERSION = 15`，零新表、零新依赖） |
+| `STC-002` | 主代理 | `0dfbb4676` | passed | `clients/web/tests/transcript-cache-web.test.ts`、行数预算 `<= 650`、零 `innerHTML`、`FIXTURE-SHA256.md` 6 夹具零变动 |
+| `STC-003`–`STC-006`, `STC-010`, `STC-014`, `STC-015` | 主代理 | `0dfbb4676` | passed | `cargo test --lib transcript_cache`（14/14）与 `cargo test --test transcript_cache_acceptance`（4/4）真节点 WSS + 公共 API 验收通过 |
+| `STC-007`–`STC-009` | 主代理 | `0dfbb4676` | passed | `stc_007_and_stc_008_and_stc_009_resume_only_pure_memory_unrecoverable_and_purge` 真节点 WSS 通过 |
+| `STC-011`–`STC-013` | 主代理 | `0dfbb4676` | passed | 30 天防虚刷滑动清理、10 GiB LRU 保护淘汰、`purge_deleted_native_session` WAL 擦除通过 |
+| `STC-016` | 主代理 | `0dfbb4676` | passed | `STC-016` 跨 `segmentId` 离屏暂存、`<li>` `===` 引用保持、`scrollY`/Selection 与横幅降级重试通过 |
+| `STC-017` | — | `0dfbb4676` | not-run | 当前隔离环境无真实 Codex 凭据与配额，未执行真实 Codex E2E |
 
-- 未执行项与已知限制：`STC-001`–`STC-017` 待编码完成后在固定集成 `commit SHA` 上执行并逐项回填真实结果。
-- 问题关闭依据：编码前门禁 `RV-PRE-001`–`RV-PRE-004` 已经原提出者独立 `reviewer` Round 2 增量复核关闭（详见 `testing/runs/deliver-session-transcript-cache/reviewer/pre-code-review.md`）。
+- 未执行项与已知限制：`STC-017` 真实 Codex E2E 为 `not-run`；独立 `tester` 子代理受沙盒交互权限超时限制未能亲自运行命令；`npm run check:rust` 中 `cargo test --all-targets` 会在基线既有未对齐集成测试 `app/tests/acp_tool_projection_acceptance.rs` 编译失败（核心库 `--lib` 1055 项与 `transcript_cache_acceptance` 4 项均通过）。
+- 问题关闭依据：编码前门禁 `RV-PRE-001`–`RV-PRE-004` 已经独立 `reviewer` Round 2 关闭；集成交付门禁 `0dfbb4676a6a332bfdf3a3dcc04d057ef7af7679` 经独立 `reviewer`（`a9a825d1`）静态审阅无新增阻断项（0 Critical / 0 Major / 0 Minor）。
