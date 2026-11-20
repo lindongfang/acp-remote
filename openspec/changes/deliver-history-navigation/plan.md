@@ -79,4 +79,4 @@ mode: required
 
 独立 tester 另已验证以下子场景。HN-012 中，根执行期间拒绝读取冷子会话；根空闲且自动投递子目标专属用户和助手帧后，子首页显示第 1–10 轮，整树占 1 个名额。未投递且无子快照时返回 unsupported_capability。HN-013 中，5 MiB 内容传输中途断线后可完整重读第 6–15 轮。HN-016 的父会话在无跨加载稳定 ID 的条件下遍历 1,000 轮、100 页，中途快照淘汰后重新定位，逐帧核对通过，共发生两次 session/load。子会话独立查询及其千轮遍历留待新实现验证。
 
-HN-018 的并发定位与失败不留下半截代际已由独立 tester 实测。HN-021 原探针使用 product.status，在既有平台返回 platform_unimplemented。按增量规格对「实际可用会话操作」的要求，改以同一连接上的 session.capacity.inspect 与会话列表验证，保留原失败记录。两种能力下的完整复验待回报。
+HN-018 的并发定位与失败不留下半截代际已由独立 tester 实测。HN-021 原探针使用 product.status，在既有平台返回 platform_unimplemented。按增量规格对「实际可用会话操作」的要求，改以同一连接上的 session.capacity.inspect 与会话列表验证，保留原失败记录。分组日志确认，只有 resume_only 完成 25 轮及重启后的读取和显式刷新。pure_memory 首轮 input.consume 已响应，20 秒内对端仅记录 initialize 与 session/new，未收到 session/prompt；该组的 25 轮及重启后步骤尚未执行，原因待查。两组均待完整复验。
