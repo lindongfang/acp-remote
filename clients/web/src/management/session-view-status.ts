@@ -1,12 +1,16 @@
 import { RawJsonDocument } from "../views/raw-json";
 import { ViewDecodeError } from "../views/errors";
-import { requireSessionId, requireSessionU64 } from "./session-protocol";
+import {
+  requireSessionId, requireSessionU64, type TranscriptCacheState,
+  type TranscriptCapabilityBoundary, type TranscriptSource, type TranscriptSyncState,
+} from "./session-protocol";
 
 export interface ViewStatusRecord {
   readonly document: RawJsonDocument;
   readonly segmentId: string | null;
   readonly summary: string;
   readonly requiresReopen: boolean;
+  readonly cacheState?: TranscriptCacheState | null;
 }
 
 const SEGMENT_FIELDS = [
@@ -17,6 +21,7 @@ const SEGMENT_FIELDS = [
 ] as const;
 const CRITICAL = new Set<string>([
   ...SEGMENT_FIELDS, "previousStreamId", "streamId", "viewEpoch", "snapshotRevision",
+  "transcriptSource", "syncState", "capabilityBoundary", "continuable", "cacheWarning",
 ]);
 function invalid(): never { throw new ViewDecodeError("invalid_record"); }
 
@@ -71,6 +76,46 @@ export function readSessionViewStatus(bytes: Uint8Array): ViewStatusRecord {
     if (members.has("snapshotRevision")) decimal("snapshotRevision");
     return Object.freeze({ document, segmentId: null, requiresReopen: true,
       summary: "收到读取流换代通知；当前页面未建立新流绑定，请重新打开共享视图。" });
+  }
+  if (type === "transcript_cache_state") {
+    const allowed = new Set<string>([
+      "type", "transcriptSource", "syncState", "capabilityBoundary", "continuable", "cacheWarning",
+    ]);
+    if (members.size !== allowed.size) invalid();
+    for (const fieldName of members.keys()) {
+      if (!allowed.has(fieldName)) invalid();
+    }
+    const sourceRaw = text("transcriptSource");
+    if (sourceRaw !== "live" && sourceRaw !== "transcript_cache" && sourceRaw !== "hybrid_resumed") invalid();
+    const syncRaw = text("syncState");
+    if (
+      syncRaw !== "idle" && syncRaw !== "revalidating" && syncRaw !== "synced" &&
+      syncRaw !== "degraded_capacity_full" && syncRaw !== "degraded_unreachable" &&
+      syncRaw !== "native_unrecoverable"
+    ) invalid();
+    const boundaryRaw = text("capabilityBoundary");
+    if (
+      boundaryRaw !== "unknown" && boundaryRaw !== "replay_capable" &&
+      boundaryRaw !== "resume_only" && boundaryRaw !== "pure_memory"
+    ) invalid();
+    const contKind = document.tokens[value("continuable")]?.kind;
+    if (contKind !== "true" && contKind !== "false") invalid();
+    const warnKind = document.tokens[value("cacheWarning")]?.kind;
+    if (warnKind !== "true" && warnKind !== "false") invalid();
+    const cacheState: TranscriptCacheState = Object.freeze({
+      transcriptSource: sourceRaw as TranscriptSource,
+      syncState: syncRaw as TranscriptSyncState,
+      capabilityBoundary: boundaryRaw as TranscriptCapabilityBoundary,
+      continuable: contKind === "true",
+      cacheWarning: warnKind === "true",
+    });
+    return Object.freeze({
+      document,
+      segmentId: null,
+      requiresReopen: false,
+      cacheState,
+      summary: `视图缓存状态：来源=${cacheState.transcriptSource}，同步=${cacheState.syncState}，能力=${cacheState.capabilityBoundary}。`,
+    });
   }
   if (type !== "view_segment") {
     return Object.freeze({ document, segmentId: null, requiresReopen: false,

@@ -223,6 +223,7 @@ pub(super) struct OwnedNodeSessionServices {
     pub(super) documents: super::document_transfer::NodeDocumentService,
     pub(super) socket_authority: Arc<SocketViewAuthority>,
     pub(super) source_sessions: super::source_sessions::NodeSourceSessionManagement,
+    pub(super) transcript_cache: Arc<crate::transcript_cache::TranscriptCacheCoordinator>,
 }
 #[derive(Clone)]
 pub struct NodeManagementSessionServices {
@@ -582,6 +583,12 @@ impl NodeManagementSessionServices {
             .open_socket_source(client, selection, native_session_id, reason)
             .await
     }
+    pub(crate) async fn purge_deleted_native_session(
+        &self,
+        key: &crate::domain::native::NativeSessionKey,
+    ) -> Result<(), crate::transcript_cache::TranscriptCacheError> {
+        self.views.purge_deleted_native_session(key).await
+    }
     #[cfg(test)]
     pub(crate) fn arm_route_fault_for_test(
         &self,
@@ -595,14 +602,36 @@ impl NodeManagementSessionServices {
     }
 }
 impl OwnedNodeSessionServices {
+    #[cfg_attr(
+        test,
+        expect(
+            clippy::too_many_arguments,
+            reason = "Keep explicit node storage, data directory, transcript cache config, policy, authority and test hooks inputs at assembly boundary"
+        )
+    )]
     pub(super) async fn start(
         storage: &Storage,
+        directory: &crate::data_dir::DataDirectory,
+        transcript_cache_config: &crate::config::TranscriptCacheConfig,
         identity: &NodeIdentity,
         policy: Arc<ApplicationPolicy>,
         protector: Arc<dyn SecretProtector>,
         socket_authority: Arc<SocketViewAuthority>,
         #[cfg(test)] hooks: &FactoryTestHooks,
     ) -> Result<Self, AppError> {
+        let store = Arc::new(
+            crate::transcript_cache::TranscriptCacheStore::open_or_degrade(
+                directory.transcript_cache_path(),
+                *transcript_cache_config,
+                Arc::new(crate::transcript_cache::SystemRetentionClock),
+                Arc::new(crate::transcript_cache::NoProtectedSessions),
+            )
+            .await,
+        );
+        let transcript_cache = crate::transcript_cache::TranscriptCacheCoordinator::new(
+            &store,
+            tokio::runtime::Handle::current(),
+        );
         let authority = NodeRequestAuthority::from_node_parts(policy.clone(), storage)
             .map_err(|_| AppError::Startup("product authority unavailable".into()))?;
         let catalog = super::catalog::from_node_parts(
@@ -641,11 +670,33 @@ impl OwnedNodeSessionServices {
             )),
             SessionServiceTuning::YIELD_EVERY,
             Some(socket_authority.clone()),
+            Some(Arc::clone(&transcript_cache)),
             #[cfg(test)]
             Some(hooks),
         )
         .await
         .map_err(|_| AppError::Startup("product native assembly unavailable".into()))?;
+        let native_for_protect = started.native.clone();
+        transcript_cache.install_protected_check(Arc::new(move |key| {
+            if native_for_protect.is_session_slot_active(key) {
+                return true;
+            }
+            native_for_protect
+                .all_active_protocol_sources()
+                .into_iter()
+                .any(|source| {
+                    source
+                        .views()
+                        .ok()
+                        .and_then(|v| v.views().ok())
+                        .is_some_and(|views| views.has_active_leases_for(key))
+                })
+        }));
+        let _ = started
+            .native
+            .install_transcript_observer(Arc::clone(&transcript_cache)
+                as Arc<dyn crate::application::native_dispatch::TranscriptRecoveryObserver>);
+        let _ = store.enforce_retention_and_budget(None).await;
         let approval = crate::application::native_dispatch::NativeApprovalService::create(
             started.native.clone(),
             Arc::new(authority.clone()),
@@ -709,6 +760,7 @@ impl OwnedNodeSessionServices {
             documents,
             socket_authority,
             source_sessions,
+            transcript_cache,
         })
     }
     fn attach_upload_preparation(
@@ -750,6 +802,7 @@ impl OwnedNodeSessionServices {
     }
     pub(super) async fn shutdown(&self, deadline: tokio::time::Instant) -> bool {
         let report = self.native.shutdown(deadline).await;
+        let _ = self.transcript_cache.shutdown().await;
         #[cfg(test)]
         eprintln!(
             "NODE_SESSION_SHUTDOWN_DIAGNOSTIC_V1 joined={} metadata_confirmed={} sources={:?}",

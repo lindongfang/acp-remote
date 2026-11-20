@@ -19,10 +19,10 @@
 
 ### 硬约束与非目标
 
-- 以 [总体设计](../../../docs/architecture/overview.md) 与 `openspec/specs/` 长期规格为依据；**模型执行上下文恢复始终以 Harness 原生（`session/resume` 或 `session/load`）为唯一权威**，严禁拼接平台展示快照文本重发给模型伪造上下文，严禁解析各厂商 CLI 私有磁盘目录文件。
-- 展示快照库必须与节点核心控制管理库（`acp-remote.sqlite`）**物理隔离存储**；快照库故障、满额淘汰或过期清理不得阻塞设备信任、请求去重、严格权限审批及会话容量账本。
+- 以 [总体设计](../../../../docs/architecture/overview.md) 与 `openspec/specs/` 长期规格为依据；**模型执行上下文恢复始终以 Harness 原生（`session/resume` 或 `session/load`）为唯一权威**，严禁拼接平台展示快照文本重发给模型伪造上下文，严禁解析各厂商 CLI 私有磁盘目录文件。
+- 展示快照库必须与节点核心控制管理库（`node.sqlite3`）**物理隔离存储**；快照库故障、满额淘汰或过期清理不得阻塞设备信任、请求去重、严格权限审批及会话容量账本。
 - 本地展示快照保留策略默认为**按会话快照最后写入/同步时间滑动保留 30 天**，总磁盘安全上限默认为 **10 GiB**（均支持在 `acp-remote.toml` 中配置）；活跃已加载会话受保护不清理，原生会话显式删除时立即同步擦除对应快照。
-- 首期限定 Windows 节点与同源 Web，当前处于需求与设计定义阶段（`.openspec.yaml` 标记 `x-deferred: true`），正式启动本变更时基于真实代码树生成 `tests.md`、`plan.md` 与 `tasks.md`。
+- 首期限定 Windows 节点与同源 Web，基于 [refactor-web-workbench](../2026-11-20-refactor-web-workbench/proposal.md) 模块化基线实施，严格保持 Web 子模块单文件行数上限及单向无环依赖。
 
 ### 本 change 的成功判据
 
@@ -51,8 +51,8 @@
 
 ## Impact
 
-- 依赖：[deliver-codex-session-loop](../archive/2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)，并为下游 [deliver-history-navigation](../deliver-history-navigation/proposal.md)、[deliver-agent-session-tree](../deliver-agent-session-tree/proposal.md)、[deliver-session-data-lifecycle](../deliver-session-data-lifecycle/proposal.md) 提供持久化展示快照底座；跨变更关系见 [能力地图](../../../docs/architecture/capability-map.md)。
-- 影响范围：独立展示快照存储引擎与生命周期清理任务、节点配置（`acp-remote.toml`）、共享视图与后台自动重放协调端口、WSS 历史秒开与同步增量/代际推送协议及 Web 无感补齐与来源状态提示；具体写范围在正式开工阶段 `plan.md` 定义。
+- 依赖：[deliver-codex-session-loop](../2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../2026-11-19-deliver-session-capacity/proposal.md)、[refactor-web-workbench](../2026-11-20-refactor-web-workbench/proposal.md)，并为下游 [deliver-history-navigation](../../deliver-history-navigation/proposal.md)、[deliver-agent-session-tree](../../deliver-agent-session-tree/proposal.md)、[deliver-session-data-lifecycle](../../deliver-session-data-lifecycle/proposal.md) 提供持久化展示快照底座；跨变更关系见 [能力地图](../../../../docs/architecture/capability-map.md)。
+- 影响范围：独立展示快照存储引擎（`transcript-cache.sqlite3`）与生命周期清理任务、节点配置（`acp-remote.toml`）、共享视图与后台自动重放协调端口、WSS 历史秒开与同步状态推送协议及 Web 前缀保持无感补齐与来源状态提示；具体工作包划分与写范围见 [plan.md](plan.md)。
 
 ## Exploration
 
@@ -60,4 +60,4 @@
 - **默认 30 天滑动保留期（用户确认 2）**：与 `management-audit` 默认 30 天保留期对齐，按会话快照最后写入/同步时间滑动计算，避免短期休假后无重放会话丢失界面历史。
 - **默认 10 GiB 容量安全上限（用户确认 3）**：考虑到编码会话包含完整原始 JSON、多文件 Diff 与构建/测试工具输出，将默认总磁盘上限由初拟 `2 GiB` 上调至 `10 GiB`（支持配置调整），避免 30 天窗口内正常重度使用触发提前淘汰。
 - **打开冷会话先秒开快照再后台自动拉取补齐（用户确认 4）**：针对外部 CLI 绕过 `acp-remote` 向同一底层会话追加对话的场景，确认打开未加载会话时无需手动点击刷新——先秒开渲染本地展示快照，同时对支持标准重放的 Harness 自动在后台拉取一次最新原生历史，前缀对齐保持阅读位置无感补齐外部新增对话（若原生发生压缩/删改则同步为最新权威视图）；50 名额被受保护会话占满或原生暂不可达时优雅降级保留本地快照展示并轻提示，同时保留手动重试兜底。
-- **术语与备份边界复核**：在 [领域术语表](../../GLOSSARY.md) 新增“展示快照库”定义，并与 [deliver-backup-recovery](../deliver-backup-recovery/proposal.md) 对齐（展示快照仍属可过期淘汰的展示缓存层，不混入核心管理事实备份包），无新增独立 ADR。
+- **术语与备份边界复核**：在 [领域术语表](../../../GLOSSARY.md) 新增“展示快照库”定义，并与 [deliver-backup-recovery](../../deliver-backup-recovery/proposal.md) 对齐（展示快照仍属可过期淘汰的展示缓存层，不混入核心管理事实备份包），无新增独立 ADR。

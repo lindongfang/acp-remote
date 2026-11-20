@@ -25,6 +25,45 @@ use std::{
 };
 mod replay;
 pub use replay::admit_replay_capacity;
+
+pub trait AcpTranscriptTap: Send + Sync + 'static {
+    fn on_source_capabilities(
+        &self,
+        source_id: NativeSourceId,
+        version: super::Version,
+        profile: crate::transcript_cache::CapabilityProfile,
+    );
+    fn on_live_update(
+        &self,
+        key: &NativeSessionKey,
+        version: super::Version,
+        profile: crate::transcript_cache::CapabilityProfile,
+        sequence: u64,
+        raw: &super::RawMessage,
+    );
+    fn on_replay_completed(
+        &self,
+        key: &NativeSessionKey,
+        version: super::Version,
+        profile: crate::transcript_cache::CapabilityProfile,
+        frames: Vec<(u64, super::RawMessage)>,
+    );
+    fn on_replay_remote_missing(&self, key: &NativeSessionKey);
+}
+
+pub const fn capability_profile_from_strategy(
+    strategy: &super::strategy::Strategy,
+) -> crate::transcript_cache::CapabilityProfile {
+    let caps = &strategy.negotiated().capabilities;
+    if caps.standard_replay {
+        crate::transcript_cache::CapabilityProfile::ReplayCapable
+    } else if caps.resume {
+        crate::transcript_cache::CapabilityProfile::ResumeOnly
+    } else {
+        crate::transcript_cache::CapabilityProfile::PureMemory
+    }
+}
+
 pub type AcpReadService = crate::application::shared_views::reader::ViewReadService<
     ConnectionScope,
     RetainedAcpRaw,
@@ -46,6 +85,8 @@ pub struct AcpSourceViews {
     capture: Mutex<AcpViewCapture>,
     owner: Mutex<Option<Arc<SharedViewOwner<ConnectionScope, RetainedAcpRaw>>>>,
     operations: Mutex<Vec<std::sync::Weak<replay::ReplayOperation>>>,
+    transcript_tap: Option<Arc<dyn AcpTranscriptTap>>,
+    hybrid_preloaded: Mutex<std::collections::HashSet<NativeSessionKey>>,
     reads: std::sync::OnceLock<
         Arc<
             crate::application::shared_views::read_control::NativeReadCoordinator<
@@ -62,6 +103,7 @@ pub struct AcpNativeViewFactory {
     yield_every: NonZeroUsize,
     read_options: Arc<dyn crate::application::shared_views::budget::NativeReadOptionsProvider>,
     authority: Option<Arc<crate::application::shared_views::local_authority::LocalViewAuthority>>,
+    transcript_tap: Option<Arc<dyn AcpTranscriptTap>>,
 }
 impl AcpNativeViewFactory {
     pub(crate) fn with_socket_authority(
@@ -69,6 +111,10 @@ impl AcpNativeViewFactory {
         authority: Arc<crate::application::shared_views::socket_authority::SocketViewAuthority>,
     ) -> Self {
         self.socket_authority = Some(authority);
+        self
+    }
+    pub(crate) fn with_transcript_tap(mut self, tap: Arc<dyn AcpTranscriptTap>) -> Self {
+        self.transcript_tap = Some(tap);
         self
     }
     pub(crate) const fn new(
@@ -81,6 +127,7 @@ impl AcpNativeViewFactory {
             socket_authority: None,
             read_options,
             authority: Some(authority),
+            transcript_tap: None,
         }
     }
     #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]
@@ -93,6 +140,7 @@ impl AcpNativeViewFactory {
             socket_authority: None,
             read_options,
             authority: None,
+            transcript_tap: None,
         }
     }
 }
@@ -106,6 +154,13 @@ impl NativeSourceViewFactory<AcpNativeAdapter> for AcpNativeViewFactory {
             .source
             .connection()
             .map_err(|_| ViewError::CaptureUnavailable)?;
+        if let (Some(tap), Some(strategy)) = (&self.transcript_tap, connection.strategy()) {
+            tap.on_source_capabilities(
+                NativeSourceId(context.pre.metadata().source_id),
+                strategy.version(),
+                capability_profile_from_strategy(&strategy),
+            );
+        }
         let (capture, consumer, probe) = AcpViewCapture::for_connection(&connection);
         let attached = Arc::new(AcpSourceViews {
             source: context.source,
@@ -115,6 +170,8 @@ impl NativeSourceViewFactory<AcpNativeAdapter> for AcpNativeViewFactory {
             capture: Mutex::new(capture),
             owner: Mutex::new(None),
             operations: Mutex::new(Vec::new()),
+            transcript_tap: self.transcript_tap.clone(),
+            hybrid_preloaded: Mutex::new(std::collections::HashSet::new()),
             reads: std::sync::OnceLock::new(),
             reader: std::sync::OnceLock::new(),
             socket_reader: std::sync::OnceLock::new(),
@@ -265,6 +322,84 @@ impl AcpSourceViews {
         authority.register_native_source(capability)?;
         Ok(reader)
     }
+    pub(crate) fn live_socket_reader(
+        &self,
+        authority: &crate::application::shared_views::socket_authority::SocketViewAuthority,
+    ) -> Result<Arc<AcpSocketReadService>, ViewError> {
+        let views = self.views()?;
+        if views.core.probe.is_sealed() {
+            return Err(ViewError::SourceReleased);
+        }
+        let reader = self
+            .socket_reader
+            .get()
+            .cloned()
+            .ok_or(ViewError::CaptureUnavailable)?;
+        if !reader.uses_authority(authority) {
+            return Err(ViewError::InvalidClient);
+        }
+        authority.register_verified_source(NativeSourceId(self.pre.metadata().source_id))?;
+        Ok(reader)
+    }
+    pub(crate) fn live_local_reader(
+        &self,
+        authority: &crate::application::shared_views::local_authority::LocalViewAuthority,
+    ) -> Result<Arc<AcpReadService>, ViewError> {
+        let views = self.views()?;
+        if views.core.probe.is_sealed() {
+            return Err(ViewError::SourceReleased);
+        }
+        let reader = self
+            .reader
+            .get()
+            .cloned()
+            .ok_or(ViewError::CaptureUnavailable)?;
+        if !reader.uses_authority(authority) {
+            return Err(ViewError::InvalidClient);
+        }
+        authority.register_verified_source(NativeSourceId(self.pre.metadata().source_id))?;
+        Ok(reader)
+    }
+    #[must_use]
+    pub(crate) fn is_hybrid_preloaded(&self, target: &NativeSessionKey) -> bool {
+        self.hybrid_preloaded
+            .lock()
+            .is_ok_and(|set| set.contains(target))
+    }
+    pub(crate) fn clear_hybrid_preloaded(&self, target: &NativeSessionKey) {
+        if let Ok(mut set) = self.hybrid_preloaded.lock() {
+            set.remove(target);
+        }
+    }
+    pub(crate) async fn trigger_background_replay(
+        &self,
+        target: &NativeSessionKey,
+    ) -> Result<(), ViewError> {
+        use crate::application::shared_views::{
+            budget::ReadReason, read_control::NativeReadControl,
+        };
+        use crate::domain::shared_view::ReadMode;
+        let reads = self.reads.get().ok_or(ViewError::CaptureUnavailable)?;
+        let request = reads.request(target, ReadReason::ExplicitRefresh)?;
+        let mut updates = request.subscribe();
+        loop {
+            let meta = updates.borrow().clone();
+            match meta.read_mode() {
+                ReadMode::ReplayComplete => return Ok(()),
+                ReadMode::ReplayIncomplete => {
+                    return Err(meta.failure().unwrap_or(ViewError::ReadFailure));
+                }
+                ReadMode::CurrentOnly | ReadMode::ReplayRequested | ReadMode::Replaying => {}
+            }
+            if self.views()?.core.probe.is_sealed() {
+                return Err(ViewError::SourceReleased);
+            }
+            updates
+                .changed()
+                .await
+                .map_err(|_| ViewError::SourceReleased)?;
+        }
+    }
     pub(crate) fn reader(
         &self,
         capability: &crate::application::native_dispatch::SourceReadCapability<AcpNativeAdapter>,
@@ -356,6 +491,48 @@ impl NativeSourceViewOwner for AcpSourceViews {
     fn bind_target(&self, target: &NativeSessionKey) -> Result<(), ViewError> {
         self.restore_target(target)?;
         self.ensure_external_target(target.clone())
+    }
+    fn preload_cached_target(
+        &self,
+        target: &NativeSessionKey,
+        frames: Vec<crate::application::native_dispatch::CachedHybridFrame>,
+    ) -> Result<(), ViewError> {
+        if target.source().0 != self.pre.metadata().source_id || frames.is_empty() {
+            return Ok(());
+        }
+        if let Ok(views) = self.views()
+            && let Ok(pub_target) = views.core.target(target)
+            && let Ok(snap) = pub_target.snapshot.read()
+            && snap.projection.records.len() > 0
+        {
+            return Ok(());
+        }
+        let session_arc: std::sync::Arc<str> = std::sync::Arc::from(target.native_id());
+        let mut parsed_frames = Vec::with_capacity(frames.len());
+        for frame in frames {
+            let Ok(raw_msg) = super::RawMessage::parse(frame.raw_json) else {
+                continue;
+            };
+            let retained = RetainedAcpRaw::from_cached_raw(raw_msg, Arc::clone(&session_arc));
+            let context = retained.observation();
+            parsed_frames.push(crate::application::shared_views::ingress::Frame {
+                raw: retained,
+                sequence: frame.sequence,
+                receipt_order: frame.receipt_order,
+                context,
+            });
+        }
+        if parsed_frames.is_empty() {
+            return Ok(());
+        }
+        self.capture
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?
+            .preload_cached_target(target.clone(), parsed_frames)?;
+        if let Ok(mut set) = self.hybrid_preloaded.lock() {
+            set.insert(target.clone());
+        }
+        Ok(())
     }
     fn restore_target(&self, target: &NativeSessionKey) -> Result<(), ViewError> {
         let views = self.views()?;

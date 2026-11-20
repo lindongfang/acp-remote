@@ -234,6 +234,7 @@ where
     pub(super) launcher: Arc<L>,
     pub(super) configuration: Arc<G>,
     pub(super) view_factory: OnceLock<Arc<dyn super::view_attachment::NativeSourceViewFactory<P>>>,
+    pub(super) transcript_observer: OnceLock<Arc<dyn super::TranscriptRecoveryObserver>>,
     #[cfg(windows)]
     pub(super) source_facade: OnceLock<()>,
     #[cfg(windows)]
@@ -476,6 +477,7 @@ where
             launcher,
             configuration,
             view_factory: OnceLock::new(),
+            transcript_observer: OnceLock::new(),
             #[cfg(windows)]
             source_facade: OnceLock::new(),
             #[cfg(windows)]
@@ -531,6 +533,71 @@ where
     }
     pub(super) fn new_id() -> Result<EntityId, DispatchError> {
         random_id().map_err(Into::into)
+    }
+    pub(super) fn install_transcript_observer_inner(
+        &self,
+        observer: Arc<dyn super::TranscriptRecoveryObserver>,
+    ) -> Result<(), DispatchError> {
+        self.transcript_observer
+            .set(observer)
+            .map_err(|_| DispatchError::Conflict)
+    }
+    pub(super) fn is_session_slot_active_inner(&self, key: &NativeSessionKey) -> bool {
+        let Ok(sources) = self.sources.lock() else {
+            return false;
+        };
+        sources.iter().any(|source| {
+            if source.pre.authority.closed.load(Ordering::Acquire)
+                || source.pre.authority.closing.load(Ordering::Acquire)
+            {
+                return false;
+            }
+            source.targets.lock().is_ok_and(|targets| {
+                targets.get(key).is_some_and(|resource| {
+                    !resource.pre.authority.closed.load(Ordering::Acquire)
+                        && !resource.pre.authority.releasing.load(Ordering::Acquire)
+                })
+            })
+        })
+    }
+    pub(super) fn active_live_source_inner(&self, key: &NativeSessionKey) -> Option<P::Source> {
+        let sources = self.sources.lock().ok()?;
+        let found = sources.iter().find_map(|source| {
+            if source.pre.authority.closed.load(Ordering::Acquire)
+                || source.pre.authority.closing.load(Ordering::Acquire)
+            {
+                return None;
+            }
+            let has_loaded = source.targets.lock().is_ok_and(|targets| {
+                targets.get(key).is_some_and(|resource| {
+                    !resource.pre.authority.closed.load(Ordering::Acquire)
+                        && !resource.pre.authority.releasing.load(Ordering::Acquire)
+                        && resource.loaded.get().is_some()
+                })
+            });
+            let has_external = source.external_reads.lock().is_ok_and(|externals| {
+                externals
+                    .get(key)
+                    .is_some_and(|cap| cap.require_current().is_ok())
+            });
+            if has_loaded || has_external {
+                source.source.get().cloned()
+            } else {
+                None
+            }
+        });
+        drop(sources);
+        found
+    }
+    pub(super) fn all_active_protocol_sources_inner(&self) -> Vec<P::Source> {
+        let Ok(sources) = self.sources.lock() else {
+            return Vec::new();
+        };
+        sources
+            .iter()
+            .filter(|source| !source.pre.authority.closed.load(Ordering::Acquire))
+            .filter_map(|source| source.source.get().cloned())
+            .collect()
     }
     pub fn status(&self) -> NativeRuntimeStatus {
         match self.status.load(Ordering::SeqCst) {

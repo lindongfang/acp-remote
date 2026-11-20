@@ -546,6 +546,9 @@ mod tests {
         include!("node/session_services/session_control_lifecycle_acceptance.rs");
     }
 
+    #[cfg(windows)]
+    mod transcript_cache_wss_cases;
+
     mod catalog_development {
         include!("node/catalog/development_tests.rs");
     }

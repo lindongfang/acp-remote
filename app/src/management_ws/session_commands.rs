@@ -685,6 +685,38 @@ fn view_opened(request: Id128, read: &crate::node::NativeSocketViewRead) -> Valu
         JoinState::RebuiltNoStableIds => "rebuilt_no_stable_ids",
         JoinState::UnassociatedSegments => "unassociated_segments",
     };
+    let mut status = serde_json::json!({
+        "mode": mode,
+        "freshness": freshness,
+        "projection": projection,
+        "join": join,
+        "historyIncomplete": descriptor.history_incomplete(),
+        "cacheRecoverable": descriptor.cache_recoverable()
+    });
+    if let Some(tc) = read.transcript_cache_status()
+        && !(tc.transcript_source == crate::domain::shared_view::TranscriptSource::Live
+            && tc.sync_state == crate::domain::shared_view::TranscriptSyncState::Idle
+            && tc.capability_boundary
+                == crate::domain::shared_view::TranscriptCapabilityBoundary::Unknown
+            && tc.continuable
+            && !tc.cache_warning)
+        && let Some(obj) = status.as_object_mut()
+    {
+        obj.insert(
+            "transcriptSource".to_owned(),
+            Value::String(tc.transcript_source.as_wire_str().to_owned()),
+        );
+        obj.insert(
+            "syncState".to_owned(),
+            Value::String(tc.sync_state.as_wire_str().to_owned()),
+        );
+        obj.insert(
+            "capabilityBoundary".to_owned(),
+            Value::String(tc.capability_boundary.as_wire_str().to_owned()),
+        );
+        obj.insert("continuable".to_owned(), Value::Bool(tc.continuable));
+        obj.insert("cacheWarning".to_owned(), Value::Bool(tc.cache_warning));
+    }
     serde_json::json!({
         "v": 1,
         "type": "view.opened",
@@ -693,14 +725,7 @@ fn view_opened(request: Id128, read: &crate::node::NativeSocketViewRead) -> Valu
         "viewEpoch": descriptor.view_epoch().as_entity_id().encode(),
         "snapshotRevision": descriptor.revision().as_u64().to_string(),
         "capabilities": {"opaqueChunks": 1},
-        "status": {
-            "mode": mode,
-            "freshness": freshness,
-            "projection": projection,
-            "join": join,
-            "historyIncomplete": descriptor.history_incomplete(),
-            "cacheRecoverable": descriptor.cache_recoverable()
-        }
+        "status": status
     })
 }
 #[cfg(windows)]

@@ -1,6 +1,6 @@
 export {
-  requireSessionI64, requireSessionId, requireSessionU64,
-  SessionProtocolError,
+  closedWithOptional, requireSessionI64, requireSessionId,
+  requireSessionU64, SessionProtocolError,
 } from "./session-protocol/primitives";
 
 export type {
@@ -44,6 +44,8 @@ export type {
   ApprovalValidity, ApprovalView,
   SessionViewClosed, SessionViewFreshness, SessionViewJoin,
   SessionViewMode, SessionViewOpened, SessionViewProjection,
+  SessionViewStatus, TranscriptCacheState,
+  TranscriptCapabilityBoundary, TranscriptSource, TranscriptSyncState,
 } from "./session-protocol/view-and-approval";
 export {
   parseApprovalDecisionResult, parseApprovalListResult,

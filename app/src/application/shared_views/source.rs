@@ -55,6 +55,7 @@ impl<R> Clone for TargetSnapshot<R> {
 pub(crate) struct TargetGeneration<R> {
     pub send: OwnedDisplaySendView,
     pub snapshot: RwLock<Arc<TargetSnapshot<R>>>,
+    pub custom_statuses: Mutex<AppendLog<super::segments::CustomStatusEvent>>,
 }
 pub(crate) struct TargetPublication<R> {
     pub key: NativeSessionKey,
@@ -70,6 +71,13 @@ pub(crate) struct SourceCore<S, R> {
     pub probe: IngressProbe<R>,
     pub catalog: RwLock<Option<LogSnapshot<TargetPublication<R>>>>,
     pub changed: Arc<Notify>,
+    pub active_leases: Mutex<
+        Vec<(
+            NativeSessionKey,
+            std::sync::Weak<super::reader::SelectionLeases>,
+        )>,
+    >,
+    idle_producer: Mutex<Option<super::ingress::SourceProducer<S, R>>>,
     #[cfg(all(windows, any(test, feature = "shared-view-acceptance-fixtures")))]
     pub controller: super::controller::ViewTestController<S>,
     #[cfg(all(windows, any(test, feature = "shared-view-acceptance-fixtures")))]
@@ -225,6 +233,8 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SharedViewOwner<S, R
             probe,
             catalog: RwLock::new(Some(catalog.snapshot()?)),
             changed: Arc::new(Notify::new()),
+            active_leases: Mutex::new(Vec::new()),
+            idle_producer: Mutex::new(None),
         });
         let supervisor = ViewTaskSupervisor::new(runtime);
         let stop = supervisor.subscribe_stop();
@@ -257,6 +267,9 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SharedViewOwner<S, R
         self.views.core.controller.clone()
     }
     pub async fn shutdown(&self, deadline: Instant) -> ViewShutdownReport {
+        if let Ok(mut producer) = self.views.core.idle_producer.lock() {
+            drop(producer.take());
+        }
         let seal = self.views.core.seal();
         self.supervisor.request_stop();
         let report = self.supervisor.join_until(deadline).await;
@@ -268,6 +281,141 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SharedViewOwner<S, R
             pending: report.native_reads,
             failure: seal.err().or(report.failure),
         }
+    }
+    /// Constructs an offline managed `SharedViewOwner` populated directly from persisted
+    /// transcript-cache frames without launching a live Harness subprocess or worker task.
+    ///
+    /// # Errors
+    /// Returns `ViewError` when random generation, projection, or send-group creation fails.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Offline snapshot construction initializes catalog, projection, and send epoch atomically"
+    )]
+    pub(crate) fn open_cached_target(
+        scope: S,
+        source: NativeSourceId,
+        key: &NativeSessionKey,
+        projector: &dyn ViewProjector<R>,
+        frames: Vec<(u64, u64, R)>,
+        freshness: Freshness,
+        runtime: Handle,
+    ) -> Result<Self, ViewError> {
+        let (producer, _consumer, probe) = super::ingress::source_ingress(scope.clone());
+        let mut catalog = AppendLog::new()?;
+        let mut records = AppendLog::new()?;
+        let binding =
+            EntityId::from_bytes(crate::random::bytes().map_err(|_| ViewError::RandomUnavailable)?);
+        let stamp = ViewSourceStamp { binding, source };
+        let epoch = ViewEpoch::fresh()?;
+        let mut journal = IndexedJournal::new()?;
+        let mut revision: u64 = 0;
+        let mut begin = None;
+        let mut through = None;
+        let mut failure = None;
+        let mut descriptor = ViewDescriptor {
+            epoch,
+            read: None,
+            source: stamp,
+            revision: ViewRevision(0),
+            mode: ReadMode::ReplayComplete,
+            freshness,
+            projection: ProjectionState::Available,
+            join: JoinState::RebuiltNoStableIds,
+            order: OrderBasis::ConnectionObservation,
+            cache_recoverable: true,
+            failure: None,
+        };
+        for (idx, (sequence, receipt_order, raw)) in frames.into_iter().enumerate() {
+            revision = revision
+                .checked_add(1)
+                .ok_or(ViewError::SequenceExhausted)?;
+            let id = RawRecordId(u64::try_from(idx + 1).map_err(|_| ViewError::SequenceExhausted)?);
+            let envelope = projector.inspect(&raw);
+            failure = failure.or(envelope.failure);
+            if envelope.projection != ProjectionState::Available {
+                descriptor.projection = envelope.projection;
+            }
+            begin.get_or_insert(sequence);
+            through = Some(sequence);
+            records.append(SourceRecord {
+                id,
+                sequence,
+                receipt_order,
+                raw: raw.clone(),
+                envelope: envelope.clone(),
+                assignment: Mutex::new(Some(epoch)),
+            })?;
+            journal.append_segment_at(
+                epoch,
+                0,
+                id,
+                revision,
+                raw,
+                sequence,
+                receipt_order,
+                envelope,
+            )?;
+        }
+        let projected = journal.snapshot()?;
+        descriptor.revision = ViewRevision(revision);
+        descriptor.failure = failure;
+        if projected.projection != ProjectionState::Available {
+            descriptor.projection = projected.projection;
+        }
+        let principal = SegmentMetadata {
+            epoch,
+            read: None,
+            origin: SegmentOrigin::RetainedCurrent,
+            descriptor,
+            begin,
+            through,
+            completion: through,
+            open: false,
+            context: super::read_observation::ReadContextKind::OutsideReadWindow,
+            revision,
+            limitation: Some("transcript_cache_snapshot"),
+        };
+        let mut segments = SegmentLog::new()?;
+        segments.append(principal)?;
+        let send = OwnedDisplaySendGroup::new();
+        let target_send = send.original_view_for_target(epoch, key)?;
+        let snapshot = Arc::new(TargetSnapshot {
+            raw: records.snapshot()?,
+            projection: projected,
+            descriptor,
+            segments: segments.snapshot()?,
+        });
+        let published = Arc::new(TargetGeneration {
+            send: target_send,
+            snapshot: RwLock::new(snapshot),
+            custom_statuses: Mutex::new(AppendLog::new()?),
+        });
+        catalog.append(TargetPublication {
+            key: key.clone(),
+            current: RwLock::new(published),
+            candidate: RwLock::new(std::sync::Weak::new()),
+            candidate_failure: RwLock::new(None),
+        })?;
+        let core = Arc::new(SourceCore {
+            #[cfg(all(windows, any(test, feature = "shared-view-acceptance-fixtures")))]
+            controller: super::controller::ViewTestController::new(),
+            #[cfg(all(windows, any(test, feature = "shared-view-acceptance-fixtures")))]
+            streams: Mutex::new(Vec::new()),
+            scope,
+            source,
+            stamp,
+            send,
+            probe,
+            catalog: RwLock::new(Some(catalog.snapshot()?)),
+            changed: Arc::new(Notify::new()),
+            active_leases: Mutex::new(Vec::new()),
+            idle_producer: Mutex::new(Some(producer)),
+        });
+        let supervisor = ViewTaskSupervisor::new(runtime);
+        Ok(Self {
+            views: SharedViews { core },
+            supervisor,
+        })
     }
 }
 pub(crate) struct PendingViewWorker<S, R> {
@@ -292,12 +440,84 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> SharedViewOwner<S, R
 }
 impl<S, R> Drop for SharedViewOwner<S, R> {
     fn drop(&mut self) {
+        if let Ok(mut producer) = self.views.core.idle_producer.lock() {
+            drop(producer.take());
+        }
         #[cfg(all(windows, any(test, feature = "shared-view-acceptance-fixtures")))]
         self.views.core.controller.close();
         let _ = self.views.core.send.seal();
         self.views.core.probe.seal();
         self.views.core.changed.notify_waiters();
         self.supervisor.request_stop();
+    }
+}
+impl<S, R: RetainedRaw> SharedViews<S, R> {
+    pub(crate) fn register_lease(
+        &self,
+        target: &NativeSessionKey,
+        leases: std::sync::Weak<super::reader::SelectionLeases>,
+    ) {
+        if let Ok(mut guard) = self.core.active_leases.lock() {
+            guard.retain(|(_, entry)| entry.strong_count() > 0);
+            guard.push((target.clone(), leases));
+        }
+    }
+    #[must_use]
+    pub(crate) fn has_active_leases_for(&self, target: &NativeSessionKey) -> bool {
+        let Ok(mut guard) = self.core.active_leases.lock() else {
+            return false;
+        };
+        guard.retain(|(_, entry)| entry.strong_count() > 0);
+        guard.iter().any(|(key, entry)| {
+            key == target && entry.upgrade().is_some_and(|leases| leases.has_active())
+        })
+    }
+    pub(crate) fn push_custom_status(
+        &self,
+        target: &NativeSessionKey,
+        bytes: Vec<u8>,
+    ) -> Result<(), ViewError> {
+        let publication = self
+            .core
+            .target_publication(target)?
+            .upgrade()
+            .ok_or(ViewError::SourceReleased)?;
+        let current = Arc::clone(
+            &*publication
+                .current
+                .read()
+                .map_err(|_| ViewError::ReadFailure)?,
+        );
+        let segment = current
+            .snapshot
+            .read()
+            .map_err(|_| ViewError::ReadFailure)?
+            .descriptor
+            .epoch;
+        let mut statuses = current
+            .custom_statuses
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?;
+        statuses.append(super::segments::CustomStatusEvent { bytes, segment })?;
+        drop(statuses);
+        self.core.changed.notify_waiters();
+        Ok(())
+    }
+    pub(crate) fn seal_target_send(&self, target: &NativeSessionKey) -> Result<(), ViewError> {
+        let publication = self
+            .core
+            .target_publication(target)?
+            .upgrade()
+            .ok_or(ViewError::SourceReleased)?;
+        let current = Arc::clone(
+            &*publication
+                .current
+                .read()
+                .map_err(|_| ViewError::ReadFailure)?,
+        );
+        current.send.seal()?;
+        self.core.changed.notify_waiters();
+        Ok(())
     }
 }
 impl<S, R> SourceCore<S, R> {
@@ -463,30 +683,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
                         let result = self.record(frame);
                         self.consumer.processed(sequence, result, &context);
                     }
-                    SourceEntry::Bind(marker) => {
-                        let version = marker.version;
-                        if let Err(error) = self.bind(marker) {
-                            failure.get_or_insert(error);
-                            self.consumer.route_failed(error);
-                        }
-                        self.consumer.routed(version);
-                    }
-                    SourceEntry::ReadComplete(marker) => {
-                        let version = marker.version;
-                        if let Err(error) = self.complete(marker) {
-                            failure.get_or_insert(error);
-                            self.consumer.route_failed(error);
-                        }
-                        self.consumer.routed(version);
-                    }
-                    SourceEntry::ReadFailure(marker) => {
-                        let version = marker.version;
-                        if let Err(error) = self.fail(marker) {
-                            failure.get_or_insert(error);
-                            self.consumer.route_failed(error);
-                        }
-                        self.consumer.routed(version);
-                    }
+                    other => self.apply_control_entry(other, &mut failure),
                 }
                 self.core.changed.notify_waiters();
                 #[cfg(all(windows, any(test, feature = "shared-view-acceptance-fixtures")))]
@@ -508,6 +705,89 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
             }
         }
         failure.map_or(Ok(()), Err)
+    }
+    fn apply_control_entry(&mut self, entry: SourceEntry<R>, failure: &mut Option<ViewError>) {
+        match entry {
+            SourceEntry::Raw(_) => {}
+            SourceEntry::Bind(marker) => {
+                let version = marker.version;
+                if let Err(error) = self.bind(marker) {
+                    failure.get_or_insert(error);
+                    self.consumer.route_failed(error);
+                }
+                self.consumer.routed(version);
+            }
+            SourceEntry::ReadComplete(marker) => {
+                let version = marker.version;
+                if let Err(error) = self.complete(marker) {
+                    failure.get_or_insert(error);
+                    self.consumer.route_failed(error);
+                }
+                self.consumer.routed(version);
+            }
+            SourceEntry::ReadFailure(marker) => {
+                let version = marker.version;
+                if let Err(error) = self.fail(marker) {
+                    failure.get_or_insert(error);
+                    self.consumer.route_failed(error);
+                }
+                self.consumer.routed(version);
+            }
+            SourceEntry::PreloadCached { key, frames } => {
+                if let Err(error) = self.preload_cached(&key, frames) {
+                    failure.get_or_insert(error);
+                }
+            }
+        }
+    }
+    fn preload_cached(
+        &mut self,
+        key: &NativeSessionKey,
+        frames: Vec<Frame<R>>,
+    ) -> Result<(), ViewError> {
+        if key.source() != self.core.source {
+            return Err(ViewError::InvalidTarget);
+        }
+        self.ensure_target(key)?;
+        let already_populated = self.targets.get(key).is_some_and(|target| {
+            !target
+                .current
+                .journal
+                .snapshot()
+                .map_or(true, |snap| snap.records.len() == 0)
+        });
+        if already_populated || frames.is_empty() {
+            return Ok(());
+        }
+        if let Some(target) = self.targets.get_mut(key) {
+            target.current.principal.descriptor.cache_recoverable = true;
+            target.current.principal.origin = SegmentOrigin::RetainedCurrent;
+            target.current.principal.limitation = Some("hybrid_resumed_snapshot");
+        }
+        for frame in frames {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .ok_or(ViewError::SequenceExhausted)?;
+            let envelope = self.projector.inspect(&frame.raw);
+            let id = u64::try_from(self.records.snapshot()?.len())
+                .map_err(|_| ViewError::SequenceExhausted)?
+                .checked_add(1)
+                .ok_or(ViewError::SequenceExhausted)?;
+            let position = self.records.append(SourceRecord {
+                id: RawRecordId(id),
+                sequence: frame.sequence,
+                receipt_order: frame.receipt_order,
+                raw: frame.raw,
+                envelope,
+                assignment: Mutex::new(None),
+            })?;
+            let records = self.records.snapshot()?;
+            let record = records.get(position)?;
+            let target = self.targets.get_mut(key).ok_or(ViewError::InvalidTarget)?;
+            Self::route_record(&self.core, target, record, &records, self.revision)?;
+        }
+        Ok(())
     }
     fn mark_display_fault(&mut self, error: ViewError) -> Result<(), ViewError> {
         self.revision = self
@@ -634,6 +914,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
                 JoinState::UnassociatedSegments
             },
             order: OrderBasis::ConnectionObservation,
+            cache_recoverable: false,
             failure: None,
         };
         let principal = SegmentMetadata {
@@ -677,6 +958,7 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
                 },
             },
             snapshot: RwLock::new(snapshot),
+            custom_statuses: Mutex::new(AppendLog::new()?),
         });
         Ok(GenerationWorker {
             journal,

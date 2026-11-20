@@ -178,7 +178,7 @@ Blob 视图引用原生图片及大型输出，平台只使用受容量与保留
 
 Harness 专项工作面向能力调研与真实验证，代码不固定 Harness 与 ACP 版本的对应关系。固定程序及适配器版本仅用于证据追溯；运行阶段每次连接初始化按协议规则协商版本和能力，再绑定该连接代际的处理策略。重连重新协商，不用旧报告、程序版本号或 Harness 名称代替。通用协议实现仍有明确的已实现版本集合，不承诺无需实现即可支持任意未来版本。
 
-当前能力使用与错误边界见 [harness-management](../../openspec/specs/harness-management/spec.md)，历史展示与混合快照见 [structured-history](../../openspec/specs/structured-history/spec.md) 与 [session-transcript-cache](../../openspec/changes/deliver-session-transcript-cache/specs/session-transcript-cache/spec.md)。无重放不统一阻断其他能力；不按厂商增加私有读取器，也不以当前能力或旧报告宣称新版产品已验收。
+当前能力使用与错误边界见 [harness-management](../../openspec/specs/harness-management/spec.md)，历史展示与混合快照见 [structured-history](../../openspec/specs/structured-history/spec.md) 与 [session-transcript-cache](../../openspec/specs/session-transcript-cache/spec.md)。无重放不统一阻断其他能力；不按厂商增加私有读取器，也不以当前能力或旧报告宣称新版产品已验收。
 
 协议协商优先使用平台已实现的最高共同可用协议，避免同一 Harness 支持多版却长期低版对接；不要求程序版本报告白名单，也不承诺尚未实现的未来版。遵守对端合法协商选择；分别报告发起版本、实际选择与已知回退依据，没有提供原因时不编造。仅高版无共同可用支持且规范允许时协商低版，不以网络、认证或业务失败自动降版重发。升级及重连后的新连接重新优先高版，既有连接内不热切版本。
 
@@ -226,7 +226,7 @@ Agent 升级后的连接按 ACP 重新协商；不支持或协议错误直接报
 
 ### 5.3 当前连接输出与缓存
 
-实时输出由节点按原生会话及 Harness 连接代际向所有有权客户端（含当前主控端与只读观察端）共享广播，首次订阅无后续增量也能展示已有内容，并异步落入物理隔离的展示快照库；活跃连接内不另设输出内存截断预算。历史、展示快照和实时输出只按可靠来源与代际关联，慢读取或展示快照库 I/O 异常不阻塞 ACP 接收、核心命令去重、严格审批裁决及执行控制，展示故障不取消执行。具体行为见 [structured-history](../../openspec/specs/structured-history/spec.md) 与 [session-transcript-cache](../../openspec/changes/deliver-session-transcript-cache/specs/session-transcript-cache/spec.md)。
+实时输出由节点按原生会话及 Harness 连接代际向所有有权客户端（含当前主控端与只读观察端）共享广播，首次订阅无后续增量也能展示已有内容，并异步落入物理隔离的展示快照库；活跃连接内不另设输出内存截断预算。历史、展示快照和实时输出只按可靠来源与代际关联，慢读取或展示快照库 I/O 异常不阻塞 ACP 接收、核心命令去重、严格审批裁决及执行控制，展示故障不取消执行。具体行为见 [structured-history](../../openspec/specs/structured-history/spec.md) 与 [session-transcript-cache](../../openspec/specs/session-transcript-cache/spec.md)。
 
 正常页面不出现平台保存进度条；展示快照降级、历史不支持、原生同步失败及内容衔接边界仍须明确说明。核心控制面管理存储失败不能降格为可忽略缓存错误。
 
@@ -481,4 +481,4 @@ Run 与未发送队列分开，按 ACP 真实语义由派发/执行推进到终�
 
 ## 12. 规格职责归属
 
-队列数量、已受理接管、失败后挂起与新输入优先（旧项须由当前控制端显式点击继续才重新参与调度，新输入成功不自动恢复旧项）、无期限、不跨节点重启保存由 [session-execution](../../openspec/specs/session-execution/spec.md) 定义；单主会话客户端写控制互斥、顶号式接管与只读观察边界由 [session-control-takeover](../../openspec/specs/session-control-takeover/spec.md) 定义。严格批准保存及节点交付归属 [permission-approvals](../../openspec/specs/permission-approvals/spec.md)，必要状态与附加审计归属 [management-audit](../../openspec/specs/management-audit/spec.md)，基础历史与安全边界归属 [structured-history](../../openspec/specs/structured-history/spec.md)，受管持久化展示快照与混合自适应恢复归属 [session-transcript-cache](../../openspec/changes/deliver-session-transcript-cache/specs/session-transcript-cache/spec.md)。连接不因累计审批等对端请求次数达到平台阈值而断开，额外平台限制核对统一由 [acp-platform-constraints](../../openspec/specs/acp-platform-constraints/spec.md) 定义，不复制第二套产品规则。
+队列数量、已受理接管、失败后挂起与新输入优先（旧项须由当前控制端显式点击继续才重新参与调度，新输入成功不自动恢复旧项）、无期限、不跨节点重启保存由 [session-execution](../../openspec/specs/session-execution/spec.md) 定义；单主会话客户端写控制互斥、顶号式接管与只读观察边界由 [session-control-takeover](../../openspec/specs/session-control-takeover/spec.md) 定义。严格批准保存及节点交付归属 [permission-approvals](../../openspec/specs/permission-approvals/spec.md)，必要状态与附加审计归属 [management-audit](../../openspec/specs/management-audit/spec.md)，基础历史与安全边界归属 [structured-history](../../openspec/specs/structured-history/spec.md)，受管持久化展示快照与混合自适应恢复归属 [session-transcript-cache](../../openspec/specs/session-transcript-cache/spec.md)。连接不因累计审批等对端请求次数达到平台阈值而断开，额外平台限制核对统一由 [acp-platform-constraints](../../openspec/specs/acp-platform-constraints/spec.md) 定义，不复制第二套产品规则。

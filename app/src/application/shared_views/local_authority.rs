@@ -73,7 +73,9 @@ impl LocalViewAuthority {
         capability: &crate::application::native_dispatch::SourceReadCapability<P>,
     ) -> Result<(), ViewError> {
         capability.require_current()?;
-        let source = capability.native().source();
+        self.register_verified_source(capability.native().source())
+    }
+    pub(crate) fn register_verified_source(&self, source: NativeSourceId) -> Result<(), ViewError> {
         let mut sources = self.sources.write().map_err(|_| ViewError::ReadFailure)?;
         if !sources.contains(&source) {
             sources

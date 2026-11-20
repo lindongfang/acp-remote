@@ -21,6 +21,13 @@ pub trait NativeSourceViewOwner: Send + Sync + 'static {
     fn seal_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError>;
     fn restore_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError>;
     fn bind_target(&self, target: &super::NativeSessionKey) -> Result<(), ViewError>;
+    fn preload_cached_target(
+        &self,
+        _target: &super::NativeSessionKey,
+        _frames: Vec<super::CachedHybridFrame>,
+    ) -> Result<(), ViewError> {
+        Ok(())
+    }
     fn join_stopped(&self) -> BoxFuture<'_, ViewAttachmentClose>;
 }
 pub trait NativeSourceViewFactory<P: super::NativeApprovalPort>: Send + Sync + 'static {
@@ -176,6 +183,22 @@ impl ViewAttachmentHandoff {
             }
         };
         owner.bind_target(target)
+    }
+    pub(super) fn preload_cached_target(
+        &self,
+        target: &super::NativeSessionKey,
+        frames: Vec<super::CachedHybridFrame>,
+    ) -> Result<(), ViewError> {
+        let owner = {
+            let state = self.state.lock().map_err(|_| ViewError::ReadFailure)?;
+            match &*state {
+                AttachmentState::Ready(owner) | AttachmentState::Attaching(Some(owner)) => {
+                    owner.clone()
+                }
+                _ => return Err(ViewError::CaptureUnavailable),
+            }
+        };
+        owner.preload_cached_target(target, frames)
     }
     pub(super) fn joined_or_not_installed(&self) -> bool {
         match &*self.teardown() {

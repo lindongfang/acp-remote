@@ -6,8 +6,10 @@ use super::{
 };
 use crate::{
     application::shared_views::{
+        RetainedRaw,
         indexed_journal::{FieldChange, ProjectionEnvelope, ViewProjector},
         journal::ContentIdentity,
+        read_observation::ReadObservation,
     },
     domain::{
         shared_projection::{FieldKnowledge, StructuredItemKind, ToolField},
@@ -16,18 +18,53 @@ use crate::{
 };
 use std::sync::Arc;
 
+impl RetainedRaw for RawMessage {
+    fn len(&self) -> usize {
+        self.bytes().len()
+    }
+    fn bytes(&self) -> &[u8] {
+        Self::bytes(self)
+    }
+}
+
+enum ProjectorVersionSource {
+    Live(Connection),
+    Offline(Version),
+}
+
 pub struct AcpViewProjector {
-    connection: Connection,
+    version_source: ProjectorVersionSource,
 }
 impl AcpViewProjector {
     pub(crate) const fn new(connection: Connection) -> Self {
-        Self { connection }
+        Self {
+            version_source: ProjectorVersionSource::Live(connection),
+        }
     }
-}
-impl ViewProjector<RetainedAcpRaw> for AcpViewProjector {
-    fn inspect(&self, raw: &RetainedAcpRaw) -> ProjectionEnvelope {
-        let message = raw.message();
-        let Some(version) = self.connection.strategy().map(|s| s.version()) else {
+
+    /// Constructs an offline version-aware projector for replaying persisted raw ACP frames
+    /// without requiring a live `Connection`.
+    #[must_use]
+    pub const fn for_version(version: Version) -> Self {
+        Self {
+            version_source: ProjectorVersionSource::Offline(version),
+        }
+    }
+
+    fn current_version(&self) -> Option<Version> {
+        match &self.version_source {
+            ProjectorVersionSource::Live(connection) => connection.strategy().map(|s| s.version()),
+            ProjectorVersionSource::Offline(version) => Some(*version),
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn inspect_message(
+        &self,
+        message: &RawMessage,
+        observation: ReadObservation,
+    ) -> ProjectionEnvelope {
+        let Some(version) = self.current_version() else {
             return ProjectionEnvelope::unknown(None);
         };
         let parsed = envelope(message, version);
@@ -39,8 +76,18 @@ impl ViewProjector<RetainedAcpRaw> for AcpViewProjector {
                 value
             }
         };
-        projected.observation = raw.observation();
+        projected.observation = observation;
         projected
+    }
+}
+impl ViewProjector<RetainedAcpRaw> for AcpViewProjector {
+    fn inspect(&self, raw: &RetainedAcpRaw) -> ProjectionEnvelope {
+        self.inspect_message(raw.message(), raw.observation())
+    }
+}
+impl ViewProjector<RawMessage> for AcpViewProjector {
+    fn inspect(&self, raw: &RawMessage) -> ProjectionEnvelope {
+        self.inspect_message(raw, ReadObservation::unavailable())
     }
 }
 #[allow(
@@ -394,3 +441,72 @@ mod tests;
 
 #[cfg(test)]
 mod projection_independent;
+
+#[cfg(test)]
+mod offline_version_tests {
+    use super::*;
+
+    fn raw(text: &str) -> RawMessage {
+        RawMessage::parse(text.as_bytes().to_vec()).expect("valid raw ACP JSON")
+    }
+
+    #[test]
+    fn offline_projector_preserves_v1_vs_v2_semantics_without_connection() {
+        let v1 = AcpViewProjector::for_version(Version::V1);
+        let v2 = AcpViewProjector::for_version(Version::V2);
+
+        let tool_call = raw(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"tool_call","toolCallId":"tc-1","title":"Read file"}}}"#,
+        );
+        assert_eq!(v1.inspect(&tool_call).kind, StructuredItemKind::Tool);
+        assert_eq!(
+            v2.inspect(&tool_call).kind,
+            StructuredItemKind::UnknownStructured
+        );
+
+        let tool_chunk = raw(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"tool_call_content_chunk","toolCallId":"tc-1","content":{"type":"text","text":"chunk"}}}}"#,
+        );
+        assert_eq!(
+            v1.inspect(&tool_chunk).kind,
+            StructuredItemKind::UnknownStructured
+        );
+        assert_eq!(v2.inspect(&tool_chunk).kind, StructuredItemKind::Tool);
+
+        let state_update = raw(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"state_update"}}}"#,
+        );
+        assert_eq!(
+            v1.inspect(&state_update).kind,
+            StructuredItemKind::UnknownStructured
+        );
+        assert_eq!(v2.inspect(&state_update).kind, StructuredItemKind::State);
+
+        let null_meta = raw(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"tool_call_update","toolCallId":"tc-1","_meta":null}}}"#,
+        );
+        assert!(matches!(
+            v1.inspect(&null_meta).fields[1],
+            FieldChange::Set {
+                knowledge: FieldKnowledge::Uninterpreted,
+                ..
+            }
+        ));
+        assert!(matches!(
+            v2.inspect(&null_meta).fields[1],
+            FieldChange::Set {
+                knowledge: FieldKnowledge::KnownEmpty,
+                ..
+            }
+        ));
+
+        let null_message_id = raw(
+            r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s-1","update":{"sessionUpdate":"agent_message_chunk","messageId":null,"content":{"type":"text","text":"hi"}}}}"#,
+        );
+        assert!(v1.inspect(&null_message_id).failure.is_none());
+        assert_eq!(
+            v2.inspect(&null_message_id).failure,
+            Some(ViewError::ProjectionFailure)
+        );
+    }
+}

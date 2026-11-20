@@ -17,6 +17,23 @@ impl RetainedAcpRaw {
     pub(super) const fn message(&self) -> &RawMessage {
         &self.message
     }
+    pub(crate) const fn from_cached_raw(
+        message: RawMessage,
+        session_id: std::sync::Arc<str>,
+    ) -> Self {
+        use crate::application::shared_views::read_observation::{
+            ReadContextKind, ReadObservation,
+        };
+        Self {
+            message,
+            observation: ReadObservation {
+                kind: ReadContextKind::OutsideReadWindow,
+                window: None,
+                session: Some(session_id),
+                response: None,
+            },
+        }
+    }
     pub(super) fn from_received(received: &Received) -> Self {
         use super::transport::{ViewReadContextKind, ViewReadWindowKind};
         use crate::application::shared_views::{
@@ -96,6 +113,13 @@ impl AcpViewCapture {
         restored: crate::application::shared_views::send_epoch::RestoredDisplayTarget,
     ) -> Result<(u64, u64), ViewError> {
         self.producer.restore_route(key, restored)
+    }
+    pub(crate) fn preload_cached_target(
+        &self,
+        key: crate::domain::native::NativeSessionKey,
+        frames: Vec<crate::application::shared_views::ingress::Frame<RetainedAcpRaw>>,
+    ) -> Result<(), ViewError> {
+        self.producer.preload_cached_target(key, frames)
     }
     pub(crate) fn fail_module_read(
         &mut self,

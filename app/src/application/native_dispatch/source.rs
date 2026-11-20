@@ -297,6 +297,75 @@ where
             .map(|_| ())
     }
 
+    pub(super) async fn ensure_target_replay_read(
+        self: &Arc<Self>,
+        proof: crate::application::queue_owner::ReadTargetProof,
+        read: Arc<super::read_source::ReadAcquisitionState<P>>,
+    ) -> Result<(Arc<SourceSlot<P, L>>, Arc<super::SourceReadCapability<P>>), DispatchError>
+    where
+        G: super::ReadConfigurationPort,
+    {
+        self.running()?;
+        self.queue.verify_read_target(&proof)?;
+        let plan = self.configuration.resolve_read(&proof).await?;
+        self.queue.verify_read_target(&proof)?;
+        if plan.target != proof.target()
+            || plan.native != *proof.native()
+            || plan.source_id != proof.native().source().0
+        {
+            return Err(DispatchError::InvalidConfiguration);
+        }
+        let path = self
+            .repository
+            .resolve_session_tree(proof.native(), &self.deadline()?)
+            .await?;
+        if !path.ancestors.is_empty() {
+            let subject = proof.native().clone();
+            let queue = self.queue.clone();
+            return self
+                .ensure_child_read(
+                    subject,
+                    path,
+                    Arc::new(plan.into_source()),
+                    read,
+                    move || queue.verify_read_target(&proof),
+                )
+                .await;
+        }
+        let source = self
+            .capacity_source(proof.native(), Arc::new(plan.into_source()))
+            .await?;
+        let core = self.clone();
+        let slot = source.clone();
+        self.run_source_job(source, async move {
+            let result = core
+                .ensure_installed_replay_read(
+                    &slot,
+                    proof.native(),
+                    || core.queue.verify_read_target(&proof),
+                    read,
+                )
+                .await;
+            if let Err(error) = result.as_ref() {
+                let bootstrap = slot
+                    .memory
+                    .lock()
+                    .is_ok_and(|memory| memory.scope.is_none() && memory.initialized.is_none());
+                if bootstrap
+                    && !matches!(
+                        error,
+                        DispatchError::SessionCapacityFull | DispatchError::SessionTreeUnverified
+                    )
+                    && !slot.pre.authority.closed.load(Ordering::Acquire)
+                {
+                    core.fail_source(&slot, *error);
+                }
+            }
+            result
+        })
+        .await
+    }
+
     pub(super) async fn ensure_source_read(
         self: &Arc<Self>,
         proof: super::SourceReadSelectionProof,
@@ -339,7 +408,12 @@ where
         let slot = source.clone();
         self.run_source_job(source, async move {
             let result = core
-                .ensure_installed_external_read(&slot, &proof, read)
+                .ensure_installed_replay_read(
+                    &slot,
+                    proof.native(),
+                    || proof.require_current(),
+                    read,
+                )
                 .await;
             if let Err(error) = result.as_ref() {
                 let bootstrap = slot
@@ -361,27 +435,30 @@ where
         .await
     }
 
-    async fn ensure_installed_external_read(
+    async fn ensure_installed_replay_read<C>(
         self: &Arc<Self>,
         source: &Arc<SourceSlot<P, L>>,
-        proof: &super::SourceReadSelectionProof,
+        target_key: &super::NativeSessionKey,
+        check: C,
         read: Arc<super::read_source::ReadAcquisitionState<P>>,
-    ) -> Result<(Arc<SourceSlot<P, L>>, Arc<super::SourceReadCapability<P>>), DispatchError> {
+    ) -> Result<(Arc<SourceSlot<P, L>>, Arc<super::SourceReadCapability<P>>), DispatchError>
+    where
+        C: Fn() -> Result<(), DispatchError> + Send + Sync,
+    {
         let install_guard = source.install.lock().await;
         if source.pre.authority.closed.load(Ordering::Acquire) {
             return Err(DispatchError::Stopped);
         }
         self.running()?;
-        proof.require_current()?;
-        let deadline = self.deadline()?;
-        self.repository
-            .reserve_source(&source.pre, &deadline)
-            .await?;
-        source.recorded.store(true, Ordering::SeqCst);
-        if let Err(error) = self
-            .initialize_source_checked(source, || proof.require_current())
-            .await
-        {
+        check()?;
+        if !source.recorded.load(Ordering::Acquire) {
+            let deadline = self.deadline()?;
+            self.repository
+                .reserve_source(&source.pre, &deadline)
+                .await?;
+            source.recorded.store(true, Ordering::SeqCst);
+        }
+        if let Err(error) = self.initialize_source_checked(source, &check).await {
             self.fail_source(source, error);
             if source.controller.current_phase()? == LaunchPhase::Entered {
                 let state_proof = {
@@ -414,7 +491,7 @@ where
         let target_capability = {
             let targets = source.targets.lock().map_err(|_| DispatchError::Stopped)?;
             targets
-                .get(proof.native())
+                .get(target_key)
                 .filter(|resource| {
                     !resource.pre.authority.closed.load(Ordering::Acquire)
                         && !resource.pre.authority.releasing.load(Ordering::Acquire)
@@ -428,7 +505,7 @@ where
                 .external_reads
                 .lock()
                 .map_err(|_| DispatchError::Stopped)?
-                .get(proof.native())
+                .get(target_key)
                 .filter(|capability| capability.require_current().is_ok())
                 .cloned();
             if let Some(existing) = existing {
@@ -460,7 +537,7 @@ where
                     &source.plan.configuration,
                     raw_setup,
                 )?);
-                let capacity = self.capacity_resource(source, proof.native())?;
+                let capacity = self.capacity_resource(source, target_key)?;
                 let created = Arc::new(super::SourceReadCapability::RootResource(
                     super::read_source::RootReadCapability {
                         kind: super::read_source::ReadTargetKind::SourceOnly,
@@ -469,7 +546,7 @@ where
                         pre_resource: Some(capacity.pre.clone()),
                         capacity_admission: self.read_capacity(source, &capacity),
                         capacity,
-                        native: proof.native().clone(),
+                        native: target_key.clone(),
                         scope,
                         binding,
                         wire,
@@ -487,13 +564,82 @@ where
                 external_reads
                     .try_reserve(1)
                     .map_err(|_| DispatchError::StorageUnavailable)?;
-                external_reads.insert(proof.native().clone(), created.clone());
+                external_reads.insert(target_key.clone(), created.clone());
                 created
             }
         };
         drop(install_guard);
         read.publish(capability.clone())?;
         Ok((source.clone(), capability))
+    }
+
+    pub(super) async fn initialize_probe_source<C>(
+        self: &Arc<Self>,
+        source: &Arc<SourceSlot<P, L>>,
+        check: C,
+    ) -> Result<P::Source, DispatchError>
+    where
+        C: Fn() -> Result<(), DispatchError> + Send + Sync,
+    {
+        let install_guard = source.install.lock().await;
+        if source.pre.authority.closed.load(Ordering::Acquire) {
+            return Err(DispatchError::Stopped);
+        }
+        self.running()?;
+        check()?;
+        if !source.recorded.load(Ordering::Acquire) {
+            self.repository
+                .reserve_source(&source.pre, &self.deadline()?)
+                .await?;
+            source.recorded.store(true, Ordering::SeqCst);
+        }
+        if let Err(error) = self.initialize_source_checked(source, check).await {
+            let bootstrap = source
+                .memory
+                .lock()
+                .is_ok_and(|memory| memory.scope.is_none() && memory.initialized.is_none());
+            if bootstrap
+                && !matches!(
+                    error,
+                    DispatchError::SessionCapacityFull | DispatchError::SessionTreeUnverified
+                )
+            {
+                self.fail_source(source, error);
+                if source.controller.current_phase()? == LaunchPhase::Entered {
+                    let state_proof = {
+                        let mut saved = source
+                            .failure_record
+                            .lock()
+                            .map_err(|_| DispatchError::Stopped)?;
+                        saved
+                            .get_or_insert_with(|| {
+                                Arc::new(SourceStateProof {
+                                    source: source.pre.clone(),
+                                    state: SourceLifecycle::Unknown,
+                                    initialized: None,
+                                    at: self.clock.unix_millis(),
+                                })
+                            })
+                            .clone()
+                    };
+                    let _ = self
+                        .repository
+                        .record_source_state(&state_proof, &self.deadline()?)
+                        .await;
+                }
+                drop(install_guard);
+                let _ = self
+                    .collect_source_physical(source, self.effective_close_deadline(source)?)
+                    .await;
+            }
+            return Err(error);
+        }
+        drop(install_guard);
+        source
+            .source
+            .get()
+            .cloned()
+            .ok_or(DispatchError::ProtocolUnavailable)
     }
 
     async fn ensure_planned_resource(
@@ -1439,6 +1585,9 @@ where
             .await?;
         if !matches!(&response.value,LifecycleResponseValue::Resumed(id) if id.as_ref()==resource.pre.native.native_id())
         {
+            if let Some(observer) = self.transcript_observer.get() {
+                observer.on_resume_rejected(resource.pre.native());
+            }
             return Err(DispatchError::ProtocolRejected);
         }
         let loaded_proof = {
@@ -1481,71 +1630,82 @@ where
         {
             return Err(DispatchError::NotReady);
         }
-        let mut facts = resource
-            .target
-            .facts
-            .lock()
-            .map_err(|_| DispatchError::Stopped)?;
-        let _gate = source
-            .pre
-            .authority
-            .gate
-            .lock()
-            .map_err(|_| DispatchError::Stopped)?;
-        self.running()?;
-        if source.pre.authority.closed.load(Ordering::SeqCst)
-            || source.pre.authority.closing.load(Ordering::SeqCst)
-            || resource.pre.authority.closed.load(Ordering::SeqCst)
-            || resource.pre.authority.releasing.load(Ordering::SeqCst)
         {
-            return Err(DispatchError::Stopped);
+            let mut facts = resource
+                .target
+                .facts
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?;
+            let _gate = source
+                .pre
+                .authority
+                .gate
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?;
+            self.running()?;
+            if source.pre.authority.closed.load(Ordering::SeqCst)
+                || source.pre.authority.closing.load(Ordering::SeqCst)
+                || resource.pre.authority.closed.load(Ordering::SeqCst)
+                || resource.pre.authority.releasing.load(Ordering::SeqCst)
+            {
+                return Err(DispatchError::Stopped);
+            }
+            let metadata = resource.pre.metadata();
+            let epoch = ResourceEpoch {
+                runtime: metadata.source.runtime,
+                connection: HarnessConnectionEpoch(metadata.source.connection_epoch),
+                load: LoadEpoch(metadata.load_epoch),
+            };
+            let binding = Arc::new(SessionBinding {
+                scope,
+                native: resource.pre.native.clone(),
+                target: metadata.target,
+                resource: epoch,
+                instance: metadata.source.instance_id,
+                owner: metadata.owner,
+                config_identity: metadata.source.config_identity,
+                config_revision: metadata.source.config_revision,
+                authority: resource.pre.authority.clone(),
+            });
+            let verified = Arc::new(VerifiedLoadedBinding {
+                binding: binding.clone(),
+                setup,
+            });
+            self.protocol.attach_prompt_binding(
+                connection,
+                &verified,
+                source.gate.get().ok_or(DispatchError::InvalidScope)?,
+            )?;
+            resource
+                .loaded
+                .set(verified)
+                .map_err(|_| DispatchError::Conflict)?;
+            facts.binding = Some(binding);
+            if wire == ProtocolVersion::V1
+                && facts.foreground == WorkActivity::Unknown
+                && matches!(facts.foreground_evidence, ForegroundEvidence::Unknown)
+                && facts.permissions.is_empty()
+            {
+                facts.foreground = WorkActivity::Idle;
+                facts.foreground_evidence = ForegroundEvidence::OwnedV1Idle;
+            }
+            let foreground = facts.foreground;
+            facts
+                .activity
+                .observe_foreground(epoch, foreground)
+                .map_err(|_| DispatchError::InvalidResource)?;
+            facts.events.push_back(QueueOwnerEvent::ActivityChanged);
         }
-        let metadata = resource.pre.metadata();
-        let epoch = ResourceEpoch {
-            runtime: metadata.source.runtime,
-            connection: HarnessConnectionEpoch(metadata.source.connection_epoch),
-            load: LoadEpoch(metadata.load_epoch),
-        };
-        let binding = Arc::new(SessionBinding {
-            scope,
-            native: resource.pre.native.clone(),
-            target: metadata.target,
-            resource: epoch,
-            instance: metadata.source.instance_id,
-            owner: metadata.owner,
-            config_identity: metadata.source.config_identity,
-            config_revision: metadata.source.config_revision,
-            authority: resource.pre.authority.clone(),
-        });
-        let verified = Arc::new(VerifiedLoadedBinding {
-            binding: binding.clone(),
-            setup,
-        });
-        self.protocol.attach_prompt_binding(
-            connection,
-            &verified,
-            source.gate.get().ok_or(DispatchError::InvalidScope)?,
-        )?;
-        resource
-            .loaded
-            .set(verified)
-            .map_err(|_| DispatchError::Conflict)?;
-        facts.binding = Some(binding);
-        if wire == ProtocolVersion::V1
-            && facts.foreground == WorkActivity::Unknown
-            && matches!(facts.foreground_evidence, ForegroundEvidence::Unknown)
-            && facts.permissions.is_empty()
+        if let Some(observer) = self.transcript_observer.get()
+            && let Some(frames) = observer
+                .cached_frames_for_hybrid_resume(resource.pre.native())
+                .await
         {
-            facts.foreground = WorkActivity::Idle;
-            facts.foreground_evidence = ForegroundEvidence::OwnedV1Idle;
+            let _ = source
+                .view_attachment
+                .preload_cached_target(resource.pre.native(), frames);
+            observer.on_session_resumed_without_replay(resource.pre.native());
         }
-        let foreground = facts.foreground;
-        facts
-            .activity
-            .observe_foreground(epoch, foreground)
-            .map_err(|_| DispatchError::InvalidResource)?;
-        facts.events.push_back(QueueOwnerEvent::ActivityChanged);
-        drop(facts);
         self.environment.wake(resource.pre.native());
         Ok(())
     }
