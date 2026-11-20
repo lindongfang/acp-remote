@@ -1,3 +1,9 @@
+import {
+  buildBindTargetInitialDocument as directBuildBind,
+  buildInstallHarnessDocument as directBuildInstall,
+  CatalogActionError as DirectCatalogActionError,
+  utf16leBase64 as directUtf16leBase64,
+} from "../src/management/catalog-documents";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildBindTargetInitialDocument,
@@ -701,5 +707,43 @@ describe("workspace-catalog-view validation and DOM rendering", () => {
       },
       "native-1",
     );
+  });
+});
+
+describe("catalog-documents extraction and re-export compatibility", () => {
+  it("maintains 100% referential identity between direct and client.ts exports", () => {
+    expect(directBuildBind).toBe(buildBindTargetInitialDocument);
+    expect(directBuildInstall).toBe(buildInstallHarnessDocument);
+    expect(DirectCatalogActionError).toBe(CatalogActionError);
+    expect(directUtf16leBase64).toBe(utf16leBase64);
+  });
+
+  it("constructs CatalogActionError with and without detail", () => {
+    const errorWithDetail = new DirectCatalogActionError(
+      "upload_failed",
+      "chunk error",
+    );
+    expect(errorWithDetail.name).toBe("CatalogActionError");
+    expect(errorWithDetail.code).toBe("upload_failed");
+    expect(errorWithDetail.detail).toBe("chunk error");
+    expect(errorWithDetail.message).toBe("upload_failed: chunk error");
+
+    const errorWithoutDetail = new DirectCatalogActionError(
+      "preparation_timeout",
+    );
+    expect(errorWithoutDetail.name).toBe("CatalogActionError");
+    expect(errorWithoutDetail.code).toBe("preparation_timeout");
+    expect(errorWithoutDetail.detail).toBeNull();
+    expect(errorWithoutDetail.message).toBe("preparation_timeout");
+  });
+
+  it("encodes string to UTF-16LE Base64 properly", () => {
+    const encoded = directUtf16leBase64("node");
+    const binary = globalThis.atob(encoded);
+    expect(binary.length).toBe(8);
+    expect(binary.charCodeAt(0)).toBe(110);
+    expect(binary.charCodeAt(1)).toBe(0);
+    expect(binary.charCodeAt(2)).toBe(111);
+    expect(binary.charCodeAt(3)).toBe(0);
   });
 });

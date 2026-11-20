@@ -1,3 +1,10 @@
+import {
+  InflightInputAcknowledgementTracker,
+  safeReleaseUpload,
+  uploadBinaryChunks,
+  waitForCatalogUploadReady,
+} from "../src/management/upload-transfer";
+import { CatalogActionError } from "../src/management/catalog-documents";
 import { describe, expect, it, vi } from "vitest";
 
 import {
@@ -1219,5 +1226,158 @@ describe("management WebSocket client", () => {
       new ManagementConnectionError("connection_closed", 4401).closeCode,
     ).toBe(4401);
     expect(id(4)).not.toBe(randomId128());
+  });
+});
+
+describe("upload-transfer helper components", () => {
+  it("InflightInputAcknowledgementTracker tracks and accepts matching acknowledgements", async () => {
+    const tracker = new InflightInputAcknowledgementTracker();
+    expect(tracker.pending).toBeNull();
+    expect(tracker.accept({ uploadId: "abc", nextOffset: 10n })).toBe("no_pending");
+
+    let resolvedAck: unknown = null;
+    let rejectedError: unknown = null;
+    const timeout = globalThis.setTimeout(() => {}, 10_000);
+    tracker.track({
+      uploadId: "test-upload-id",
+      expectedNextOffset: 100n,
+      resolve: (ack) => { resolvedAck = ack; },
+      reject: (err) => { rejectedError = err; },
+      timeout,
+    });
+    expect(tracker.pending).not.toBeNull();
+    expect(tracker.accept({ uploadId: "wrong-upload-id", nextOffset: 100n })).toBe("mismatch");
+    expect(tracker.pending).not.toBeNull();
+    expect(tracker.accept({ uploadId: "test-upload-id", nextOffset: 50n })).toBe("mismatch");
+    expect(tracker.pending).not.toBeNull();
+
+    const matched = tracker.accept({ uploadId: "test-upload-id", nextOffset: 100n });
+    expect(matched).toBe("matched");
+    expect(tracker.pending).toBeNull();
+    expect(resolvedAck).toEqual({ uploadId: "test-upload-id", nextOffset: 100n });
+    expect(rejectedError).toBeNull();
+  });
+
+  it("InflightInputAcknowledgementTracker rejects and clears pending state", () => {
+    const tracker = new InflightInputAcknowledgementTracker();
+    let rejectedError: unknown = null;
+    const timeout = globalThis.setTimeout(() => {}, 10_000);
+    tracker.track({
+      uploadId: "test-upload-id",
+      expectedNextOffset: 100n,
+      resolve: () => {},
+      reject: (err) => { rejectedError = err; },
+      timeout,
+    });
+    const err = new Error("connection failure");
+    tracker.reject(err);
+    expect(rejectedError).toBe(err);
+    expect(tracker.pending).toBeNull();
+
+    expect(() => tracker.reject(new Error("second"))).not.toThrow();
+  });
+
+  it("uploadBinaryChunks splits data and validates acknowledgements", async () => {
+    const data = new Uint8Array(50);
+    for (let i = 0; i < 50; i++) data[i] = i;
+
+    const chunksSent: Uint8Array[] = [];
+    const total = await uploadBinaryChunks(
+      "upload-1",
+      data,
+      async (uploadId, offset, chunk) => {
+        expect(uploadId).toBe("upload-1");
+        chunksSent.push(chunk);
+        return { uploadId, nextOffset: offset + BigInt(chunk.length) };
+      },
+      20,
+    );
+    expect(total).toBe(50n);
+    expect(chunksSent).toHaveLength(3);
+    expect(chunksSent[0]?.length).toBe(20);
+    expect(chunksSent[1]?.length).toBe(20);
+    expect(chunksSent[2]?.length).toBe(10);
+
+    await expect(
+      uploadBinaryChunks(
+        "upload-1",
+        data,
+        async (_id, offset) => ({ uploadId: "wrong-id", nextOffset: offset + 10n }),
+        20,
+      ),
+    ).rejects.toMatchObject({
+      name: "CatalogActionError",
+      code: "upload_failed",
+    });
+
+    await expect(
+      uploadBinaryChunks(
+        "upload-1",
+        data,
+        async (uploadId, offset) => ({ uploadId, nextOffset: offset }),
+        20,
+      ),
+    ).rejects.toMatchObject({
+      name: "CatalogActionError",
+      code: "upload_failed",
+    });
+  });
+
+  it("waitForCatalogUploadReady handles ready, failed, mismatch and timeout", async () => {
+    await expect(
+      waitForCatalogUploadReady(
+        "u1",
+        async () => ({ uploadId: "u1", phase: "ready", nextOffset: "10" }),
+        1000,
+        10,
+      ),
+    ).resolves.toBeUndefined();
+
+    await expect(
+      waitForCatalogUploadReady(
+        "u1",
+        async () => ({ uploadId: "u1", phase: "failed", error: "bad format", nextOffset: "0" }),
+        1000,
+        10,
+      ),
+    ).rejects.toMatchObject({
+      name: "CatalogActionError",
+      code: "upload_failed",
+      detail: "bad format",
+    });
+
+    await expect(
+      waitForCatalogUploadReady(
+        "u1",
+        async () => ({ uploadId: "u2", phase: "ready", nextOffset: "10" }),
+        1000,
+        10,
+      ),
+    ).rejects.toMatchObject({
+      name: "CatalogActionError",
+      code: "upload_failed",
+    });
+
+    await expect(
+      waitForCatalogUploadReady(
+        "u1",
+        async () => ({ uploadId: "u1", phase: "preparing", nextOffset: "10" }),
+        20,
+        5,
+      ),
+    ).rejects.toMatchObject({
+      name: "CatalogActionError",
+      code: "preparation_timeout",
+    });
+  });
+
+  it("safeReleaseUpload catches release exceptions without throwing", async () => {
+    let called = false;
+    await safeReleaseUpload(async () => {
+      called = true;
+      throw new Error("already closed");
+    });
+    expect(called).toBe(true);
+    expect(new CatalogActionError("upload_failed")).toBeInstanceOf(CatalogActionError);
   });
 });

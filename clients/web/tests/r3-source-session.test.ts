@@ -1,5 +1,4 @@
 import { readFileSync } from "node:fs";
-import { stripTypeScriptTypes } from "node:module";
 import { describe, expect, it, vi } from "vitest";
 import {
   ManagementConnection,
@@ -45,6 +44,11 @@ import {
 } from "../src/protocol/jws";
 import { publicKeyFingerprint } from "../src/protocol/pairing";
 import type { ViewDataFrame } from "../src/views/binary";
+import {
+  releaseSharedDisplay,
+  SharedViewController,
+  type SharedViewDisplayLike,
+} from "../src/workbench/shared-view-controller";
 import { MANAGEMENT_ERROR_CASES } from "./error-contract-vectors";
 
 const ORIGIN = "https://node.example.test";
@@ -1158,18 +1162,6 @@ describe("R3-07 / R3-09 / R3-10 panel isolation, stale preservation, CurrentOnly
     });
     expect(detach).toHaveBeenCalledTimes(1);
 
-    const main = new TextDecoder().decode(readFileSync(new URL("../src/main.ts", import.meta.url)));
-    const releaseSection = stripTypeScriptTypes(
-      main.slice(
-        main.indexOf("function releaseSharedDisplay("),
-        main.indexOf("\nfunction suspendSharedView("),
-      ),
-    );
-    const makeRelease = new Function(`${releaseSection}\nreturn releaseSharedDisplay;`);
-    const releaseSharedDisplay = makeRelease() as (
-      d: { readonly streamId: string; readonly detached?: boolean },
-      c: { detachSessionStream: (id: string) => void; closeSessionView: (id: string) => Promise<unknown> } | null,
-    ) => void;
     const conn = {
       detachSessionStream: vi.fn(),
       closeSessionView: vi.fn(async () => ({})),
@@ -1185,82 +1177,77 @@ describe("R3-07 / R3-09 / R3-10 panel isolation, stale preservation, CurrentOnly
     expect(conn.closeSessionView).toHaveBeenCalledWith(id(84));
   });
 
-  it("isolates sharedViewSpec source reconnect/stale preservation from inspectedQueueTargetId in main.ts", async () => {
-    const main = new TextDecoder().decode(readFileSync(new URL("../src/main.ts", import.meta.url)));
-    expect(main).not.toContain("product.status");
-    const sourceSection = stripTypeScriptTypes(
-      main.slice(
-        main.indexOf("function handleSourceResultViewData("),
-        main.indexOf("\nasync function loadSessionQueue("),
-      ),
-    );
-    const displays: Array<{ streamId: string; element: { dataset: Record<string, string>; removeAttribute: (k: string) => void } }> = [];
+  it("isolates sharedViewSpec source reconnect/stale preservation from inspectedQueueTargetId in workbench controllers", async () => {
+    const workbenchSources = [
+      "../src/main.ts",
+      "../src/workbench/dom-primitives.ts",
+      "../src/workbench/error-formatting.ts",
+      "../src/workbench/shared-view-controller.ts",
+      "../src/workbench/queued-body-controller.ts",
+      "../src/workbench/session-queue-controller.ts",
+      "../src/workbench/approval-controller.ts",
+      "../src/workbench/capacity-release-controller.ts",
+      "../src/workbench/workspace-catalog-controller.ts",
+      "../src/workbench/source-session-controller.ts",
+      "../src/workbench/device-trust-panel.ts",
+      "../src/workbench/pairing-access-controller.ts",
+      "../src/workbench/management-workbench.ts",
+    ];
+    for (const relPath of workbenchSources) {
+      const content = new TextDecoder().decode(
+        readFileSync(new URL(relPath, import.meta.url)),
+      );
+      expect(content).not.toContain("product.status");
+    }
+
+    const displays: Array<
+      SharedViewDisplayLike & {
+        element: {
+          dataset: Record<string, string>;
+          removeAttribute: (k: string) => void;
+        };
+      }
+    > = [];
     const connection = {
       openSourceSessionView: vi.fn(),
       rebindSessionView: vi.fn(),
       sendSessionViewCredit: vi.fn(),
       detachSessionStream: vi.fn(),
-      closeSessionView: vi.fn(async () => ({ state: "closed", lastCommittedPacket: "0" })),
+      closeSessionView: vi.fn(async () => ({
+        state: "closed",
+        lastCommittedPacket: "0",
+      })),
     };
     const dashboard = vi.fn();
-    const releaseSpy = vi.fn();
-    const make = new Function(
-      "connection",
-      "SessionViewDisplay",
-      "document",
-      "sharedViewHost",
-      "showManagementDashboard",
-      "managementErrorMessage",
-      "clearPersistedSourceViewSpec",
-      "persistSourceViewSpec",
-      "releaseSharedDisplay",
-      "openSharedSessionView",
-      "closeSharedSessionView",
-      "ManagementConnection",
-      `
-        let management = connection, managementGeneration = 1;
-        let inspectedQueueTargetId = "queue-target-kept";
-        let sharedViewTargetId = null, sharedViewSpec = null, sharedViewStaleNotice = null;
-        let sharedSessionDisplay = null, sharedSessionConnection = null, openedSessionView = null;
-        let sharedViewAttempt = 0, activeSourceResultRead = null, sourceResultTimer = null, sourceResultAttempt = 0;
-        let sourceRegistration = null, sourceFact = null, inspectedSourceResult = null, sourceRawInspectorExpanded = false;
-        let sourceSelectionDraft = { sourceId: "", harnessId: "", profileId: "", profileRevision: "", workspaceId: "", launchPath: "" };
-        let sourceManualNativeIdDraft = "";
-        const staleSharedDisplays = new Set(), sourceRawInspectors = new Set();
-        ${sourceSection}
-        return {
-          openSource: openSharedSourceView,
-          rebind: rebindSharedView,
-          state: () => ({ sharedViewSpec, sharedViewStaleNotice, inspectedQueueTargetId, openedSessionView })
+    let inspectedQueueTargetId = "queue-target-kept";
+
+    const controller = new SharedViewController({
+      getManagement: () => connection as unknown as ManagementConnection,
+      getManagementGeneration: () => 1,
+      getInspectedQueueTargetId: () => inspectedQueueTargetId,
+      getSharedViewHost: () => ({ append: vi.fn() }),
+      renderDashboard: dashboard,
+      formatError: () => "unavailable",
+      clearPersistedSourceViewSpec: vi.fn(),
+      persistSourceViewSpec: vi.fn(),
+      displayFactory: (_owner, opened) => {
+        const d = {
+          element: {
+            dataset: {} as Record<string, string>,
+            removeAttribute(key: string) {
+              if (key === "data-stale") delete this.dataset.stale;
+              delete this.dataset[key];
+            },
+          },
+          streamId: opened.streamId,
+          start: vi.fn(),
+          suspend: vi.fn(),
+          dispose: vi.fn(),
         };
-      `,
-    );
-    const api = make(
-      connection,
-      class {
-        element = {
-          dataset: {} as Record<string, string>,
-          removeAttribute(key: string) { delete this.dataset[key]; },
-        };
-        streamId: string;
-        start = vi.fn();
-        suspend = vi.fn();
-        dispose = vi.fn();
-        constructor(_owner: unknown, opened: { streamId: string }) {
-          this.streamId = opened.streamId;
-          displays.push(this);
-        }
+        displays.push(d);
+        return d;
       },
-      {},
-      { append: vi.fn() },
-      dashboard,
-      () => "unavailable",
-      vi.fn(),
-      vi.fn(),
-      releaseSpy,
-      vi.fn(),
-      vi.fn(),
-    );
+    });
 
     const firstOpened = parseSessionViewOpened({
       v: 1,
@@ -1280,26 +1267,37 @@ describe("R3-07 / R3-09 / R3-10 panel isolation, stale preservation, CurrentOnly
       },
     });
     connection.openSourceSessionView.mockResolvedValueOnce(firstOpened);
-    await api.openSource({}, validSelection(), "ext-1", null, "first_open");
-    expect(api.state().sharedViewSpec?.kind).toBe("source");
-    expect(api.state().inspectedQueueTargetId).toBe("queue-target-kept");
+    await controller.openSharedSourceView(
+      {} as never,
+      validSelection(),
+      "ext-1",
+      null,
+      "first_open",
+    );
+    expect(controller.sharedViewSpec?.kind).toBe("source");
+    expect(inspectedQueueTargetId).toBe("queue-target-kept");
 
     // On reconnect failure, preserve existing display and mark data-stale="true"
     connection.openSourceSessionView.mockRejectedValueOnce(
       new ManagementRequestError("read_failed"),
     );
-    await api.openSource({}, validSelection(), "ext-1", null, "reconnect");
+    await controller.openSharedSourceView(
+      {} as never,
+      validSelection(),
+      "ext-1",
+      null,
+      "reconnect",
+    );
     expect(displays[0]?.element.dataset.stale).toBe("true");
-    expect(api.state().sharedViewStaleNotice).toContain("重新校验失败");
-    expect(api.state().inspectedQueueTargetId).toBe("queue-target-kept");
+    expect(controller.sharedViewStaleNotice).toContain("重新校验失败");
+    expect(inspectedQueueTargetId).toBe("queue-target-kept");
 
     // Successful view.rebind replaces stream cleanly without sending duplicate detach/close for old stream
     const reboundOpened = { ...firstOpened, streamId: id(92) };
     connection.rebindSessionView.mockResolvedValueOnce(reboundOpened);
-    await api.rebind({}, firstOpened);
-    expect(api.state().openedSessionView.streamId).toBe(id(92));
-    expect(api.state().sharedViewStaleNotice).toBeNull();
-    expect(releaseSpy).not.toHaveBeenCalled();
+    await controller.rebindSharedView({} as never, firstOpened);
+    expect(controller.openedSessionView?.streamId).toBe(id(92));
+    expect(controller.sharedViewStaleNotice).toBeNull();
     expect(connection.detachSessionStream).not.toHaveBeenCalled();
     expect(connection.closeSessionView).not.toHaveBeenCalled();
   });

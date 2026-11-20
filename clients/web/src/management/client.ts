@@ -99,11 +99,32 @@ import {
   type SourceSessionResultReleaseResult,
   type WorkspaceRecord,
 } from "./session-protocol";
+import { encodeInputData } from "./input-transfer";
 import {
-  INPUT_CHUNK_BYTES,
-  encodeInputData,
-  type InputAcknowledgement,
-} from "./input-transfer";
+  InflightInputAcknowledgementTracker,
+  uploadBinaryChunks,
+  waitForCatalogUploadReady,
+  safeReleaseUpload,
+} from "./upload-transfer";
+import {
+  CatalogActionError,
+  utf16leBase64,
+  buildInstallHarnessDocument,
+  buildBindTargetInitialDocument,
+} from "./catalog-documents";
+export {
+  CatalogActionError,
+  utf16leBase64,
+  buildInstallHarnessDocument,
+  buildBindTargetInitialDocument,
+};
+export type {
+  CatalogLaunchEnvInput,
+  CatalogAdditionalDirectoryInput,
+  CatalogProfileRecipeInput,
+  InstallHarnessDocumentInput,
+  BindTargetInitialDocumentInput,
+} from "./catalog-documents";
 import {
   encodeViewCredit,
   encodeViewDetach,
@@ -112,8 +133,6 @@ import {
 
 const AUTHENTICATION_TIMEOUT_MS = 20_000;
 const REQUEST_TIMEOUT_MS = 15_000;
-const CATALOG_PREPARATION_TIMEOUT_MS = 30_000;
-const CATALOG_PREPARATION_POLL_MS = 250;
 const CATALOG_ENCODER = new TextEncoder();
 const NORMAL_CLOSURE = 1000;
 const PROTOCOL_CLOSURE = 4400;
@@ -165,133 +184,6 @@ export class SessionConsumeOutcomeError extends Error {
   }
 }
 
-export class CatalogActionError extends Error {
-  readonly code: "upload_failed" | "preparation_timeout" | "request_rejected";
-  readonly detail: string | null;
-
-  constructor(
-    code: "upload_failed" | "preparation_timeout" | "request_rejected",
-    detail: string | null = null,
-  ) {
-    super(detail === null ? code : `${code}: ${detail}`);
-    this.name = "CatalogActionError";
-    this.code = code;
-    this.detail = detail;
-  }
-}
-
-export interface CatalogLaunchEnvInput {
-  readonly name: string;
-  readonly value: string;
-}
-
-export interface CatalogAdditionalDirectoryInput {
-  readonly workspaceId: string;
-  readonly path: string;
-}
-
-export interface CatalogProfileRecipeInput {
-  readonly wire: 1 | 2;
-  readonly mcpServers?: readonly JsonValue[];
-  readonly additionalDirectories?: readonly CatalogAdditionalDirectoryInput[];
-  readonly extra?: Record<string, JsonValue>;
-}
-
-export interface InstallHarnessDocumentInput {
-  readonly name: string;
-  readonly source:
-    | { readonly kind: "new"; readonly name: string }
-    | { readonly kind: "existing"; readonly sourceId: string };
-  readonly executable: string;
-  readonly args?: readonly string[];
-  readonly environment?: readonly CatalogLaunchEnvInput[];
-  readonly recipes?: readonly CatalogProfileRecipeInput[];
-}
-
-export interface BindTargetInitialDocumentInput {
-  readonly targetId: string;
-  readonly sourceId: string;
-  readonly harnessId: string;
-  readonly profileId: string;
-  readonly profileRevision: string;
-  readonly workspaceId: string;
-  readonly launchPath: string;
-}
-
-export function utf16leBase64(value: string): string {
-  const bytes = new Uint8Array(value.length * 2);
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    bytes[i * 2] = code & 0xff;
-    bytes[i * 2 + 1] = code >>> 8;
-  }
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return globalThis.btoa(binary);
-}
-
-export function buildInstallHarnessDocument(
-  input: InstallHarnessDocumentInput,
-): Record<string, unknown> {
-  const recipesInput: readonly CatalogProfileRecipeInput[] =
-    input.recipes !== undefined && input.recipes.length > 0
-      ? input.recipes
-      : [{ wire: 2 }];
-  return {
-    kind: "install_harness",
-    name: input.name,
-    source:
-      input.source.kind === "existing"
-        ? {
-            kind: "existing",
-            sourceId: requireSessionId(input.source.sourceId),
-          }
-        : {
-            kind: "new",
-            name: input.source.name,
-          },
-    profile: {
-      format: 1,
-      launch: {
-        executable_utf16le_base64: utf16leBase64(input.executable),
-        arguments_utf16le_base64: (input.args ?? []).map(utf16leBase64),
-        environment: (input.environment ?? []).map((entry) => ({
-          name_utf16le_base64: utf16leBase64(entry.name),
-          value_utf16le_base64: utf16leBase64(entry.value),
-        })),
-      },
-      recipes: recipesInput.map((recipe) => ({
-        wire: recipe.wire,
-        mcp_servers: recipe.mcpServers ?? [],
-        additional_directories: (recipe.additionalDirectories ?? []).map(
-          (dir) => ({
-            workspace_id: requireSessionId(dir.workspaceId),
-            path: dir.path,
-          }),
-        ),
-        extra: recipe.extra ?? {},
-      })),
-    },
-  };
-}
-
-export function buildBindTargetInitialDocument(
-  input: BindTargetInitialDocumentInput,
-): Record<string, unknown> {
-  return {
-    kind: "bind_target_initial",
-    targetId: requireSessionId(input.targetId),
-    sourceId: requireSessionId(input.sourceId),
-    harnessId: requireSessionId(input.harnessId),
-    profileId: requireSessionId(input.profileId),
-    profileRevision: requireSessionU64(input.profileRevision),
-    workspaceId: requireSessionId(input.workspaceId),
-    launchPath: input.launchPath,
-  };
-}
-
 export interface ManagementClose {
   readonly code: number;
   readonly reason: string;
@@ -331,14 +223,6 @@ interface PendingRequest {
   readonly timeout: number;
 }
 
-interface PendingInputAcknowledgement {
-  readonly uploadId: string;
-  readonly expectedNextOffset: bigint;
-  readonly resolve: (acknowledgement: InputAcknowledgement) => void;
-  readonly reject: (error: Error) => void;
-  readonly timeout: number;
-}
-
 export class ManagementConnection {
   readonly #origin: string;
   readonly #identity: ExpectedIdentity;
@@ -350,7 +234,7 @@ export class ManagementConnection {
   readonly #callbacks: ManagementConnectionCallbacks;
   readonly #pending = new Map<string, PendingRequest>();
   #inbound: Promise<void> = Promise.resolve();
-  #pendingInputAcknowledgement: PendingInputAcknowledgement | null = null;
+  readonly #inputAckTracker = new InflightInputAcknowledgementTracker();
   #state: ConnectionState = "idle";
   #socket: WebSocket | null = null;
   #hello: HelloFrame | null = null;
@@ -558,7 +442,7 @@ export class ManagementConnection {
     if (this.#state !== "authenticated") {
       throw new ManagementConnectionError("not_connected");
     }
-    if (this.#pendingInputAcknowledgement !== null) {
+    if (this.#inputAckTracker.pending !== null) {
       throw new ManagementProtocolError("invalid_response");
     }
     const canonicalUploadId = requireSessionId(uploadId);
@@ -575,7 +459,7 @@ export class ManagementConnection {
           "input acknowledgement timeout",
         );
       }, REQUEST_TIMEOUT_MS);
-      this.#pendingInputAcknowledgement = {
+      this.#inputAckTracker.track({
         uploadId: canonicalUploadId,
         expectedNextOffset,
         resolve: (acknowledgement) =>
@@ -585,7 +469,7 @@ export class ManagementConnection {
           }),
         reject,
         timeout,
-      };
+      });
       try {
         this.#sendBinary(wire);
       } catch {
@@ -742,49 +626,19 @@ export class ManagementConnection {
     const { uploadId } = await this.beginCatalogUpload();
     let registration: CatalogRegistration;
     try {
-      let offset = 0n;
-      while (offset < BigInt(bytes.length)) {
-        const start = Number(offset);
-        const chunk = bytes.subarray(
-          start,
-          Math.min(start + INPUT_CHUNK_BYTES, bytes.length),
-        );
-        const ack = await this.sendInputData(uploadId, offset, chunk);
-        if (ack.uploadId !== uploadId || ack.nextOffset <= offset) {
-          throw new CatalogActionError("upload_failed");
-        }
-        offset = ack.nextOffset;
-      }
-      if (offset !== BigInt(bytes.length)) {
-        throw new CatalogActionError("upload_failed");
-      }
-      await this.finishCatalogUpload(uploadId, offset);
-      const deadline = Date.now() + CATALOG_PREPARATION_TIMEOUT_MS;
-      for (;;) {
-        const status = await this.catalogUploadStatus(uploadId);
-        if (status.uploadId !== uploadId) {
-          throw new CatalogActionError("upload_failed");
-        }
-        if (status.phase === "ready") {
-          break;
-        }
-        if (status.phase === "failed") {
-          throw new CatalogActionError("upload_failed", status.error);
-        }
-        if (Date.now() >= deadline) {
-          throw new CatalogActionError("preparation_timeout");
-        }
-        await new Promise<void>((resolve) => {
-          globalThis.setTimeout(resolve, CATALOG_PREPARATION_POLL_MS);
-        });
-      }
+      await uploadBinaryChunks(
+        uploadId,
+        bytes,
+        (id, offset, chunk) => this.sendInputData(id, offset, chunk),
+      );
+      await this.finishCatalogUpload(uploadId, BigInt(bytes.length));
+      await waitForCatalogUploadReady(
+        uploadId,
+        (id) => this.catalogUploadStatus(id),
+      );
       registration = await this.registerCatalogDocument(uploadId);
     } catch (error) {
-      try {
-        await this.releaseCatalogUpload(uploadId);
-      } catch {
-        // Upload buffer may already be released or connection closed.
-      }
+      await safeReleaseUpload(() => this.releaseCatalogUpload(uploadId));
       throw error;
     }
     const receipt = await this.applyCatalogRequest(registration.catalogRequestId);
@@ -1397,18 +1251,15 @@ export class ManagementConnection {
       this.#callbacks.onViewData?.(frame.frame);
       return;
     }
-    const pending = this.#pendingInputAcknowledgement;
-    if (pending === null) {
+    const status = this.#inputAckTracker.accept(frame.acknowledgement);
+    if (status === "no_pending") {
       this.#failProtocol(
         new ManagementProtocolError("invalid_response"),
         "unexpected input acknowledgement",
       );
       return;
     }
-    if (
-      frame.acknowledgement.uploadId !== pending.uploadId ||
-      frame.acknowledgement.nextOffset !== pending.expectedNextOffset
-    ) {
+    if (status === "mismatch") {
       this.#rejectInputAcknowledgement(
         new ManagementProtocolError("invalid_response"),
       );
@@ -1418,9 +1269,6 @@ export class ManagementConnection {
       );
       return;
     }
-    this.#pendingInputAcknowledgement = null;
-    globalThis.clearTimeout(pending.timeout);
-    pending.resolve(frame.acknowledgement);
   }
 
   async #answerChallenge(challenge: ChallengeFrame): Promise<void> {
@@ -1675,13 +1523,7 @@ export class ManagementConnection {
   }
 
   #rejectInputAcknowledgement(error: Error): void {
-    const pending = this.#pendingInputAcknowledgement;
-    if (pending === null) {
-      return;
-    }
-    this.#pendingInputAcknowledgement = null;
-    globalThis.clearTimeout(pending.timeout);
-    pending.reject(error);
+    this.#inputAckTracker.reject(error);
   }
 
   #clearAuthenticationTimer(): void {
