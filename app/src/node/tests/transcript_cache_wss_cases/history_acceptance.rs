@@ -503,6 +503,62 @@ async fn cold_root(f: &HarnessFixture) -> ColdRoot {
     }
 }
 
+async fn interactive_cold_root(f: &HarnessFixture, prelude_count: u64) -> ColdRoot {
+    use serde_json::json;
+
+    configure(
+        f,
+        &json!({"replayTurns":0,"originalUpdatesFile":f.area.directory.join("native-updates.jsonl")}),
+    );
+    let owner = start_node(f);
+    let node = owner.ready().await.unwrap();
+    let (id, key, selection) = f.install_profile(&node, 1, 85).await;
+    let mut control = connected(f, &node, &key, &id).await;
+    let (target, native) = f
+        .create_and_bind_target(&node, &mut control, &key, &id, &selection)
+        .await;
+    for i in 1..=25 {
+        if i % 10 == 0 {
+            control.close(None).await.unwrap();
+            control = connected(f, &node, &key, &id).await;
+        }
+        assert_eq!(
+            submit_prompt_turn(&mut control, target, &format!("U{i:04}")).await["ok"],
+            true
+        );
+        wait_for_peer_method(f, "session/prompt", i).await;
+    }
+    let session = NativeSessionKey::from_config(Some(selection.source), &native).unwrap();
+    let store = node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store();
+    timeout(Duration::from_secs(10), async {
+        while !store
+            .load_snapshot(&session)
+            .await
+            .unwrap()
+            .is_some_and(|s| s.session.record_count == 50 + prelude_count)
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .unwrap();
+    release_target(&mut control, target).await;
+    control.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+    ColdRoot {
+        id,
+        key,
+        selection,
+        target,
+        native,
+    }
+}
+
 #[tokio::test]
 async fn hn_013_five_mib_output_survives_reopen_and_reassembly() {
     use serde_json::json;
@@ -1111,7 +1167,7 @@ async fn hn_015_refresh_then_relocate_after_native_rewrite() {
     let oldest = send_command_wait(&mut sock, "history.page", older(&cursor)).await;
     assert_eq!(oldest["result"]["page"]["lastTurn"], "5");
     snapshot(&mut sock, &oldest).await;
-    configure(&f, &json!({"replayTurns":26,"turnPrefix":"C"}));
+    configure(&f, &json!({"replayTurns":26,"externalRewrite":true}));
     let changed = send_command_wait(&mut sock, "view.open", open("explicit_refresh")).await;
     assert_eq!(changed["result"]["page"]["lastTurn"], "26");
     assert_ne!(changed["result"]["page"]["generationId"], p["generationId"]);
@@ -1127,12 +1183,86 @@ async fn hn_015_refresh_then_relocate_after_native_rewrite() {
     assert_eq!(located["result"]["page"]["continuity"], "unproven");
     let frames = snapshot(&mut sock, &located).await;
     assert_eq!(frames.raw.len(), 5);
-    for (i, raw) in frames.raw.iter().enumerate() {
+    for (original, raw) in [1, 2, 5, 6, 7].into_iter().zip(&frames.raw) {
         assert!(
-            raw["params"]["update"]["content"]["text"].eq(&format!("C{:04}", i + 1)),
-            "rewritten body at offset {i}"
+            raw["params"]["update"]["content"]["text"].eq(&format!("U{original:04}")),
+            "rewritten body for original turn {original}"
         );
     }
+    release_target(&mut sock, root.target).await;
+    sock.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+    drop(owner);
+    let release = f.area.directory.join("revalidate");
+    let entered = f.area.directory.join("entered");
+    configure(
+        &f,
+        &json!({"loadBarrierEnteredFile":entered,"loadBarrierReleaseFile":release,"externalRewrite":false,"turnPrefix":"E"}),
+    );
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    let mut sock = connected(&f, &node, &root.key, &root.id).await;
+    let cached = send_command_wait(&mut sock, "view.open", open("first_open")).await;
+    assert_eq!(cached["result"]["status"]["syncState"], "revalidating");
+    let sid = Id128::parse_base64url(cached["result"]["streamId"].as_str().unwrap()).unwrap();
+    assert_eq!(read_until_snapshot_end(&mut sock, sid).await.raw.len(), 10);
+    timeout(Duration::from_secs(10), async {
+        while !entered.exists() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("background native load entered");
+    std::fs::write(release, b"continue").unwrap();
+    read_next_status_matching(
+        &mut sock,
+        sid,
+        |v| v["type"] == "stream_rebound",
+        Duration::from_secs(10),
+    )
+    .await;
+    let rebound = send_command_wait(&mut sock, "view.rebind", json!({"streamId":sid})).await;
+    let page = &rebound["result"]["page"];
+    assert_eq!(
+        page["firstTurn"], "17",
+        "rebind error {:?}",
+        rebound["error"]
+    );
+    assert_eq!(page["lastTurn"], "26");
+    assert_ne!(
+        page["generationId"],
+        cached["result"]["page"]["generationId"]
+    );
+    let rebound_frames = snapshot(&mut sock, &rebound).await;
+    assert_eq!(rebound_frames.raw.len(), 10);
+    for (i, item) in rebound_frames.raw.iter().enumerate() {
+        assert!(
+            item["params"]["update"]["content"]["text"].eq(&format!("E{:04}", i + 17)),
+            "wrong rebound body {i}"
+        );
+    }
+    let db = node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store()
+        .pool_for_test()
+        .await
+        .unwrap();
+    for table in ["transcript_turns", "transcript_records"] {
+        let sql = format!(
+            "SELECT count(*) FROM {table} WHERE native_session_id=? AND generation != (SELECT active_generation FROM transcript_sessions WHERE native_session_id=?)"
+        );
+        let old: i64 = sqlx::query_scalar(&sql)
+            .bind(&root.native)
+            .bind(&root.native)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(old, 0);
+    }
+    drop(db);
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
 }
@@ -1210,30 +1340,76 @@ async fn hn_010_restart_keeps_cursors_and_protects_partial_read() {
         json!({"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"prelude"}});
     configure(
         &f,
-        &json!({"replayTurns":25,"preludeFrames":[prelude,prelude]}),
+        &json!({"echoUserChunk":true,"preludeFrames":[prelude,prelude]}),
     );
-    let root = Box::pin(cold_root(&f)).await;
+    let root = Box::pin(interactive_cold_root(&f, 2)).await;
     let owner = start_node(&f);
     let node = owner.ready().await.unwrap();
     let mut sock = connected(&f, &node, &root.key, &root.id).await;
+    let key = SigningKey::from_slice(&[92; 32]).unwrap();
+    let id = pair_browser(&node, &key, "Reader").await;
+    let mut first_reader = connected(&f, &node, &key, &id).await;
     let first = send_command_wait(
-        &mut sock,
+        &mut first_reader,
         "view.open",
         json!({"targetId":root.target.encode(),"reason":"first_open","page":{"turns":"10"}}),
     )
     .await;
     let cursor = first["result"]["page"]["olderCursor"].clone();
-    snapshot(&mut sock, &first).await;
+    let sid = Id128::parse_base64url(first["result"]["streamId"].as_str().unwrap()).unwrap();
+    let initial = read_until_snapshot_end(&mut first_reader, sid).await;
+    if !initial
+        .statuses
+        .iter()
+        .any(|v| v["type"] == "stream_rebound")
+    {
+        read_next_status_matching(
+            &mut first_reader,
+            sid,
+            |v| v["type"] == "stream_rebound",
+            Duration::from_secs(10),
+        )
+        .await;
+    }
+    let rebound =
+        send_command_wait(&mut first_reader, "view.rebind", json!({"streamId":sid})).await;
+    assert_eq!(
+        rebound["result"]["page"]["generationId"],
+        first["result"]["page"]["generationId"]
+    );
+    assert_eq!(snapshot(&mut first_reader, &rebound).await.raw.len(), 20);
+    first_reader.close(None).await.unwrap();
+    let initial_pool = node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store()
+        .pool_for_test()
+        .await
+        .unwrap();
+    let size: i64 =
+        sqlx::query_scalar("SELECT byte_size FROM transcript_sessions WHERE native_session_id=?")
+            .bind(&root.native)
+            .fetch_one(&initial_pool)
+            .await
+            .unwrap();
+    drop(initial_pool);
     release_target(&mut sock, root.target).await;
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
     drop(owner);
-    let owner = start_node(&f);
+    let config = f.area.config(free_address()).with_transcript_cache(
+        crate::config::TranscriptCacheConfig::new(30, u64::try_from(size).unwrap()).unwrap(),
+    );
+    let owner = NodeProcessOwner::begin(
+        &tokio::runtime::Handle::current(),
+        config,
+        Arc::new(FakeProtector::default()),
+    );
     let node = owner.ready().await.unwrap();
     let peer_count = f.peer_logs().len();
     let mut a = connected(&f, &node, &root.key, &root.id).await;
-    let key = SigningKey::from_slice(&[92; 32]).unwrap();
-    let id = pair_browser(&node, &key, "Reader").await;
     let mut b = connected(&f, &node, &key, &id).await;
     let scope = json!({"kind":"target","targetId":root.target.encode()});
     let older = |cursor: &serde_json::Value| json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":cursor}});
@@ -1268,7 +1444,19 @@ async fn hn_010_restart_keeps_cursors_and_protects_partial_read() {
     .await;
     assert_eq!(oldest["result"]["page"]["prelude"], true);
     assert!(oldest["result"]["page"]["olderCursor"].is_null());
-    assert_eq!(snapshot(&mut b, &oldest).await.raw.len(), 7);
+    let early = snapshot(&mut b, &oldest).await;
+    assert_eq!(early.raw.len(), 12);
+    for (i, frame) in early.raw.iter().enumerate() {
+        let text = &frame["params"]["update"]["content"]["text"];
+        let expected = if i < 2 {
+            String::from("prelude")
+        } else if i % 2 == 0 {
+            format!("U{:04}", i / 2)
+        } else {
+            format!("reply:U{:04}", i / 2)
+        };
+        assert!(text == &expected, "earliest page frame {i}");
+    }
     let bad = send_command_wait(
         &mut b,
         "history.page",
@@ -1289,21 +1477,61 @@ async fn hn_010_restart_keeps_cursors_and_protects_partial_read() {
         send_command_wait(&mut a, "session.capacity.inspect", json!({})).await["result"]["occupied"],
         0
     );
-    sqlx::query("UPDATE transcript_sessions SET last_updated_at_ms=0 WHERE native_session_id=?")
-        .bind(&root.native)
-        .execute(&db)
-        .await
-        .unwrap();
-    assert_eq!(
-        store
-            .enforce_retention_and_budget(None)
-            .await
+    let stream = Id128::parse_base64url(newest["result"]["streamId"].as_str().unwrap()).unwrap();
+    b.send(Message::Binary(
+        TransferHeader::credit(stream, 0)
+            .encode(&[])
             .unwrap()
-            .expired_sessions,
-        0
+            .into(),
+    ))
+    .await
+    .unwrap();
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if let Message::Binary(data) = b.next().await.unwrap().unwrap() {
+                let (header, _) = TransferHeader::decode(&data).unwrap();
+                if header.stream() == stream {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("first page packet");
+    seed_turns(
+        &node,
+        &root.selection,
+        "budget-rival-one",
+        1,
+        "B",
+        "user_message_chunk",
+    )
+    .await;
+    let pressure = store.enforce_retention_and_budget(None).await.unwrap();
+    assert_eq!(pressure.lru_evicted_sessions, 1);
+    assert_eq!(timestamp().await.unwrap(), before);
+    assert_eq!(
+        send_command_wait(&mut b, "view.close", json!({"streamId":stream})).await["ok"],
+        true
     );
-    snapshot(&mut b, &newest).await;
-    expire_cache(&node, &root.native).await;
+    seed_turns(
+        &node,
+        &root.selection,
+        "budget-rival-two",
+        1,
+        "C",
+        "user_message_chunk",
+    )
+    .await;
+    let pressure = store.enforce_retention_and_budget(None).await.unwrap();
+    assert_eq!(pressure.lru_evicted_sessions, 1);
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM transcript_sessions WHERE native_session_id=?")
+            .bind(&root.native)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 0);
     a.close(None).await.unwrap();
     b.close(None).await.unwrap();
     drop(db);
@@ -1470,6 +1698,15 @@ async fn hn_020_cached_children_read_independently_while_root_owns_prompt() {
     assert_eq!(reopened["result"]["page"]["lastTurn"], "10");
     let cursor = reopened["result"]["page"]["newerCursor"].clone();
     snapshot(&mut b, &reopened).await;
+    let parent_cursor = &first["result"]["page"]["olderCursor"];
+    let child_with_parent = json!({"target":scope,"child":"child","mode":{"kind":"continue","cursor":parent_cursor,"direction":"older"}});
+    let parent_with_child =
+        json!({"target":scope,"mode":{"kind":"continue","cursor":cursor,"direction":"newer"}});
+    for payload in [child_with_parent, parent_with_child] {
+        let refused = send_command_wait(&mut b, "history.page", payload).await;
+        assert_eq!(refused["error"], json!({"code":"invalid_cursor"}));
+        assert!(refused["result"].is_null());
+    }
     let tail=send_command_wait(&mut b,"history.page",json!({"target":scope,"child":"child","mode":{"kind":"continue","cursor":cursor,"direction":"newer"}})).await;
     assert_eq!(tail["result"]["page"]["firstTurn"], "11");
     assert_eq!(tail["result"]["page"]["lastTurn"], "12");
@@ -1489,13 +1726,26 @@ async fn hn_020_cached_children_read_independently_while_root_owns_prompt() {
 
 #[tokio::test]
 async fn hn_014_append_over_the_original_socket_view() {
+    Box::pin(check_original_view_append(false)).await;
+}
+
+#[tokio::test]
+async fn hn_014_cold_resume_over_25_interactive_turns() {
+    Box::pin(check_original_view_append(true)).await;
+}
+
+async fn check_original_view_append(interactive: bool) {
     use serde_json::json;
     let f = HarnessFixture::new("hn014-tail");
     configure(
         &f,
         &json!({"capabilityMode":"replay_and_resume","echoUserChunk":true,"replayTurns":25}),
     );
-    let root = Box::pin(cold_root(&f)).await;
+    let root = if interactive {
+        Box::pin(interactive_cold_root(&f, 0)).await
+    } else {
+        Box::pin(cold_root(&f)).await
+    };
     let owner = start_node(&f);
     let node = owner.ready().await.unwrap();
     let mut a = connected(&f, &node, &root.key, &root.id).await;
@@ -1503,9 +1753,10 @@ async fn hn_014_append_over_the_original_socket_view() {
     let reader_id = pair_browser(&node, &reader_key, "Live tail reader").await;
     let mut reader = connected(&f, &node, &reader_key, &reader_id).await;
     let open = json!({"targetId":root.target.encode(),"reason":"first_open","page":{"turns":"10"}});
-    let initial = send_command_wait(&mut reader, "view.open", open.clone()).await;
+    let mut initial = send_command_wait(&mut reader, "view.open", open.clone()).await;
     assert_eq!(initial["result"]["page"]["firstTurn"], "16");
-    let stream = Id128::parse_base64url(initial["result"]["streamId"].as_str().unwrap()).unwrap();
+    let mut stream =
+        Id128::parse_base64url(initial["result"]["streamId"].as_str().unwrap()).unwrap();
     let initial_frames = read_until_snapshot_end(&mut reader, stream).await;
     assert!(initial_frames.turns.is_empty());
     let initial_turns: Vec<_> = initial["result"]["page"]["turns"]
@@ -1518,15 +1769,40 @@ async fn hn_014_append_over_the_original_socket_view() {
         initial_turns,
         ["16", "17", "18", "19", "20", "21", "22", "23", "24", "25"]
     );
+    if interactive {
+        assert_eq!(initial["result"]["page"]["source"], "transcript_cache");
+        if !initial_frames
+            .statuses
+            .iter()
+            .any(|v| v["type"] == "stream_rebound")
+        {
+            read_next_status_matching(
+                &mut reader,
+                stream,
+                |v| v["type"] == "stream_rebound",
+                Duration::from_secs(10),
+            )
+            .await;
+        }
+        let old_generation = initial["result"]["page"]["generationId"].clone();
+        initial = send_command_wait(&mut reader, "view.rebind", json!({"streamId":stream})).await;
+        assert_eq!(initial["result"]["page"]["generationId"], old_generation);
+        stream = Id128::parse_base64url(initial["result"]["streamId"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            read_until_snapshot_end(&mut reader, stream).await.raw.len(),
+            20
+        );
+    }
     let scope = json!({"kind":"target","targetId":root.target.encode()});
     let mid=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":initial["result"]["page"]["olderCursor"]}})).await;
     let p = &mid["result"]["page"];
     snapshot(&mut a, &mid).await;
     takeover_target(&mut a, root.target).await;
+    let before = f.peer_logs().len();
     for i in 26..=27 {
         let reply = submit_prompt_turn(&mut a, root.target, &format!("U{i:04}")).await;
         assert_eq!(reply["ok"], true);
-        wait_for_peer_method(&f, "session/prompt", i - 25).await;
+        wait_for_peer_method(&f, "session/prompt", if interactive { i } else { i - 25 }).await;
     }
     let receipt = timeout(Duration::from_secs(8), async {
         let mut starts = Vec::new();
@@ -1577,6 +1853,21 @@ async fn hn_014_append_over_the_original_socket_view() {
     assert_eq!(latest["result"]["page"]["lastTurn"], "27");
     assert_eq!(older["result"]["page"]["firstTurn"], "1");
     assert_eq!(newer["result"]["page"]["lastTurn"], "25");
+    if interactive {
+        let logs = f.peer_logs();
+        let methods: Vec<_> = logs[before..]
+            .iter()
+            .filter_map(|e| e["method"].as_str())
+            .collect();
+        assert!(
+            !methods.contains(&"session/load"),
+            "unexpected native replay during new input"
+        );
+        assert!(
+            methods.contains(&"session/resume"),
+            "native methods observed after takeover: {methods:?}"
+        );
+    }
     let (starts, content) = receipt.expect("live view receives both complete appended turns");
     assert_eq!(starts, ["26", "27"]);
     let correct = content.iter().map(|(n, s)| (*n, s.as_str())).eq([

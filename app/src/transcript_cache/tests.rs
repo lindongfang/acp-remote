@@ -887,3 +887,298 @@ async fn hn_009_hn_022_pinned_sqlite_read_during_patch_and_generation_change() {
     cache.shutdown().await.unwrap();
     std::fs::remove_dir_all(temp.path()).expect("database handles released");
 }
+
+async fn all_pool_changes(pool: &sqlx::SqlitePool) -> i64 {
+    // Each physical SQLite connection maintains its own total_changes().
+    let mut held = Vec::new();
+    let mut changes = 0;
+    for _ in 0..pool.options().get_max_connections() {
+        let mut connection = pool.acquire().await.unwrap();
+        changes += sqlx::query_scalar::<_, i64>("SELECT total_changes()")
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+        held.push(connection);
+    }
+    changes
+}
+
+#[tokio::test]
+async fn hn_009_lazy_index_restart_retention_and_cascades() {
+    use crate::domain::history_page::{PageSize, TurnRange};
+    const DAY: i64 = 86_400_000;
+    const STABLE: &str = "SELECT json_array(hex(source_id),native_session_id,active_generation,protocol_version,hex(content_digest),last_updated_at_ms,last_synced_at_ms,capability_profile,native_recovery_state,record_count,byte_size,hex(generation_token)) FROM transcript_sessions WHERE native_session_id='s'";
+    let temp = TempDirGuard::new("hn009");
+    let path = temp.path().join("transcript-cache.sqlite3");
+    let clock = Arc::new(ManualRetentionClock::new(1_700_000_000_000));
+    let open = || {
+        TranscriptCacheStore::open(
+            path.clone(),
+            TranscriptCacheConfig::new(30, 200_000).unwrap(),
+            clock.clone(),
+            Arc::new(NoProtectedSessions),
+        )
+    };
+    let cache = open().await.unwrap();
+    let key = sample_key(33, "s");
+    let frame = |i: u64, kind: &str| {
+        raw_msg(&serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":kind,"messageId":i.to_string(),"content":{"type":"text","text":format!("message {i}")}}}}).to_string())
+    };
+    let frames: Vec<_> = (1..=27)
+        .map(|i| {
+            (
+                frame(
+                    i,
+                    if i < 3 {
+                        "agent_message_chunk"
+                    } else {
+                        "user_message_chunk"
+                    },
+                ),
+                i,
+            )
+        })
+        .collect();
+    cache
+        .replace_with_replay(
+            &key,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            frames.clone(),
+        )
+        .await
+        .unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    sqlx::query("DELETE FROM transcript_turns")
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE transcript_sessions SET turn_state='pending',turn_count=0")
+        .execute(&db)
+        .await
+        .unwrap();
+    let before: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    let latest = |_: [u8; 16], total| TurnRange::first(total, PageSize::default(), false).map(Some);
+    let built = cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(built.total, 25);
+    let metadata: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    assert_eq!(before, metadata);
+    let ordinals: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT turn_index,first_ordinal FROM transcript_turns ORDER BY turn_index")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(ordinals, (1..=25).map(|i| (i, i + 2)).collect::<Vec<_>>());
+    let changes = all_pool_changes(&db).await;
+    cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(all_pool_changes(&db).await, changes);
+    for i in [28, 29] {
+        assert!(cache.writer().try_enqueue_frame(
+            &key,
+            Version::V1,
+            i,
+            frame(i, "user_message_chunk")
+        ));
+    }
+    cache.writer().flush().await.unwrap();
+    drop(db);
+    cache.shutdown().await.unwrap();
+    let cache = open().await.unwrap();
+    assert!(cache.writer().try_enqueue_frame(
+        &key,
+        Version::V1,
+        30,
+        frame(30, "user_message_chunk")
+    ));
+    cache.writer().flush().await.unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    let latest_page = cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(latest_page.generation, built.generation);
+    assert_eq!(latest_page.total, 28);
+    let ordinals: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT turn_index,first_ordinal FROM transcript_turns ORDER BY turn_index")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(ordinals, (1..=28).map(|i| (i, i + 2)).collect::<Vec<_>>());
+    let previous = latest_page.snapshot.session.active_generation;
+    let new = vec![(frame(500, "user_message_chunk"), 1)];
+    assert_eq!(
+        cache
+            .replace_with_replay(
+                &key,
+                Version::V1,
+                CapabilityProfile::ReplayCapable,
+                new.clone()
+            )
+            .await
+            .unwrap(),
+        ReplaceOutcome::Updated
+    );
+    let changed = cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(changed.total, 1);
+    assert_eq!(changed.snapshot.session.active_generation, previous + 1);
+    assert_ne!(changed.generation, built.generation);
+    let metadata: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    let updated = changed.snapshot.session.last_updated_at_ms;
+    clock.set_millis(updated + DAY);
+    assert_eq!(
+        cache
+            .replace_with_replay(
+                &key,
+                Version::V1,
+                CapabilityProfile::ReplayCapable,
+                new.clone()
+            )
+            .await
+            .unwrap(),
+        ReplaceOutcome::UnchangedDigest
+    );
+    let same: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    let mut expected: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    expected[6] = serde_json::json!(updated + DAY);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&same).unwrap() == expected,
+        "only the synchronization timestamp may advance after an identical replay"
+    );
+    for i in 0..100 {
+        clock.set_millis(updated + DAY + i * 29 * DAY / 100);
+        assert_eq!(
+            cache
+                .read_turn_page(&key, latest)
+                .await
+                .unwrap()
+                .unwrap()
+                .generation,
+            changed.generation
+        );
+    }
+    let end: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    assert!(end == same, "pure reads must preserve session metadata");
+    clock.set_millis(updated + 31 * DAY);
+    assert_eq!(
+        cache
+            .enforce_retention_and_budget(None)
+            .await
+            .unwrap()
+            .expired_sessions,
+        1
+    );
+    assert_index_absent(&db, "s").await;
+    let purge = sample_key(33, "purge");
+    cache
+        .replace_with_replay(
+            &purge,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            new.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cache
+            .read_turn_page(&purge, latest)
+            .await
+            .unwrap()
+            .unwrap()
+            .total,
+        1
+    );
+    cache.purge_deleted_native_session(&purge).await.unwrap();
+    assert_index_absent(&db, "purge").await;
+    let anonymous = sample_key(33, "no-users");
+    cache
+        .replace_with_replay(
+            &anonymous,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            vec![(frame(1, "agent_message_chunk"), 1)],
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE transcript_sessions SET turn_state='pending' WHERE native_session_id='no-users'",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let full = cache
+        .read_turn_page(&anonymous, |_, _| Ok(None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(full.total, 0);
+    let state: (String, i64) = sqlx::query_as(
+        "SELECT turn_state,turn_count FROM transcript_sessions WHERE native_session_id='no-users'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(state, ("unprovable".into(), 0));
+    assert_index_absent(&db, "no-users").await;
+    cache
+        .purge_deleted_native_session(&anonymous)
+        .await
+        .unwrap();
+    drop(db);
+    cache.shutdown().await.unwrap();
+    let cache = TranscriptCacheStore::open(
+        path,
+        TranscriptCacheConfig::new(30, new[0].0.bytes().len() as u64).unwrap(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    for (i, native) in ["old", "new"].into_iter().enumerate() {
+        clock.set_millis(updated + 32 * DAY + i64::try_from(i).unwrap());
+        let session = sample_key(33, native);
+        cache
+            .replace_with_replay(
+                &session,
+                Version::V1,
+                CapabilityProfile::ReplayCapable,
+                new.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            cache
+                .read_turn_page(&session, latest)
+                .await
+                .unwrap()
+                .unwrap()
+                .total,
+            1
+        );
+    }
+    assert_eq!(
+        cache
+            .enforce_retention_and_budget(None)
+            .await
+            .unwrap()
+            .lru_evicted_sessions,
+        1
+    );
+    assert_index_absent(&db, "old").await;
+    drop(db);
+    cache.shutdown().await.unwrap();
+}
+
+async fn assert_index_absent(pool: &sqlx::SqlitePool, native: &str) {
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM transcript_turns WHERE native_session_id=?")
+            .bind(native)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 0);
+    assert!(
+        sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}

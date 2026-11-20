@@ -75,7 +75,10 @@ function logEvent(entry) {
   }
 }
 
-function send(msg) {
+function send(msg, replayed = false) {
+  if (!replayed && msg.method === "session/update" && initCfg.originalUpdatesFile) {
+    fs.appendFileSync(initCfg.originalUpdatesFile, JSON.stringify(msg) + "\n");
+  }
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
 }
 
@@ -160,14 +163,23 @@ async function handleRequest(msg) {
       return;
     }
     const sid = params.sessionId;
-    for (const update of latest.preludeFrames ?? []) {
+    if (latest.originalUpdatesFile && fs.existsSync(latest.originalUpdatesFile)) {
+      const lines = fs.readFileSync(latest.originalUpdatesFile,"utf8").trim().split("\n");
+      for (const line of lines.filter(Boolean)) {
+        const update = JSON.parse(line);
+        if (update.params.sessionId === sid) send(update, true);
+      }
+    }
+    for (const update of latest.originalUpdatesFile ? [] : (latest.preludeFrames ?? [])) {
       send({method:"session/update",params:{sessionId:sid,update}});
     }
     for (let i = 1; i <= Number(latest.replayTurns ?? 0); i++) {
-      const suffix = String(i).padStart(4, "0");
+      const original = latest.externalRewrite && i > 2 ? i + 2 : i;
+      const suffix = String(original).padStart(4, "0");
+      const prefix = latest.externalRewrite && original === 10 ? "edited" : (latest.turnPrefix ?? "U");
       const emit = update => send({method:"session/update",params:{sessionId:sid,update}});
-      emit({sessionUpdate:"user_message_chunk",...(latest.anonymousTurns ? {} : {messageId:String(i)}),
-            content:{type:"text",text:(latest.turnPrefix ?? "U") + suffix}});
+      emit({sessionUpdate:"user_message_chunk",...(latest.anonymousTurns ? {} : {messageId:String(original)}),
+            content:{type:"text",text:prefix + suffix}});
       if (latest.anonymousTurns) {
         emit({sessionUpdate:"agent_message_chunk",messageId:crypto.randomUUID(),content:{type:"text",text:"A"+suffix}});
       }
@@ -233,6 +245,11 @@ async function handleRequest(msg) {
     const version = Number(cfg.protocolVersion ?? 1);
     const promptItems = Array.isArray(params.prompt) ? params.prompt : [];
     const promptText = promptItems.map((b) => b.text ?? "").join("");
+    if (cfg.originalUpdatesFile && !fs.existsSync(cfg.originalUpdatesFile)) {
+      for (const update of cfg.preludeFrames ?? []) {
+        send({method:"session/update",params:{sessionId:sid,update}});
+      }
+    }
     if (cfg.promptBarrierReleaseFile) {
       while (!fs.existsSync(cfg.promptBarrierReleaseFile)) {
         await new Promise(resolve => setTimeout(resolve, 10));
