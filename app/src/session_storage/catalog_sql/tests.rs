@@ -240,6 +240,52 @@ async fn node_configuration_sql_caller_abort_preserves_commit_and_pending_origin
     registry.close_connections().await;
 }
 #[tokio::test]
+async fn node_configuration_next_read_joins_cancelled_read_original_close() {
+    let (registry, _keeper) = registry().await;
+    let fence = registry.catalog_fence();
+    let barrier = CloseBarrier::new();
+    registry
+        .connection_closer_for_test()
+        .pause_next(ClosePoint::BeforeClose, barrier.clone())
+        .unwrap();
+    let reader_registry = registry.clone();
+    let reader = tokio::spawn(async move {
+        let d = deadline();
+        let guard = reader_registry
+            .catalog_fence()
+            .enter(
+                CatalogOperationKind::ResolveRead,
+                &reader_registry.owner_scope(),
+                &d,
+            )
+            .await
+            .unwrap();
+        let mut connection = reader_registry
+            .acquire_catalog_connection(guard.operation.clone(), CatalogSqlRole::ConfigurationRead)
+            .await
+            .unwrap();
+        connection.begin_read().await.unwrap();
+        connection.finish_catalog(Ok(()), &d).await.unwrap();
+    });
+    barrier.arrived().await;
+    reader.abort();
+    assert!(reader.await.unwrap_err().is_cancelled());
+
+    let d = deadline();
+    let scope = registry.owner_scope();
+    let next = fence.enter(CatalogOperationKind::ResolveRead, &scope, &d);
+    tokio::pin!(next);
+    std::future::poll_fn(|cx| {
+        assert!(next.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    barrier.release();
+    drop(next.await.unwrap());
+    registry.close_connections().await;
+}
+
+#[tokio::test]
 async fn node_configuration_sql_shared_gate_serializes_whole_operation() {
     use std::{
         future::{Future, poll_fn},

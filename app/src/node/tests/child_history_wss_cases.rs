@@ -142,7 +142,19 @@ async fn independent_child_history_over_wss() {
                     .is_none()
             );
         } else {
-            assert_eq!(first["result"]["page"]["source"], "replay", "{first}");
+            assert_eq!(
+                first["result"]["page"]["source"],
+                "replay",
+                "protocol={version} ok={} error={} emitted_batches={:?}",
+                first["ok"],
+                first["error"]["code"],
+                fixture
+                    .peer_logs()
+                    .iter()
+                    .filter(|e| e["event"] == "childBatchSent")
+                    .filter_map(|e| e["batch"].as_u64())
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(first["result"]["page"]["lastTurn"], "10");
             let child =
                 NativeSessionKey::from_config(Some(selection.source), "child-history").unwrap();

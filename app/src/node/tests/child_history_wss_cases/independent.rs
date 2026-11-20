@@ -56,7 +56,20 @@ impl Scenario {
     }
     async fn assert_root_readable(&mut self) {
         let r=send_command_wait(&mut self.control,"history.page",json!({"target":{"kind":"target","targetId":self.root.encode()},"mode":{"kind":"first"}})).await;
-        assert_eq!(r["result"]["page"]["lastTurn"], "25");
+        assert_eq!(
+            r["result"]["page"]["lastTurn"],
+            "25",
+            "ok={} code={} source={} status={} methods={:?}",
+            r["ok"],
+            r["error"]["code"],
+            r["result"]["page"]["source"],
+            r["result"]["page"]["turnStatus"],
+            self.f
+                .peer_logs()
+                .iter()
+                .filter_map(|e| e["method"].as_str())
+                .collect::<Vec<_>>()
+        );
         let frames = snapshot(&mut self.control, &r).await;
         assert_eq!(frames.raw.len(), 10);
         assert!(

@@ -51,19 +51,28 @@ impl CatalogSqlFence {
             }))
             .await
             .map_err(|e| empty_failure(kind, e.into()))?;
-        let mut retained = self
+        let previous = self
             .retained
             .lock()
-            .map_err(|_| empty_failure(kind, CatalogError::StorageUnavailable))?;
-        if let Some(operation) = retained.as_ref() {
-            let cleanup = operation.failure(CatalogError::CommitUnconfirmed).cleanup();
-            return Err(
-                operation.failure(if cleanup == CleanupKnowledge::ConfirmedOriginal {
-                    CatalogError::CommitUnconfirmed
-                } else {
-                    CatalogError::SqlCloseUnconfirmed { committed: false }
-                }),
-            );
+            .map_err(|_| empty_failure(kind, CatalogError::StorageUnavailable))?
+            .clone();
+        if let Some(operation) = previous {
+            if !operation.interrupted_configuration_read(scope) {
+                let cleanup = operation.failure(CatalogError::CommitUnconfirmed).cleanup();
+                return Err(
+                    operation.failure(if cleanup == CleanupKnowledge::ConfirmedOriginal {
+                        CatalogError::CommitUnconfirmed
+                    } else {
+                        CatalogError::SqlCloseUnconfirmed { committed: false }
+                    }),
+                );
+            }
+            // A disconnected reader can leave its original close receipt with the fence.
+            // Keep the serial guard until that specific SQL worker has actually joined.
+            operation.confirm_cleanup(d).await?;
+            scope
+                .require_open()
+                .map_err(|e| operation.failure(e.into()))?;
         }
         let operation = Arc::new(CatalogOperation {
             kind,
@@ -78,7 +87,11 @@ impl CatalogSqlFence {
                 archived: [None, None],
             }),
         });
-        *retained = Some(operation.clone());
+        *self
+            .retained
+            .lock()
+            .map_err(|_| empty_failure(kind, CatalogError::StorageUnavailable))? =
+            Some(operation.clone());
         Ok(CatalogGuard {
             fence: self.clone(),
             operation,
@@ -361,6 +374,18 @@ impl CatalogOperation {
                 slot.receipt = receipt;
             }
         }
+    }
+    fn interrupted_configuration_read(&self, scope: &RegistryOwnerScope) -> bool {
+        let state = self.state();
+        self.kind == CatalogOperationKind::ResolveRead
+            && state
+                .scope
+                .as_ref()
+                .is_some_and(|owner| owner.matches(scope))
+            && matches!(&state.slots, [Some(slot), None]
+                if slot.observation.role() == CatalogSqlRole::ConfigurationRead
+                    && slot.observation.cleanup() == CleanupKnowledge::PendingOriginal
+                    && slot.receipt.is_some())
     }
     fn clean(&self) -> bool {
         self.state.lock().is_ok_and(|s| {
