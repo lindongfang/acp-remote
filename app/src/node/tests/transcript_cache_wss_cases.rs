@@ -1773,16 +1773,7 @@ async fn check_pending_locate(revoke: bool) {
     node.shutdown(None).await.unwrap();
 }
 
-#[tokio::test]
-async fn stc_004_node_corrupt_cache_and_trigger_fault_preserve_live_run_and_approval() {
-    let fixture = HarnessFixture::new("stc004_node");
-    std::fs::create_dir_all(fixture.area.data_dir()).expect("create data dir");
-    std::fs::write(
-        fixture.area.data_dir().join("transcript-cache.sqlite3"),
-        b"CORRUPTED-CACHE-HEADER-FOR-STC004",
-    )
-    .expect("write corrupt db");
-
+async fn check_degraded_prompt_and_approval(fixture: &HarnessFixture) {
     let owner = NodeProcessOwner::begin(
         &tokio::runtime::Handle::current(),
         fixture.area.config(free_address()),
@@ -1879,6 +1870,19 @@ async fn stc_004_node_corrupt_cache_and_trigger_fault_preserve_live_run_and_appr
     let _ = sock_approve.close(None).await;
     node.shutdown(None).await.expect("shutdown part A node");
     drop(owner);
+}
+
+#[tokio::test]
+async fn stc_004_node_corrupt_cache_and_trigger_fault_preserve_live_run_and_approval() {
+    let fixture = HarnessFixture::new("stc004_node");
+    std::fs::create_dir_all(fixture.area.data_dir()).expect("create data dir");
+    std::fs::write(
+        fixture.area.data_dir().join("transcript-cache.sqlite3"),
+        b"CORRUPTED-CACHE-HEADER-FOR-STC004",
+    )
+    .expect("write corrupt db");
+
+    Box::pin(check_degraded_prompt_and_approval(&fixture)).await;
 
     // Part B: Runtime SQLite write fault (`BEFORE INSERT` trigger) -> cacheWarning=true, live run unaffected.
     let trig_fix = HarnessFixture::new("stc004_trig");

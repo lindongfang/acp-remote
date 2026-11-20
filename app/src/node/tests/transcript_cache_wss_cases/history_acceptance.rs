@@ -506,6 +506,7 @@ async fn cold_root(f: &HarnessFixture) -> ColdRoot {
 #[tokio::test]
 async fn hn_013_five_mib_output_survives_reopen_and_reassembly() {
     use serde_json::json;
+    use sha2::Digest;
     let f = HarnessFixture::new("hn013");
     let size = 5 * 1024 * 1024;
     configure(&f, &json!({"replayTurns":25,"largeToolBytes":size}));
@@ -607,7 +608,6 @@ async fn hn_013_five_mib_output_survives_reopen_and_reassembly() {
         root.native,
         "x".repeat(size)
     );
-    use sha2::Digest;
     assert_eq!(sha2::Sha256::digest(original.as_bytes()), cold_hash);
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
@@ -1508,4 +1508,49 @@ async fn hn_017_replay_relocates_against_compressed_and_rewritten_native_history
     }
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn hn_008_future_schema_preserves_interactive_operations() {
+    Box::pin(check_schema_degradation(false)).await;
+}
+
+#[tokio::test]
+async fn hn_008_failed_migration_preserves_interactive_operations() {
+    Box::pin(check_schema_degradation(true)).await;
+}
+
+async fn check_schema_degradation(migration_fault: bool) {
+    use sha2::{Digest, Sha256};
+    let f = HarnessFixture::new("hn008");
+    let owner = start_node(&f);
+    let node = owner.ready().await.unwrap();
+    node.shutdown(None).await.unwrap();
+    drop(owner);
+    let path = f.area.data_dir().join("transcript-cache.sqlite3");
+    let db = SqlitePool::connect_with(SqliteConnectOptions::new().filename(&path))
+        .await
+        .unwrap();
+    if migration_fault {
+        sqlx::raw_sql(
+            "DROP TABLE transcript_turns;
+            ALTER TABLE transcript_sessions DROP COLUMN generation_token;
+            ALTER TABLE transcript_sessions DROP COLUMN turn_state;
+            ALTER TABLE transcript_sessions DROP COLUMN turn_count;
+            UPDATE transcript_cache_meta SET schema_version=1;
+            CREATE TABLE transcript_turns(migration_conflict INTEGER);",
+        )
+        .execute(&db)
+        .await
+        .unwrap();
+    } else {
+        sqlx::query("UPDATE transcript_cache_meta SET schema_version=3")
+            .execute(&db)
+            .await
+            .unwrap();
+    }
+    db.close().await;
+    let before = Sha256::digest(std::fs::read(&path).unwrap());
+    Box::pin(check_degraded_prompt_and_approval(&f)).await;
+    assert_eq!(Sha256::digest(std::fs::read(path).unwrap()), before);
 }
