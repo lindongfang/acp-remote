@@ -7,11 +7,14 @@ async fn bind_child(node: &NodeRuntime, selection: &SourceLaunchSelection, nativ
         "INSERT INTO node_session_parents
          SELECT ?, 'child-history', ?, source_instance_id, runtime_epoch, connection_epoch,
                 X'0000000000000001', X'0000000000000001', zeroblob(32), 0
-         FROM node_source_session_operations WHERE native_session_id=?",
+         FROM node_source_session_operations op
+         JOIN node_source_session_registrations reg ON reg.operation_id=op.operation_id
+         WHERE op.native_session_id=? AND reg.source_id=?",
     )
     .bind(selection.source.encode())
     .bind(native)
     .bind(native)
+    .bind(selection.source.encode())
     .execute(pool)
     .await
     .unwrap();
@@ -383,6 +386,7 @@ async fn child_history_thousand_anonymous_turns_relocate_after_eviction() {
         serde_json::from_slice(&std::fs::read(&fixture.cfg_path).unwrap()).unwrap();
     cfg["childHistory"] = json!(true);
     cfg["childTurns"] = json!(1000);
+    cfg["randomChildIds"] = json!(true);
     std::fs::write(&fixture.cfg_path, cfg.to_string()).unwrap();
     let owner = NodeProcessOwner::begin(
         &tokio::runtime::Handle::current(),
@@ -444,6 +448,40 @@ async fn child_history_thousand_anonymous_turns_relocate_after_eviction() {
         );
         assert_eq!(page["lastTurn"], json!((first_turn + 9).to_string()));
         assert_eq!(page["relocated"], json!(first_turn == 501));
+        assert_eq!(
+            page["continuity"],
+            if first_turn == 501 {
+                "unproven"
+            } else {
+                "same_generation"
+            }
+        );
+        let marks = page["turns"].as_array().unwrap();
+        assert_eq!(marks.len(), 10);
+        let stream =
+            Id128::parse_base64url(response["result"]["streamId"].as_str().unwrap()).unwrap();
+        let frames = read_until_snapshot_end(&mut sock, stream).await;
+        assert_eq!(frames.snapshot_ends, 1);
+        assert_eq!(frames.raw.len(), 20);
+        for (i, pair) in frames.raw.chunks_exact(2).enumerate() {
+            let n = first_turn + i;
+            assert_eq!(marks[i]["turn"], n.to_string());
+            assert!(
+                pair.iter()
+                    .all(|r| r["params"]["sessionId"] == "child-history")
+            );
+            let user = &pair[0]["params"]["update"];
+            let agent = &pair[1]["params"]["update"];
+            assert!(user.get("messageId").is_none());
+            assert_eq!(user["sessionUpdate"], "user_message_chunk");
+            assert!(
+                user["content"]["text"].eq(&format!("child-turn-{n}")),
+                "unexpected child turn {n}"
+            );
+            assert_eq!(agent["sessionUpdate"], "agent_message_chunk");
+            assert_eq!(agent["messageId"].as_str().unwrap().len(), 36);
+            assert!(agent["content"]["text"] == "reply");
+        }
         if first_turn == 991 {
             assert!(page["newerCursor"].is_null());
         }
@@ -463,3 +501,6 @@ async fn child_history_thousand_anonymous_turns_relocate_after_eviction() {
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
 }
+
+#[path = "child_history_wss_cases/independent.rs"]
+mod independent;

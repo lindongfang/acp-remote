@@ -82,7 +82,27 @@ function send(msg, replayed = false) {
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
 }
 
+function sendChildEvents(children) {
+  for (const child of children ?? []) {
+    for (let n=child.first??1;n<=child.last;n++) {
+      for (const role of child.agentOnly?["agent"]:["user","agent"]) {
+        send({method:"session/update",params:{sessionId:child.id,update:{
+          sessionUpdate:role+"_message_chunk",messageId:role+n,content:{type:"text",text:child.id+"-"+role+"-"+n}
+        }}});
+      }
+    }
+  }
+}
+
 const initCfg = readCfg();
+if (initCfg.watchDisconnect) {
+  setInterval(() => {
+    if(fs.existsSync(cfgPath+".disconnect")) {
+      logEvent({event:"sourceDisconnected"});
+      process.exit(0);
+    }
+  },10).unref();
+}
 if (initCfg.failSpawn) {
   logEvent({ event: "failSpawn" });
   process.exit(1);
@@ -90,19 +110,26 @@ if (initCfg.failSpawn) {
 
 let pendingPermResolve = null;
 let reqSeq = 1000;
+const childSnapshots = new Map();
 let sessionSeq = Number(process.env.ACP_PEER_SESSION_START || "1");
 
 async function handleRequest(msg) {
   const cfg = readCfg();
   const { id, method, params } = msg;
   const key = "io.github.lindongfang.acp-remote/child-history";
-  logEvent(method === "_"+key ? {method, first: params.cursor===null} : { method, params });
+  logEvent(method === "_"+key ? {method, first: params.cursor===null,
+    rootMatches:!cfg.expectedChildRoot || params.rootSessionId===cfg.expectedChildRoot,
+    childMatches:params.sessionId==="child-history", batch:params.cursor===null?0:Number(params.cursor)} : { method, params });
 
   if (method === "initialize") {
     const version = Number(cfg.protocolVersion ?? 1);
     const mode = cfg.capabilityMode ?? "replay_capable";
     const clientCaps = params.clientCapabilities ?? params.capabilities;
     const ext = cfg.childHistory && clientCaps?._meta?.[key]?.version === 1 ? {_meta:{[key]:{version:1}}} : {};
+    if(cfg.childDeclaration==="wrongVersion") ext._meta={[key]:{version:2}};
+    if(cfg.childDeclaration==="methodOnly") ext._meta={[key]:{method:"_"+key}};
+    if(cfg.childDeclaration==="cancelOnly") ext._meta={childCancel:true};
+    if(cfg.childDeclaration==="wrongLocation") delete ext._meta;
     if (version === 2) {
       send({
         id,
@@ -110,6 +137,7 @@ async function handleRequest(msg) {
           protocolVersion: 2,
           info: { name: "controlled-acp", version: "2.0.0" },
           capabilities: { session: {}, ...ext },
+          ...(cfg.childDeclaration==="wrongLocation"?{_meta:{[key]:{version:1}}}:{}),
         },
       });
       return;
@@ -125,6 +153,7 @@ async function handleRequest(msg) {
         protocolVersion: 1,
         agentInfo: { name: "controlled-acp", version: "1.0.0" },
         agentCapabilities: { loadSession, sessionCapabilities, ...ext },
+        ...(cfg.childDeclaration==="wrongLocation"?{_meta:{[key]:{version:1}}}:{}),
       },
     });
     return;
@@ -140,11 +169,15 @@ async function handleRequest(msg) {
     if(cfg.childTurns) {
       updates.length=0;
       for(let turn=1;turn<=cfg.childTurns;turn++){
-        updates.push({sessionUpdate:"user_message_chunk",content:{type:"text",text:"child-turn-"+turn}},{sessionUpdate:"agent_message_chunk",messageId:"agent-"+turn,content:{type:"text",text:"reply"}});
+        updates.push({sessionUpdate:"user_message_chunk",content:{type:"text",text:"child-turn-"+turn}},{sessionUpdate:"agent_message_chunk",messageId:cfg.randomChildIds?crypto.randomUUID():"agent-"+turn,content:{type:"text",text:"reply"}});
       }
     }
-    const bytes=Buffer.from(updates.map(update=>JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{sessionId,update}}).replace('"unknown":1','"unknown" : 1.00')+"\n").join(""));
     const index = params.cursor === null ? 0 : Number(params.cursor);
+    if(index===0) {
+      const bytes=cfg.childFramesFile?fs.readFileSync(cfg.childFramesFile):Buffer.from(updates.map(update=>JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{sessionId,update}}).replace('"unknown":1','"unknown" : 1.00')+"\n").join(""));
+      childSnapshots.set(params.sessionId,bytes);
+    }
+    const bytes=childSnapshots.get(params.sessionId);
     if(index===cfg.childBarrierIndex && cfg.childBarrierFile) {
       while (!fs.existsSync(cfg.childBarrierFile)) {
         // Keep the query pending while stdin is open. Let EOF end the peer at node shutdown.
@@ -152,7 +185,10 @@ async function handleRequest(msg) {
       }
     }
     const end = Math.min(bytes.length,(index+1)*16384);
-    send({id,result:{rootSessionId:params.rootSessionId,sessionId:params.sessionId,sequence:String(index),snapshotId:"fixture-generation",chunk:bytes.subarray(index*16384,end).toString("base64url"),nextCursor:end===bytes.length?null:String(index+1)}});
+    const result={rootSessionId:params.rootSessionId,sessionId:params.sessionId,sequence:String(index),snapshotId:"fixture-generation",chunk:bytes.subarray(index*16384,end).toString("base64url"),nextCursor:end===bytes.length?null:String(index+1)};
+    if(index===(cfg.faultAtBatch??1) && cfg.childFault) Object.assign(result,cfg.childFault);
+    send({id:cfg.unmatchedChildReply?String(id)+"-unmatched":id,result});
+    logEvent({event:"childBatchSent",batch:index,last:result.nextCursor===null});
     return;
   }
 
@@ -184,6 +220,7 @@ async function handleRequest(msg) {
       }
     }
     const latest = readCfg();
+    sendChildEvents(latest.replayChildEvents);
     if (latest.failLoadMessage) {
       send({
         id,
@@ -332,6 +369,7 @@ async function handleRequest(msg) {
         }
       }
     }
+    sendChildEvents(cfg.promptChildEvents);
     const suffix = cfg.replyPrefix ?? "reply:";
     const msgId = `reply-${Date.now()}-${reqSeq++}`;
     send({

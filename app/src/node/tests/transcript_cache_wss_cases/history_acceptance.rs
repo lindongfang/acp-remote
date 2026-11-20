@@ -209,7 +209,7 @@ async fn hn_011_verified_cold_replay_retention_and_capacity() {
     assert_eq!(indexed, 25, "turn rows immediately after first replay");
 }
 
-async fn connected(
+pub(super) async fn connected(
     f: &HarnessFixture,
     node: &NodeRuntime,
     key: &SigningKey,
@@ -224,7 +224,7 @@ async fn connected(
     .await
 }
 
-fn configure(f: &HarnessFixture, additions: &serde_json::Value) {
+pub(super) fn configure(f: &HarnessFixture, additions: &serde_json::Value) {
     let mut cfg: serde_json::Value =
         serde_json::from_slice(&std::fs::read(&f.cfg_path).unwrap()).unwrap();
     for (key, value) in additions.as_object().unwrap() {
@@ -241,21 +241,26 @@ async fn record_child(node: &NodeRuntime, sel: &SourceLaunchSelection, parent: &
 
 #[tokio::test]
 async fn hn_012_running_parent_without_auto_delivery() {
-    Box::pin(check_running_parent(false)).await;
+    Box::pin(check_running_parent(false, false)).await;
 }
 
 #[tokio::test]
 async fn hn_012_running_parent_with_auto_delivery() {
-    Box::pin(check_running_parent(true)).await;
+    Box::pin(check_running_parent(true, false)).await;
 }
 
-async fn check_running_parent(delivers: bool) {
+#[tokio::test]
+async fn hn_012_running_parent_then_negotiated_cold_child() {
+    Box::pin(check_running_parent(false, true)).await;
+}
+
+async fn check_running_parent(delivers: bool, negotiated: bool) {
     use serde_json::json;
     let f = HarnessFixture::new("hn012");
     let release = f.area.directory.join("prompt-release");
     configure(
         &f,
-        &json!({"replayTurns":25,"promptBarrierReleaseFile":release}),
+        &json!({"replayTurns":25,"promptBarrierReleaseFile":release,"childHistory":negotiated}),
     );
     let owner = NodeProcessOwner::begin(
         &tokio::runtime::Handle::current(),
@@ -307,22 +312,35 @@ async fn check_running_parent(delivers: bool) {
             .iter()
             .all(|e| e["method"] != "session/cancel")
     );
-    b.close(None).await.unwrap();
-    a.close(None).await.unwrap();
-    node.shutdown(None).await.unwrap();
-    if delivers {
+    if delivers || negotiated {
         assert_eq!(
             idle["result"]["page"]["firstTurn"], "1",
             "after auto-delivery: {:?}",
             idle["error"]
         );
         assert_eq!(idle["result"]["page"]["lastTurn"], "10");
+        let frames = snapshot(&mut b, &idle).await;
+        assert!(
+            frames
+                .raw
+                .iter()
+                .all(|r| r["params"]["sessionId"] == "child")
+        );
     } else {
         assert_eq!(idle["error"], json!({"code":"unsupported_capability"}));
     }
+    let queries = f
+        .peer_logs()
+        .iter()
+        .filter(|e| e["method"] == "_io.github.lindongfang.acp-remote/child-history")
+        .count();
+    assert_eq!(queries, if negotiated { 2 } else { 0 });
+    b.close(None).await.unwrap();
+    a.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
 }
 
-async fn seed_turns(
+pub(super) async fn seed_turns(
     node: &NodeRuntime,
     sel: &SourceLaunchSelection,
     native: &str,
@@ -350,7 +368,10 @@ async fn seed_turns(
         .unwrap();
 }
 
-async fn snapshot(sock: &mut ManagementSocket, reply: &serde_json::Value) -> DrainedStreamFrames {
+pub(super) async fn snapshot(
+    sock: &mut ManagementSocket,
+    reply: &serde_json::Value,
+) -> DrainedStreamFrames {
     let stream =
         Id128::parse_base64url(reply["result"]["streamId"].as_str().expect("page opened")).unwrap();
     let frames = read_until_snapshot_end(sock, stream).await;
@@ -468,7 +489,7 @@ async fn hn_017_cold_page_rewrite_and_hn_024_unprovable_view() {
     node.shutdown(None).await.unwrap();
 }
 
-fn start_node(f: &HarnessFixture) -> NodeProcessOwner {
+pub(super) fn start_node(f: &HarnessFixture) -> NodeProcessOwner {
     NodeProcessOwner::begin(
         &tokio::runtime::Handle::current(),
         f.area.config(free_address()),

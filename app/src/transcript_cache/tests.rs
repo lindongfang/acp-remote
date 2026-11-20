@@ -1304,5 +1304,36 @@ async fn child_history_transaction_keeps_previous_generation_until_authorized_co
         page.snapshot.records[0].raw.bytes(),
         frames("second")[0].0.bytes()
     );
+    let before_fault = page.snapshot.session;
+    let new_token = cache.history_generation(&child).await.unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    let before_index:Vec<(i64,i64,i64)>=sqlx::query_as("SELECT generation,turn_index,first_ordinal FROM transcript_turns WHERE native_session_id='child' ORDER BY turn_index").fetch_all(&db).await.unwrap();
+    clock.advance_millis(5000);
+    sqlx::query("CREATE TRIGGER reject_new_child BEFORE INSERT ON transcript_records WHEN NEW.native_session_id='child' BEGIN SELECT RAISE(ABORT,'fixture storage failure'); END").execute(&db).await.unwrap();
+    let failed = cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("third"),
+            Some(new_token),
+            async { Ok(()) },
+        )
+        .await;
+    assert!(failed.is_err());
+    let preserved = cache
+        .read_turn_page(&child, |_, _| Ok(None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.snapshot.session, before_fault);
+    assert_eq!(preserved.generation, page.generation);
+    assert_eq!(
+        preserved.snapshot.records[0].raw.bytes(),
+        frames("second")[0].0.bytes()
+    );
+    let after_index:Vec<(i64,i64,i64)>=sqlx::query_as("SELECT generation,turn_index,first_ordinal FROM transcript_turns WHERE native_session_id='child' ORDER BY turn_index").fetch_all(&db).await.unwrap();
+    assert_eq!(before_index, after_index);
+    drop(db);
     cache.shutdown().await.unwrap();
 }
