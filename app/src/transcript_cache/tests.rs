@@ -761,3 +761,129 @@ async fn history_page_live_write_keeps_generation_and_old_tool_patch() {
     assert_ne!(Some(fresh.generation), first_generation);
     cache.shutdown().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hn_009_hn_022_pinned_sqlite_read_during_patch_and_generation_change() {
+    use crate::domain::history_page::{PageSize, TurnRange};
+    let temp = TempDirGuard::new("hn-pinned");
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::new(30, 1_000_000).unwrap(),
+        Arc::new(ManualRetentionClock::new(500)),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let key = sample_key(77, "s");
+    let raw = |update: serde_json::Value| {
+        raw_msg(&serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":update}}).to_string())
+    };
+    let mut frames = Vec::new();
+    for i in 1..=25 {
+        frames.push((
+            raw(
+                serde_json::json!({"sessionUpdate":"user_message_chunk","messageId":i.to_string()}),
+            ),
+            frames.len() as u64 + 1,
+        ));
+        if i == 3 || i == 12 {
+            frames.push((raw(serde_json::json!({"sessionUpdate":"tool_call","toolCallId":format!("t{i}"),"title":"tool","status":"in_progress"})),frames.len() as u64+1));
+        }
+    }
+    for id in ["t12", "t3", "t12"] {
+        frames.push((raw(serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"completed"})),frames.len() as u64+1));
+    }
+    let upper = frames.len() as u64;
+    cache
+        .replace_with_replay(
+            &key,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            frames.clone(),
+        )
+        .await
+        .unwrap();
+    let pool = cache.pool_for_test().await.unwrap();
+    for replace in [false, true] {
+        if replace {
+            sqlx::query("DELETE FROM transcript_turns")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE transcript_sessions SET turn_state='pending',turn_count=0")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let (pinned, entered) = tokio::sync::oneshot::channel();
+        let (release, resume) = std::sync::mpsc::sync_channel(1);
+        let reader = cache.clone();
+        let native = key.clone();
+        let read = tokio::spawn(async move {
+            reader
+                .read_turn_page(&native, move |generation, total| {
+                    pinned.send(generation).unwrap();
+                    resume
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap();
+                    TurnRange::locate(
+                        total,
+                        PageSize::default(),
+                        crate::domain::history_page::Direction::Older,
+                        15,
+                    )
+                    .map(Some)
+                })
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let old = entered.await.unwrap();
+        if replace {
+            cache
+                .replace_with_replay(
+                    &key,
+                    Version::V1,
+                    CapabilityProfile::ReplayCapable,
+                    frames[..10].to_vec(),
+                )
+                .await
+                .unwrap();
+        } else {
+            let next = raw(
+                serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"t12","rawOutput":"later"}),
+            );
+            assert!(
+                cache
+                    .writer()
+                    .try_enqueue_frame(&key, Version::V1, upper + 1, next)
+            );
+            cache.writer().flush().await.unwrap();
+        }
+        release.send(()).unwrap();
+        let seen = read.await.unwrap();
+        assert_eq!(seen.generation, old);
+        assert_eq!(seen.total, 25);
+        let ordinals: Vec<_> = seen.tool_updates.iter().map(|r| r.ordinal).collect();
+        if replace {
+            assert_eq!(ordinals, [upper - 2, upper, upper + 1]);
+        } else {
+            assert_eq!(ordinals, [upper - 2, upper]);
+        }
+        let latest = cache
+            .read_turn_page(&key, |_, total| {
+                TurnRange::first(total, PageSize::default(), false).map(Some)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.generation != old, replace);
+        if replace {
+            let old_rows:i64=sqlx::query_scalar("SELECT count(*) FROM transcript_turns WHERE generation != (SELECT active_generation FROM transcript_sessions)").fetch_one(&pool).await.unwrap();
+            assert_eq!(old_rows, 0);
+        }
+    }
+    drop(pool);
+    cache.shutdown().await.unwrap();
+    std::fs::remove_dir_all(temp.path()).expect("database handles released");
+}

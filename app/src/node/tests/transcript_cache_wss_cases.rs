@@ -148,7 +148,22 @@ async function handleRequest(msg) {
       return;
     }
     const sid = params.sessionId;
-    for(let i=1;i<=Number(latest.replayTurns ?? 0);i++){send({method:"session/update",params:{sessionId:sid,update:{sessionUpdate:"user_message_chunk",messageId:String(i),content:{type:"text",text:"turn"+i}}}});}
+    for (const update of latest.preludeFrames ?? []) {
+      send({method:"session/update",params:{sessionId:sid,update}});
+    }
+    for (let i = 1; i <= Number(latest.replayTurns ?? 0); i++) {
+      const suffix = String(i).padStart(4, "0");
+      const emit = update => send({method:"session/update",params:{sessionId:sid,update}});
+      emit({sessionUpdate:"user_message_chunk",...(latest.anonymousTurns ? {} : {messageId:String(i)}),
+            content:{type:"text",text:(latest.turnPrefix ?? "U") + suffix}});
+      if (latest.anonymousTurns) {
+        emit({sessionUpdate:"agent_message_chunk",messageId:crypto.randomUUID(),content:{type:"text",text:"A"+suffix}});
+      }
+      if (latest.largeToolBytes && i === 12) {
+        emit({sessionUpdate:"tool_call",toolCallId:"big",title:"large",status:"in_progress"});
+        emit({sessionUpdate:"tool_call_update",toolCallId:"big",rawOutput:"x".repeat(latest.largeToolBytes),status:"completed"});
+      }
+    }
     const replayTexts = Array.isArray(latest.replayTexts) ? latest.replayTexts : [];
     for (let i = 0; i < replayTexts.length; i++) {
       send({
@@ -206,6 +221,16 @@ async function handleRequest(msg) {
     const version = Number(cfg.protocolVersion ?? 1);
     const promptItems = Array.isArray(params.prompt) ? params.prompt : [];
     const promptText = promptItems.map((b) => b.text ?? "").join("");
+    if (cfg.promptBarrierReleaseFile) {
+      while (!fs.existsSync(cfg.promptBarrierReleaseFile)) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+    if (cfg.echoUserChunk) {
+      send({method:"session/update",params:{sessionId:sid,update:{
+        sessionUpdate:"user_message_chunk",messageId:"user-"+id,content:{type:"text",text:promptText}
+      }}});
+    }
     if (cfg.requestPermission) {
       const permId = `perm-${reqSeq++}`;
       const permWait = new Promise((resolve) => {
@@ -233,6 +258,15 @@ async function handleRequest(msg) {
         });
       }
       await permWait;
+    }
+    if (cfg.autoChildSession) {
+      for (let turn = 1; turn <= 25; turn++) {
+        for (const [type, marker] of [["user_message_chunk","U"],["agent_message_chunk","A"]]) {
+          send({method:"session/update",params:{sessionId:cfg.autoChildSession,update:{
+            sessionUpdate:type,messageId:marker+turn,content:{type:"text",text:marker+String(turn).padStart(4,"0")}
+          }}});
+        }
+      }
     }
     const suffix = cfg.replyPrefix ?? "reply:";
     const msgId = `reply-${Date.now()}-${reqSeq++}`;
@@ -363,6 +397,7 @@ struct DrainedStreamFrames {
     raw: Vec<serde_json::Value>,
     turns: Vec<serde_json::Value>,
     statuses: Vec<serde_json::Value>,
+    raw_bytes: std::collections::HashMap<u64, Vec<u8>>,
     projections: Vec<serde_json::Value>,
     field_bytes: Vec<(u64, Vec<u8>)>,
     snapshot_ends: usize,
@@ -483,6 +518,7 @@ async fn read_until_snapshot_end(
                                     if kind == RecordKind::TurnStart {
                                         drained.turns.push(val);
                                     } else if kind == RecordKind::OriginalRaw {
+                                        drained.raw_bytes.insert(hdr.record(), full);
                                         drained.raw.push(val);
                                     } else if kind == RecordKind::Status {
                                         let is_rebound = val.get("type").and_then(|t| t.as_str())
@@ -1395,6 +1431,41 @@ async fn history_page_cold_socket_selects_raw_and_tool_anchors() {
     assert!(fixture.peer_logs().is_empty());
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
+    let tool = middle
+        .projections
+        .iter()
+        .find(|p| p["kind"] == "tool")
+        .unwrap();
+    // Resolve every field reference using only bytes the isolated WSS reader received.
+    for field in tool["fields"].as_array().unwrap() {
+        let raw = &field["raw"];
+        if raw.is_null() {
+            continue;
+        }
+        let number = |key: &str| raw[key].as_str().unwrap().parse::<usize>().unwrap();
+        let record = number("rawRecordId") as u64;
+        let start = number("byteStart");
+        let end = number("byteEnd");
+        let material = if let Some(bytes) = middle.raw_bytes.get(&record) {
+            bytes.get(start..end)
+        } else {
+            middle.field_bytes.iter().find_map(|(id, bytes)| {
+                if *id == record
+                    && bytes.get(..8) == Some(&(start as u64).to_be_bytes())
+                    && bytes.len() == 8 + end - start
+                {
+                    bytes.get(8..)
+                } else {
+                    None
+                }
+            })
+        }
+        .expect("projection field has its complete referenced byte range");
+        if field["field"] == "rawOutput" {
+            let actual: String = serde_json::from_slice(material).unwrap();
+            assert!(actual.eq(&output), "decoded tool output differs");
+        }
+    }
 }
 #[tokio::test]
 async fn history_page_replays_cold_target_and_reuses_signed_cursor() {
@@ -1582,6 +1653,15 @@ async fn history_page_child_scope_and_locate_over_socket() {
 
 #[tokio::test]
 async fn history_page_disconnect_during_locate_keeps_original_replay_owned() {
+    Box::pin(check_pending_locate(false)).await;
+}
+
+#[tokio::test]
+async fn hn_018_revoke_during_locate_keeps_original_replay_owned() {
+    Box::pin(check_pending_locate(true)).await;
+}
+
+async fn check_pending_locate(revoke: bool) {
     use serde_json::json;
     let fixture = HarnessFixture::new("history-disconnect");
     let entered = fixture.area.directory.join("history-load-entered");
@@ -1635,7 +1715,18 @@ async fn history_page_disconnect_during_locate_keeps_original_replay_owned() {
     })
     .await
     .unwrap();
-    sock.close(None).await.unwrap();
+    let (reader_id, reader_key) = if revoke {
+        let other = SigningKey::from_slice(&[74; 32]).unwrap();
+        let other_id = pair_browser(&node, &other, "Independent history reader").await;
+        crate::ipc::device_revoke(node.ipc_address(), &id)
+            .await
+            .unwrap();
+        assert_eq!(next_close(&mut sock, Duration::from_secs(5)).await.0, 4410);
+        (other_id, other)
+    } else {
+        sock.close(None).await.unwrap();
+        (id, key)
+    };
     drop(sock);
     std::fs::write(release, b"release").unwrap();
     let native = NativeSessionKey::from_config(Some(sel.source), &native).unwrap();
@@ -1657,8 +1748,8 @@ async fn history_page_disconnect_during_locate_keeps_original_replay_owned() {
     .unwrap();
     let mut sock = authenticate_socket(
         valid_management_socket(&fixture.area, node.listen_addr()).await,
-        &key,
-        &id,
+        &reader_key,
+        &reader_id,
         node_public_key(&node),
     )
     .await;
@@ -2468,3 +2559,5 @@ async fn stc_010_revoke_during_cached_and_revalidating_stream_closes_4410() {
 
     node2.shutdown(None).await.expect("shutdown stc010 node2");
 }
+
+mod history_acceptance;
