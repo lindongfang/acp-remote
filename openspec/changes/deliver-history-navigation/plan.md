@@ -68,9 +68,9 @@ mode: required
 | HN-R03 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 游标范围编码与方向校验 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
 | HN-R04 | 独立 reviewer | 高 | 4dd96797 + 规划工作区 | 旧页遗漏迟到的工具补丁 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
 | HN-R05 | 独立 reviewer | 中 | 4dd96797 + 规划工作区 | 子首页与重新定位语义混用 | 7aeff9a2 | closed | 原 reviewer 完成规划复核 |
-| HN-F01 | 独立 tester / HN-022 | 高 | 1808ce2 | 冷读旧页时，页内工具能显示最终状态，但指向页后 rawOutput 的引用缺少可读取的原始字节 | 待修复 | open | 已由真实 WSS 探针复现，待原 tester 对修复提交复测 |
+| HN-F01 | 独立 tester / HN-022 | 高 | 1808ce2 | 冷读旧页时，页内工具能显示最终状态，但指向页后 rawOutput 的引用缺少可读取的原始字节 | 1feb0075 | open | 已由真实 WSS 探针复现，待原 tester 对修复提交复测 |
 | HN-F02 | 独立 tester / HN-012 | 高 | 1808ce2 | 根忙时按要求拒绝；根空闲但仅有根重放能力、无子快照或子事件时，子首次读取返回 unsupported_capability。原用例预期成功 | 用户已确认独立子历史查询 | open | 待分别验证有、无子数据路径及根名额 |
-| HN-F03 | 独立 tester / HN-027 | 高 | 74e7c2bb | 双浏览器跨代定位到正确的 11–15 轮后提示读取或展示准备失败，第 15 轮新正文未显示 | 待修复 | open | 待真实浏览器复测 |
+| HN-F03 | 独立 tester / HN-027 | 高 | 74e7c2bb | 双浏览器跨代定位到正确的 11–15 轮后提示读取或展示准备失败，第 15 轮新正文未显示 | dc6bb39d | open | 修复者以双 Edge 运行原验收驱动通过，待独立复核 |
 | HN-PR01 | 独立 reviewer | 高 | 1feb0075 | 发起者撤权与共用查询终止条件冲突 | 405957a1 | closed | 原审查人复核通过，A 撤权即时关闭，仍有权的 B 完成原查询 |
 
 ## Verification Results
