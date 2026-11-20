@@ -495,7 +495,6 @@ async fn check_native_children(check_unprovable: bool) {
         json!({"targetId":s.root.encode(),"reason":"explicit_refresh","page":{"turns":"5"}}),
     )
     .await;
-    let saved = root_page["result"]["page"]["turns"].clone();
     assert_eq!(root_page["result"]["page"]["firstTurn"], "21");
     snapshot(&mut s.control, &root_page).await;
     wait_for_peer_method(&s.f, "session/load", 1).await;
@@ -506,8 +505,22 @@ async fn check_native_children(check_unprovable: bool) {
     );
     let mut b = s.observer(124).await;
     let mut req = s.payload();
-    req["child"] = json!("grandchild");
     req["turns"] = json!("3");
+    let parent_scope = json!({"target":{"kind":"target","targetId":s.root.encode()},"mode":{"kind":"first"},"turns":"5"});
+    let (parent, child) = tokio::join!(
+        send_command_wait(&mut s.control, "history.page", parent_scope.clone()),
+        send_command_wait(&mut b, "history.page", req.clone())
+    );
+    assert_eq!(parent["result"]["page"]["firstTurn"], "21");
+    assert_eq!(parent["result"]["page"]["lastTurn"], "25");
+    let saved = parent["result"]["page"]["turns"].clone();
+    assert_eq!(child["result"]["page"]["firstTurn"], "1");
+    assert_eq!(child["result"]["page"]["lastTurn"], "3");
+    assert_eq!(child["result"]["page"]["order"], "ascending");
+    let (_, child_frames) =
+        tokio::join!(snapshot(&mut s.control, &parent), snapshot(&mut b, &child));
+    assert_eq!(child_frames.raw.len(), 6);
+    req["child"] = json!("grandchild");
     let grand = send_command_wait(&mut b, "history.page", req.clone()).await;
     assert_eq!(
         grand["result"]["page"]["lastTurn"], "3",
@@ -619,7 +632,7 @@ async fn check_native_children(check_unprovable: bool) {
     assert_eq!(last["result"]["page"]["firstTurn"], "11");
     assert_eq!(last["result"]["page"]["lastTurn"], "12");
     assert_eq!(snapshot(&mut b, &last).await.raw.len(), 4);
-    let root=send_command_wait(&mut s.control,"history.page",json!({"target":{"kind":"target","targetId":s.root.encode()},"mode":{"kind":"first"},"turns":"5"})).await;
+    let root = send_command_wait(&mut s.control, "history.page", parent_scope).await;
     assert_eq!(root["result"]["page"]["turns"], saved);
     assert!(!s.f.peer_logs().iter().any(|e| e["method"] == QUERY));
     b.close(None).await.unwrap();
