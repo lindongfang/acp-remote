@@ -673,3 +673,91 @@ async fn history_page_read_indexes_pending_rows_without_renewing_content() {
     drop(pool);
     cache.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn history_page_live_write_keeps_generation_and_old_tool_patch() {
+    use crate::domain::history_page::{Direction, PageSize, TurnRange};
+    let temp = TempDirGuard::new("history-live");
+    let clock = Arc::new(ManualRetentionClock::new(500));
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::new(30, 1_000_000).unwrap(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let key = sample_key(77, "s");
+    let writer = cache.writer();
+    let updates = [
+        serde_json::json!({"sessionUpdate":"user_message_chunk","messageId":"a","content":{"type":"text","text":"A"}}),
+        serde_json::json!({"sessionUpdate":"tool_call","toolCallId":"t","title":"test","status":"in_progress"}),
+        serde_json::json!({"sessionUpdate":"user_message_chunk","messageId":"b","content":{"type":"text","text":"B"}}),
+        serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"t","status":"completed"}),
+    ];
+    let mut first_generation = None;
+    for (i, update) in updates.into_iter().enumerate() {
+        let frame = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":update}});
+        assert!(writer.try_enqueue_frame(
+            &key,
+            Version::V1,
+            i as u64 + 1,
+            raw_msg(&frame.to_string())
+        ));
+        writer.flush().await.unwrap();
+        let page = cache
+            .read_turn_page(&key, |_, total| {
+                TurnRange::locate(total, PageSize::parse(Some("1"))?, Direction::Newer, 1).map(Some)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            *first_generation.get_or_insert(page.generation),
+            page.generation
+        );
+        if i == 3 {
+            assert_eq!(page.total, 2);
+            assert_eq!(page.boundaries, [(1, 1)]);
+            assert_eq!(
+                page.snapshot
+                    .records
+                    .iter()
+                    .map(|r| r.ordinal)
+                    .collect::<Vec<_>>(),
+                [1, 2]
+            );
+            assert_eq!(
+                page.tool_updates
+                    .iter()
+                    .map(|r| r.ordinal)
+                    .collect::<Vec<_>>(),
+                [4]
+            );
+        }
+    }
+    clock.set_millis(31 * 86_400_000);
+    assert_eq!(
+        cache
+            .enforce_retention_and_budget(None)
+            .await
+            .unwrap()
+            .expired_sessions,
+        1
+    );
+    let new_frame = raw_msg(
+        r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","messageId":"fresh"}}}"#,
+    );
+    assert!(writer.try_enqueue_frame(&key, Version::V1, 1, new_frame));
+    writer.flush().await.unwrap();
+    let fresh = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::first(total, PageSize::default(), false).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fresh.total, 1);
+    assert_ne!(Some(fresh.generation), first_generation);
+    cache.shutdown().await.unwrap();
+}

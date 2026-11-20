@@ -173,4 +173,31 @@ mod tests {
         initialize_schema(&pool).await.unwrap();
         pool.close().await;
     }
+
+    #[tokio::test]
+    async fn failed_turn_migration_rolls_back_added_columns_and_version() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(BASE_SCHEMA_SQL).execute(&pool).await.unwrap();
+        sqlx::query("INSERT INTO transcript_cache_meta VALUES(1,1)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE transcript_turns(conflict INTEGER)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(initialize_schema(&pool).await.is_err());
+        let version: i64 = sqlx::query_scalar("SELECT schema_version FROM transcript_cache_meta")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(version, 1);
+        let new_columns:i64=sqlx::query_scalar("SELECT count(*) FROM pragma_table_info('transcript_sessions') WHERE name IN ('generation_token','turn_state','turn_count')").fetch_one(&pool).await.unwrap();
+        assert_eq!(new_columns, 0);
+        pool.close().await;
+    }
 }

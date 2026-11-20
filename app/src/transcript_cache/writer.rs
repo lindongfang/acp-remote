@@ -1,7 +1,7 @@
 //! Asynchronous bounded batch writer for persisting live `session/update` frames without blocking live capture.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -248,6 +248,28 @@ struct SessionWriterState {
     exists_in_db: bool,
 }
 
+impl SessionWriterState {
+    // Eviction and replay use the same write lock but can replace a generation between batches.
+    async fn matches_persisted(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        key: &NativeSessionKey,
+    ) -> Result<bool, TranscriptCacheError> {
+        let persisted: Option<(i64, Vec<u8>)> = sqlx::query_as(
+            "SELECT active_generation, content_digest FROM transcript_sessions
+             WHERE source_id = ? AND native_session_id = ?",
+        )
+        .bind(entity_id_to_bytes(key.source().0)?.as_slice())
+        .bind(key.native_id())
+        .fetch_optional(&mut **tx)
+        .await?;
+        Ok(persisted.is_some_and(|(generation, digest)| {
+            generation == self.active_generation
+                && digest.as_slice() == self.digest.finalize_snapshot()
+        }))
+    }
+}
+
 pub fn spawn_writer(
     pool: SqlitePool,
     write_mutex: Arc<AsyncMutex<()>>,
@@ -421,11 +443,18 @@ async fn commit_frame_batch(
     }
 
     let mut tx = pool.begin().await?;
+    let mut checked_keys = HashSet::new();
     for item in filtered {
         let latest_epoch = control.current_purge_epoch(&item.key);
         if item.purge_epoch < latest_epoch {
             cache.remove(&item.key);
             continue;
+        }
+        if checked_keys.insert(item.key.clone())
+            && let Some(state) = cache.get(&item.key)
+            && !state.matches_persisted(&mut tx, &item.key).await?
+        {
+            cache.remove(&item.key);
         }
         persist_live_item(&mut tx, cache, item, now_ms).await?;
     }
