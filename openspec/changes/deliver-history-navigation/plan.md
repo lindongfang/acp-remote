@@ -14,9 +14,9 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | WP1 | 可证明轮次、方向、参数与游标范围 | 无 | coder | app/src/domain、app/src/adapters/acp、app/src/management_ws | 分页模型、命令合同与单测 | HN-003 至 HN-007 |
 | WP2 | 旧库首次翻页、增量索引及换代 | WP1 | coder | app/src/transcript_cache | 原子迁移与有界区间读测试 | HN-008、HN-009 |
-| WP3 | 独立只读子历史查询、按来源选页、权限复核、跨代定位、实时衔接 | WP1、WP2 | coder | app/src/node、app/src/adapters/acp、app/src/application/native_dispatch、app/src/transcript_cache、app/src/application/shared_views、app/src/management_ws | 标准命令接线与集成测试 | HN-010 至 HN-024、HN-029 |
-| WP4 | 父子独立翻页、折叠恢复与迟到响应处理 | WP1；联调依赖 WP3 | coder | clients/web/src、clients/web/tests | 分页组件、控制器与交互测试 | HN-002、HN-025 至 HN-027 |
-| WP5 | 独立验收与交付检视 | WP1 至 WP4 | tester、reviewer | testing、当前变更 plan.md 与 tasks.md | 固定提交的执行证据与审查结论 | HN-001 至 HN-029 |
+| WP3 | 独立只读子历史查询、按来源选页、权限复核、跨代定位、实时衔接 | WP1、WP2 | coder | app/src/node、app/src/adapters/acp、app/src/application/native_dispatch、app/src/transcript_cache、app/src/application/shared_views、app/src/management_ws | 标准命令接线与集成测试 | HN-010 至 HN-024、HN-029、HN-030 |
+| WP4 | 父子独立翻页、折叠恢复与迟到响应处理 | WP1；联调依赖 WP3 | coder | clients/web/src、clients/web/tests | 分页组件、控制器与交互测试 | HN-002、HN-025 至 HN-027、HN-030 |
+| WP5 | 独立验收与交付检视 | WP1 至 WP4 | tester、reviewer | testing、当前变更 plan.md 与 tasks.md | 固定提交的执行证据与审查结论 | HN-001 至 HN-030 |
 
 ## Merge Order
 
