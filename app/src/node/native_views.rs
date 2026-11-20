@@ -433,30 +433,39 @@ async fn execute_replay_revalidation<F>(
         push_non_rebound_degraded_status(coordinator, key, profile, error);
         return;
     }
-    if let Ok(views) = attachment.views()
-        && matches!(views.core.target(key), Err(ViewError::InvalidTarget))
+    // Restoring a released target publishes its new send generation on the view worker.
+    // A previously published target can still carry the sealed generation here.
+    let ready = async {
+        let views = attachment.views()?;
+        let mut bound = false;
+        loop {
+            let changed = views.core.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            capability.require_current()?;
+            if let Some(error) = views.core.probe.route_failure() {
+                return Err(error);
+            }
+            match views.core.target(key) {
+                Ok(target) if target.send.current()? => return Ok(()),
+                Ok(_) => {}
+                Err(ViewError::InvalidTarget) => {
+                    if !bound {
+                        attachment.ensure_external_target(key.clone())?;
+                        bound = true;
+                    }
+                }
+                Err(error) => return Err(error),
+            }
+            changed.await;
+        }
+    };
+    if let Err(error) = tokio::time::timeout(std::time::Duration::from_millis(2500), ready)
+        .await
+        .unwrap_or(Err(ViewError::CaptureUnavailable))
     {
-        if let Err(error) =
-            crate::application::native_dispatch::view_attachment::NativeSourceViewOwner::bind_target(
-                attachment.as_ref(),
-                key,
-            )
-        {
-            push_non_rebound_degraded_status(coordinator, key, profile, error);
-            return;
-        }
-        for _ in 0..50 {
-            let notified = views.core.changed.notified();
-            if views.core.target(key).is_ok() {
-                break;
-            }
-            if tokio::time::timeout(std::time::Duration::from_millis(50), notified)
-                .await
-                .is_err()
-            {
-                break;
-            }
-        }
+        push_non_rebound_degraded_status(coordinator, key, profile, error);
+        return;
     }
     match attachment.trigger_background_replay(key).await {
         Ok(()) => {

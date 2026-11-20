@@ -220,10 +220,11 @@ export class SharedViewController {
       reopenRequested: full => {
         if (this.#sharedSessionDisplay !== display) return;
         const spec = this.#sharedViewSpec;
+        const page = full ? null : turns ? { turns } : {};
         if (opened.page && spec?.kind === "target") {
-          void this.openSharedSessionView(record, spec.targetId, null, "reopen", full ? null : {});
+          void this.openSharedSessionView(record, spec.targetId, null, "reopen", page);
         } else if (opened.page && spec?.kind === "source") {
-          void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "reopen", full ? null : {});
+          void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "reopen", page);
         } else void this.rebindSharedView(record, opened);
       },
       retrySyncRequested: () => {

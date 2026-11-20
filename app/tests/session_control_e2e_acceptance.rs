@@ -561,12 +561,15 @@ fn isolated_history_codex_home(root: &Path) -> PathBuf {
     fs::create_dir(&home).unwrap();
     fs::copy(source.join("auth.json"), home.join("auth.json")).expect("copy isolated login");
     let config_path = source.join("config.toml");
+    let mut selected = toml::Table::new();
+    // session/close unsubscribes. Let this isolated app-server unload its idle
+    // thread immediately so the independent writer can acquire the same thread.
+    selected.insert("thread_unload_delay_secs".to_owned(), 0.into());
     if config_path.is_file() {
         let contents = fs::read_to_string(config_path).expect("read Codex configuration");
         let config: toml::Table = contents
             .parse()
             .unwrap_or_else(|_| panic!("invalid Codex configuration"));
-        let mut selected = toml::Table::new();
         for key in [
             "model",
             "model_provider",
@@ -594,12 +597,12 @@ fn isolated_history_codex_home(root: &Path) -> PathBuf {
             providers.insert(name.to_owned(), provider.clone());
             selected.insert("model_providers".to_owned(), providers.into());
         }
-        fs::write(
-            home.join("config.toml"),
-            toml::to_string(&selected).unwrap(),
-        )
-        .unwrap();
     }
+    fs::write(
+        home.join("config.toml"),
+        toml::to_string(&selected).unwrap(),
+    )
+    .unwrap();
     home
 }
 
@@ -702,4 +705,13 @@ async fn hn_028_real_history_navigation() {
         status.success() && completed == 3,
         "real browser assertions failed"
     );
+    let mut report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&evidence).unwrap()).unwrap();
+    report["nodeChecks"] = serde_json::json!({
+        "offlineNewJobProcesses": 0,
+        "activeJobProcessesAfterShutdown": 0,
+        "isolatedDirectoryRemoved": true,
+        "portRebound": true
+    });
+    fs::write(evidence, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
 }

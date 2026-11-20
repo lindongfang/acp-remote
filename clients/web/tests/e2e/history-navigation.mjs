@@ -23,7 +23,7 @@ function observe(page) {
       const frame = JSON.parse(payload);
       if (frame.type !== "command") return;
       requests.set(frame.requestId, frame.action);
-      wire.push({ action: frame.action, mode: frame.payload.mode, sentAt: Date.now() });
+      wire.push({ action: frame.action, mode: frame.payload.mode, reason: frame.payload.reason, sentAt: Date.now() });
     });
     socket.on("framereceived", ({ payload }) => {
       if (typeof payload !== "string") return;

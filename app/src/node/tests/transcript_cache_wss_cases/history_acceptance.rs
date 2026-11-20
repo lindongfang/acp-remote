@@ -1263,6 +1263,27 @@ async fn hn_015_refresh_then_relocate_after_native_rewrite() {
         assert_eq!(old, 0);
     }
     drop(db);
+    // HN-028: after release the cached first page must rebound onto the
+    // newly admitted replay, keeping its requested window and new cursor.
+    release_target(&mut sock, root.target).await;
+    configure(&f, &json!({"replayTurns":27,"turnPrefix":"D"}));
+    let refresh = send_command_wait(&mut sock, "view.open", open("explicit_refresh")).await;
+    assert_eq!(refresh["result"]["page"]["source"], "transcript_cache");
+    let stream = Id128::parse_base64url(refresh["result"]["streamId"].as_str().unwrap()).unwrap();
+    let cached = read_until_snapshot_end(&mut sock, stream).await;
+    let is_rebound = |status: &serde_json::Value| status["type"] == "stream_rebound";
+    if !cached.statuses.iter().any(is_rebound) {
+        read_next_status_matching(&mut sock, stream, is_rebound, Duration::from_secs(10)).await;
+    }
+    let synced = send_command_wait(&mut sock, "view.rebind", json!({"streamId":stream})).await;
+    let page = &synced["result"]["page"];
+    assert_eq!(page["firstTurn"], "18");
+    assert_eq!(page["lastTurn"], "27");
+    assert_ne!(
+        page["generationId"],
+        rebound["result"]["page"]["generationId"]
+    );
+    snapshot(&mut sock, &synced).await;
     sock.close(None).await.unwrap();
     node.shutdown(None).await.unwrap();
 }

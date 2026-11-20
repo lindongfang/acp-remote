@@ -96,8 +96,10 @@ impl CachedViewHandle {
         status.sync_state = TranscriptSyncState::Synced;
         status.capability_boundary = TranscriptCapabilityBoundary::ReplayCapable;
         status.continuable = true;
-        let _ = self.record.status_tx.send(status);
-        let _ = self.record.rebind_tx.send(RevalidationOutcome::SyncedReady);
+        self.record.status_tx.send_replace(status);
+        self.record
+            .rebind_tx
+            .send_replace(RevalidationOutcome::SyncedReady);
         let _ = self
             .record
             .owner
@@ -431,8 +433,10 @@ impl TranscriptCacheCoordinator {
             status.capability_boundary = TranscriptCapabilityBoundary::ReplayCapable;
             status.continuable = true;
             status.cache_warning = status.cache_warning || self.has_write_warning();
-            let _ = record.status_tx.send(status);
-            let _ = record.rebind_tx.send(RevalidationOutcome::SyncedReady);
+            record.status_tx.send_replace(status);
+            record
+                .rebind_tx
+                .send_replace(RevalidationOutcome::SyncedReady);
             let _ = record.owner.handle().seal_target_send(&record.key);
         }
     }
@@ -445,11 +449,13 @@ impl TranscriptCacheCoordinator {
         if self.has_write_warning() {
             next_status.cache_warning = true;
         }
-        let _ = record.status_tx.send(next_status);
+        record.status_tx.send_replace(next_status);
         if next_status.sync_state != TranscriptSyncState::Revalidating
             && next_status.sync_state != TranscriptSyncState::Synced
         {
-            let _ = record.rebind_tx.send(RevalidationOutcome::StayCached);
+            record
+                .rebind_tx
+                .send_replace(RevalidationOutcome::StayCached);
         }
         if let Ok(bytes) = encode_cache_state_json(next_status) {
             let _ = record.owner.handle().push_custom_status(&record.key, bytes);
@@ -674,7 +680,7 @@ impl AcpTranscriptTap for TranscriptCacheCoordinator {
                 for record in &cached_records {
                     let mut st = *record.status_tx.borrow();
                     st.cache_warning = true;
-                    let _ = record.status_tx.send(st);
+                    record.status_tx.send_replace(st);
                     if let Ok(bytes) = encode_cache_state_json(st) {
                         let _ = record.owner.handle().push_custom_status(&key_owned, bytes);
                     }
@@ -796,8 +802,10 @@ impl TranscriptRecoveryObserver for TranscriptCacheCoordinator {
             status.capability_boundary = boundary;
             status.continuable = true;
             status.cache_warning = status.cache_warning || self.has_write_warning();
-            let _ = record.status_tx.send(status);
-            let _ = record.rebind_tx.send(RevalidationOutcome::SyncedReady);
+            record.status_tx.send_replace(status);
+            record
+                .rebind_tx
+                .send_replace(RevalidationOutcome::SyncedReady);
             let _ = record.owner.handle().seal_target_send(&record.key);
         }
     }

@@ -140,15 +140,20 @@ export async function runRealHistory({page,cfg,report,openNewTarget,groups,butto
   }
   delete report.externalFailure;
   report.steps.push("external Codex resume exited successfully");
+  report.stage = "explicit refresh after external append";
+  const beforeRefresh = wire.length;
   await root.getByLabel("每页轮数").fill("5");
   await button(root,"重新加载首页").click();
   await groups(root,9,13);
   await root.getByText("HN_EXTERNAL",{exact:true}).first().waitFor();
   const fresh = latest();
+  assert.ok(wire.slice(beforeRefresh).some(e => e.action === "view.open" && e.reason === "explicit_refresh"));
   assert.notEqual(fresh.generationId,generation);
   await button(root,"更早").click();
   await groups(root,4,8);
   assert.equal(latest().generationId,fresh.generationId);
   assert.equal(wire.findLast(e=>e.action==="history.page").mode.cursor,fresh.olderCursor);
+  report.externalRefresh = { firstTurn: fresh.firstTurn, lastTurn: fresh.lastTurn,
+    newGeneration: true, continuedWithReturnedCursor: true };
   report.steps.push("external turn 13, new generation, continuation with fresh cursor");
 }
