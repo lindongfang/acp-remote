@@ -83,6 +83,10 @@ export class MainFixturePeer {
   #deviceRevision = 1;
   readonly #sourceOps = new Map<string, SourceOperationRecord>();
   readonly #sourceResultStreams = new Map<string, readonly Uint8Array[]>();
+  readonly #sessionControl = new Map<
+    string,
+    { controllerClientId: string | null; controllerDisplayName: string | null; controlEpoch: number }
+  >();
 
   constructor(origin: string) {
     this.identity = { origin, nodeId, nodePublicKey, clientId };
@@ -185,6 +189,11 @@ export class MainFixturePeer {
             status: "trusted", publicKeyFingerprint: await publicKeyFingerprint(this.#clientPublicKey ?? ""),
             createdAt: 1_800_000_000, revokedAt: null,
           }], nextCursor: null, revision: this.#deviceRevision,
+        }));
+        break;
+      case "catalog.inventory":
+        socket.receive(result(request.requestId, {
+          sources: [], harnesses: [], profiles: [], workspaces: [], targets: [],
         }));
         break;
       case "input.queue":
@@ -378,6 +387,46 @@ export class MainFixturePeer {
         const pending = { requestId: request.requestId, streamId: payload.streamId };
         if (this.holdCloses) this.pendingCloses.push(pending);
         else this.sendClosed(socket, pending);
+        break;
+      }
+      case "session.control.inspect":
+      case "session.control.takeover":
+      case "session.control.release": {
+        if (typeof payload.targetId !== "string") throw new Error(`${frame.action} target missing`);
+        const current = this.#sessionControl.get(payload.targetId) ?? {
+          controllerClientId: null,
+          controllerDisplayName: null,
+          controlEpoch: 0,
+        };
+        if (frame.action === "session.control.takeover") {
+          if (current.controllerClientId !== this.identity.clientId) {
+            current.controllerClientId = this.identity.clientId;
+            current.controllerDisplayName = "Synthetic main fixture";
+            current.controlEpoch += 1;
+            this.#sessionControl.set(payload.targetId, current);
+          }
+        } else if (frame.action === "session.control.release") {
+          if (current.controllerClientId !== this.identity.clientId) {
+            socket.receive({
+              v: 1, type: "result", requestId: request.requestId, ok: false,
+              result: null, error: { code: "session_not_controlled" },
+            });
+            break;
+          }
+          current.controllerClientId = null;
+          current.controllerDisplayName = null;
+          current.controlEpoch += 1;
+          this.#sessionControl.set(payload.targetId, current);
+        }
+        socket.receive(result(request.requestId, {
+          targetId: payload.targetId,
+          rootTargetId: payload.targetId,
+          sourceId: idFor(200),
+          rootNativeSessionId: `fixture-root-${payload.targetId}`,
+          controllerClientId: current.controllerClientId,
+          controllerDisplayName: current.controllerDisplayName,
+          controlEpoch: String(current.controlEpoch),
+        }));
         break;
       }
       default:

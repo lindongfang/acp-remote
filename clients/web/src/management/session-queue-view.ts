@@ -6,6 +6,7 @@ import type {
 } from "./session-protocol";
 
 export interface SessionQueueViewOptions {
+  readonly writeDisabled?: boolean;
   readonly onResume?: (button: HTMLButtonElement) => void | Promise<void>;
   readonly onEdit?: (entry: SessionQueueEntry) => void;
   readonly onCancel?: (
@@ -34,12 +35,16 @@ export function sessionQueueSnapshotView(
         "error",
       ),
     );
-    fragment.append(resumeButton(snapshot.targetId, options.onResume));
+    fragment.append(
+      resumeButton(snapshot.targetId, options.onResume, options.writeDisabled),
+    );
   } else if (snapshot.priorityFailure !== null) {
     fragment.append(
       statusLine(priorityFailureLabel(snapshot.priorityFailure), "error"),
     );
-    fragment.append(resumeButton(snapshot.targetId, options.onResume));
+    fragment.append(
+      resumeButton(snapshot.targetId, options.onResume, options.writeDisabled),
+    );
   } else if (!snapshot.failureSuspended) {
     fragment.append(statusLine("当前没有待继续的已停止队列。", "notice"));
   }
@@ -67,11 +72,12 @@ export function sessionQueueSnapshotView(
 function resumeButton(
   targetId: string,
   onResume: SessionQueueViewOptions["onResume"],
+  writeDisabled = false,
 ): HTMLButtonElement {
   const resume = button("继续旧队列");
   resume.dataset.sessionAction = "resume";
   resume.dataset.targetId = targetId;
-  if (onResume === undefined) {
+  if (onResume === undefined || writeDisabled) {
     resume.disabled = true;
   } else {
     resume.addEventListener("click", () => {
@@ -116,6 +122,7 @@ function queueEntryList(
       const edit = button("编辑");
       edit.dataset.sessionAction = "edit";
       edit.dataset.queueEntry = entry.itemId;
+      edit.disabled = options.writeDisabled === true;
       edit.addEventListener("click", () => options.onEdit?.(entry));
       actions.append(edit);
     }
@@ -126,6 +133,8 @@ function queueEntryList(
           "prioritize",
           entry,
           options.onPrioritize,
+          undefined,
+          options.writeDisabled === true,
         ),
       );
     }
@@ -137,10 +146,11 @@ function queueEntryList(
           entry,
           options.onCancel,
           "danger-button",
+          options.writeDisabled === true,
         ),
       );
     }
-    if (actions.childElementCount > 0) {
+    if (actions.children.length > 0) {
       card.append(actions);
     }
     section.append(card);
@@ -157,11 +167,13 @@ function entryAction(
     button: HTMLButtonElement,
   ) => void | Promise<void>,
   className?: string,
+  disabled = false,
 ): HTMLButtonElement {
   const value = button(text);
   if (className !== undefined) {
     value.className = className;
   }
+  value.disabled = disabled;
   value.dataset.sessionAction = action;
   value.dataset.queueEntry = entry.itemId;
   value.addEventListener("click", () => {

@@ -26,6 +26,7 @@ import {
   managementErrorMessage,
   sessionActionErrorMessage,
 } from "./error-formatting";
+import type { SessionControlIntegrationPort } from "./session-control-controller";
 import type { SharedViewSpec } from "./shared-view-controller";
 
 export interface SessionQueueHostPort {
@@ -58,6 +59,7 @@ export interface SessionQueueHostPort {
     failure?: string,
   ) => void;
   readonly formatError?: (error: unknown) => string;
+  readonly control?: SessionControlIntegrationPort;
 }
 
 export class SessionQueueController {
@@ -165,9 +167,17 @@ export class SessionQueueController {
     });
     section.append(form);
 
+    const canWrite =
+      this.#port.control?.canWriteTarget(this.#inspectedQueueTargetId, record) ??
+      true;
     if (this.#inspectedQueueTargetId !== null) {
+      const banner = this.#port.control?.renderControlBanner(
+        record,
+        this.#inspectedQueueTargetId,
+      );
+      if (banner !== undefined) section.append(banner);
       section.append(
-        this.sessionInputComposer(record, this.#inspectedQueueTargetId),
+        this.sessionInputComposer(record, this.#inspectedQueueTargetId, canWrite),
       );
       if (this.#editingQueueEntry !== null) {
         section.append(
@@ -175,6 +185,7 @@ export class SessionQueueController {
             record,
             this.#inspectedQueueTargetId,
             this.#editingQueueEntry,
+            canWrite,
           ),
         );
       }
@@ -222,6 +233,7 @@ export class SessionQueueController {
 
     section.append(
       sessionQueueSnapshotView(snapshot, {
+        writeDisabled: !canWrite,
         onResume: (resumeButton) => {
           void this.resumeSessionQueue(record, snapshot.targetId, resumeButton);
         },
@@ -290,6 +302,7 @@ export class SessionQueueController {
   sessionInputComposer(
     record: IdentityRecord,
     targetId: string,
+    canWrite = true,
   ): HTMLElement {
     const doc = this.#doc();
     const section = element("section", "session-composer", undefined, doc);
@@ -305,6 +318,7 @@ export class SessionQueueController {
     textarea.placeholder = "输入要发送给会话的文本";
     const submit = button("上传并提交", "submit", doc);
     submit.type = "submit";
+    submit.disabled = !canWrite;
     form.append(label, textarea, submit);
     form.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -319,6 +333,7 @@ export class SessionQueueController {
     record: IdentityRecord,
     targetId: string,
     entry: SessionQueueEntry,
+    canWrite = true,
   ): HTMLElement {
     const doc = this.#doc();
     const section = element("section", "session-composer", undefined, doc);
@@ -337,6 +352,7 @@ export class SessionQueueController {
     textarea.required = true;
     const submit = button("上传并保存编辑", "submit", doc);
     submit.type = "submit";
+    submit.disabled = !canWrite;
     const dismiss = button("放弃编辑", "secondary-button", doc);
     dismiss.addEventListener("click", () => {
       this.#editingQueueEntry = null;
@@ -362,6 +378,30 @@ export class SessionQueueController {
     return section;
   }
 
+  async #reportWriteError(
+    record: IdentityRecord,
+    targetId: string,
+    generation: number,
+    error: unknown,
+    prefix: string,
+    suffix = "",
+  ): Promise<void> {
+    const format = this.#port.formatError ?? sessionActionErrorMessage;
+    const message = `${prefix}${format(error)}${suffix}`;
+    if (
+      await this.#port.control?.onSessionNotControlled(
+        record,
+        targetId,
+        generation,
+        error,
+        message,
+      )
+    ) {
+      return;
+    }
+    this.#port.renderDashboard(record, undefined, message);
+  }
+
   async runSubmitSessionText(
     record: IdentityRecord,
     targetId: string,
@@ -371,15 +411,12 @@ export class SessionQueueController {
     const connection = this.#port.getManagement();
     const generation = this.#port.getManagementGeneration();
     if (connection === null) {
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        "管理连接已经关闭，无法提交输入。",
-      );
+      this.#port.renderDashboard(record, undefined, "管理连接已经关闭，无法提交输入。");
       return;
     }
     try {
-      const result = await submitSessionText(connection, targetId, text);
+      const epoch = this.#port.control?.getControlEpoch(targetId);
+      const result = await submitSessionText(connection, targetId, text, epoch);
       if (generation !== this.#port.getManagementGeneration()) return;
       const notice =
         result.fact.state === "settled"
@@ -391,12 +428,7 @@ export class SessionQueueController {
     } catch (error) {
       if (generation !== this.#port.getManagementGeneration()) return;
       submit.disabled = false;
-      const format = this.#port.formatError ?? sessionActionErrorMessage;
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        `提交未完成：${format(error)}`,
-      );
+      await this.#reportWriteError(record, targetId, generation, error, "提交未完成：");
     }
   }
 
@@ -411,20 +443,18 @@ export class SessionQueueController {
     const connection = this.#port.getManagement();
     const generation = this.#port.getManagementGeneration();
     if (connection === null) {
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        "管理连接已经关闭，无法编辑输入。",
-      );
+      this.#port.renderDashboard(record, undefined, "管理连接已经关闭，无法编辑输入。");
       return;
     }
     try {
+      const epoch = this.#port.control?.getControlEpoch(targetId);
       const result = await editSessionText(
         connection,
         targetId,
         entry.itemId,
         entry.revision,
         text,
+        epoch,
       );
       if (generation !== this.#port.getManagementGeneration()) return;
       this.#editingQueueEntry = null;
@@ -439,12 +469,7 @@ export class SessionQueueController {
       if (generation !== this.#port.getManagementGeneration()) return;
       submit.disabled = false;
       dismiss.disabled = false;
-      const format = this.#port.formatError ?? sessionActionErrorMessage;
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        `编辑未完成：${format(error)}`,
-      );
+      await this.#reportWriteError(record, targetId, generation, error, "编辑未完成：");
     }
   }
 
@@ -458,28 +483,15 @@ export class SessionQueueController {
     const connection = this.#port.getManagement();
     const generation = this.#port.getManagementGeneration();
     if (connection === null) {
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        "管理连接已经关闭，无法更新队列。",
-      );
+      this.#port.renderDashboard(record, undefined, "管理连接已经关闭，无法更新队列。");
       return;
     }
     try {
+      const epoch = this.#port.control?.getControlEpoch(targetId);
       const fact =
         action === "cancel"
-          ? await cancelSessionInput(
-              connection,
-              targetId,
-              entry.itemId,
-              entry.revision,
-            )
-          : await prioritizeSessionInput(
-              connection,
-              targetId,
-              entry.itemId,
-              entry.revision,
-            );
+          ? await cancelSessionInput(connection, targetId, entry.itemId, entry.revision, epoch)
+          : await prioritizeSessionInput(connection, targetId, entry.itemId, entry.revision, epoch);
       if (generation !== this.#port.getManagementGeneration()) return;
       const label = action === "cancel" ? "取消" : "立即发送";
       const notice =
@@ -492,11 +504,12 @@ export class SessionQueueController {
     } catch (error) {
       if (generation !== this.#port.getManagementGeneration()) return;
       submit.disabled = false;
-      const format = this.#port.formatError ?? sessionActionErrorMessage;
-      this.#port.renderDashboard(
+      await this.#reportWriteError(
         record,
-        undefined,
-        `${action === "cancel" ? "取消" : "立即发送"}未完成：${format(error)}`,
+        targetId,
+        generation,
+        error,
+        `${action === "cancel" ? "取消" : "立即发送"}未完成：`,
       );
     }
   }
@@ -508,19 +521,16 @@ export class SessionQueueController {
     notice?: string,
   ): Promise<void> {
     const connection = this.#port.getManagement();
-    if (
-      connection === null ||
-      generation !== this.#port.getManagementGeneration()
-    ) {
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        "管理连接已经关闭，无法读取会话队列。",
-      );
+    if (connection === null || generation !== this.#port.getManagementGeneration()) {
+      this.#port.renderDashboard(record, undefined, "管理连接已经关闭，无法读取会话队列。");
       return;
     }
     try {
-      const snapshot = await connection.inspectSessionQueue(targetId);
+      const [snapshot] = await Promise.all([
+        connection.inspectSessionQueue(targetId),
+        this.#port.control?.inspectSessionControl(targetId, generation).catch(() => null) ??
+          Promise.resolve(null),
+      ]);
       if (
         generation !== this.#port.getManagementGeneration() ||
         this.#port.getManagement() !== connection ||
@@ -558,6 +568,7 @@ export class SessionQueueController {
       return;
     }
     try {
+      const epoch = this.#port.control?.getControlEpoch(targetId);
       const result = await this.sessionResume.run(
         targetId,
         () => ({
@@ -565,12 +576,13 @@ export class SessionQueueController {
           consumeRequestId: randomId128(),
         }),
         (resumeTargetId, registrationId) =>
-          connection.registerSessionResume(resumeTargetId, registrationId),
+          connection.registerSessionResume(resumeTargetId, registrationId, epoch),
         (resumeTargetId, registrationId, consumeRequestId) =>
           connection.consumeSessionResume(
             resumeTargetId,
             registrationId,
             consumeRequestId,
+            epoch,
           ),
       );
       if (generation !== this.#port.getManagementGeneration()) return;
@@ -592,11 +604,13 @@ export class SessionQueueController {
         return;
       }
       submit.disabled = false;
-      const format = this.#port.formatError ?? managementErrorMessage;
-      this.#port.renderDashboard(
+      await this.#reportWriteError(
         record,
-        undefined,
-        `继续未完成：${format(error)}。重试会沿用同一请求身份。`,
+        targetId,
+        generation,
+        error,
+        "继续未完成：",
+        "。重试会沿用同一请求身份。",
       );
     }
   }

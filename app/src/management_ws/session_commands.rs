@@ -107,6 +107,8 @@ const fn approval_error_code(
     use crate::domain::approval_owner::ApprovalRejection;
     match error {
         ApprovalRejection::InvalidActor => "revoked",
+        ApprovalRejection::SessionNotControlled => "session_not_controlled",
+        ApprovalRejection::SessionTreeUnverified => "session_tree_unverified",
         ApprovalRejection::UnknownRegistration => "invalid_registration",
         ApprovalRejection::Conflict | ApprovalRejection::AlreadyDecided => "request_conflict",
         ApprovalRejection::InvalidRequest
@@ -170,6 +172,8 @@ const fn release_error_code(error: crate::node::NativeReleaseError) -> &'static 
         NativeReleaseError::Registry(error) => match error {
             RegistryError::InvalidActor => "revoked",
             RegistryError::InvalidTarget => "invalid_target",
+            RegistryError::SessionNotControlled => "session_not_controlled",
+            RegistryError::SessionTreeUnverified => "session_tree_unverified",
             RegistryError::Conflict | RegistryError::RuntimeAlreadyStarted => "request_conflict",
             RegistryError::UnknownRegistration => "invalid_release",
             RegistryError::StorageUnavailable => "necessary_storage_unavailable",
@@ -1090,6 +1094,28 @@ fn fact(id: RegistrationId, value: RequestFact) -> Value {
     }
     result
 }
+#[cfg(windows)]
+fn control_snapshot_json(
+    snapshot: &crate::application::session_control::SessionControlSnapshot,
+) -> Value {
+    serde_json::json!({
+        "targetId": snapshot.target_id.map(crate::domain::EntityId::encode),
+        "rootTargetId": snapshot.root_target_id.map(crate::domain::EntityId::encode),
+        "sourceId": snapshot.source_id.encode(),
+        "rootNativeSessionId": snapshot.root_native_session_id,
+        "controllerClientId": snapshot.controller_client_id.map(crate::domain::EntityId::encode),
+        "controllerDisplayName": snapshot.controller_display_name,
+        "controlEpoch": snapshot.control_epoch.to_string(),
+    })
+}
+#[cfg(windows)]
+fn control_audit_timestamp_seconds() -> i64 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    i64::try_from(secs).unwrap_or(i64::MAX)
+}
 fn registration(value: RegistrationFact) -> Value {
     serde_json::json!({
         "registrationId": value.id().encode(),
@@ -1138,6 +1164,8 @@ async fn failure(
         }
         RegistryError::InvalidIntent => "invalid_request",
         RegistryError::InvalidTarget => "invalid_target",
+        RegistryError::SessionNotControlled => "session_not_controlled",
+        RegistryError::SessionTreeUnverified => "session_tree_unverified",
         RegistryError::UnknownRegistration => "invalid_registration",
         RegistryError::Conflict | RegistryError::RuntimeAlreadyStarted => "request_conflict",
         RegistryError::Retired => "request_retired",
@@ -1660,6 +1688,7 @@ pub(super) fn start(
             SessionAction::InputRegister {
                 target_id,
                 operation,
+                expected_control_epoch,
             } => {
                 let Some(services) = state.session_services.get() else {
                     return Some(CommandOutcome::Result(management_error(
@@ -1701,15 +1730,18 @@ pub(super) fn start(
                 };
                 let client = attachment.client.context.client();
                 let target = id(*target_id);
+                let expected_epoch =
+                    expected_control_epoch.map(session_protocol::DecimalU64::as_u64);
                 let state = state.clone();
                 let actor = actor.clone();
                 pending.push(Box::pin(async move {
                     match service
-                        .register_with_id(
+                        .register_with_id_and_epoch(
                             &client,
                             target,
                             mutation,
                             Some(RegistrationId::new(id(request))),
+                            expected_epoch,
                         )
                         .await
                     {
@@ -1726,6 +1758,7 @@ pub(super) fn start(
                 target_id,
                 registration_id,
                 body_id,
+                expected_control_epoch,
             } => {
                 let Some(services) = state.session_services.get() else {
                     return Some(CommandOutcome::Result(management_error(
@@ -1738,14 +1771,33 @@ pub(super) fn start(
                 let target = id(*target_id);
                 let registration = RegistrationId::new(id(*registration_id));
                 let body = *body_id;
+                let expected_epoch =
+                    expected_control_epoch.map(session_protocol::DecimalU64::as_u64);
                 let state = state.clone();
                 let actor = actor.clone();
                 pending.push(Box::pin(async move {
                     let result = async {
-                        let receipt = service.begin_consume(&client, target, registration, body).await?;
+                        let receipt = service
+                            .begin_consume_with_epoch(
+                                &client,
+                                target,
+                                registration,
+                                body,
+                                expected_epoch,
+                            )
+                            .await?;
                         receipt.wait().await
                     }.await;
                     match result {
+                        Ok(crate::node::queue_management::NodeConsumeResult::Refused {
+                            error:
+                                error @ (RegistryError::SessionNotControlled
+                                | RegistryError::SessionTreeUnverified
+                                | RegistryError::InvalidActor),
+                            returned: _,
+                        }) => {
+                            failure(&state, &actor, request, QueueReadFailure::Registry(error)).await
+                        }
                         Ok(value) => {
                             let value = match value {
                                 crate::node::queue_management::NodeConsumeResult::Observed { fact: value } => fact(registration, value),
@@ -1894,6 +1946,7 @@ pub(super) fn start(
             SessionAction::ApprovalRegister {
                 approval_id,
                 choice_id,
+                expected_control_epoch,
             } => {
                 let Some(services) = state.session_services.get().cloned() else {
                     return Some(CommandOutcome::Result(management_error(
@@ -1906,7 +1959,10 @@ pub(super) fn start(
                 let approval =
                     crate::domain::approval_owner::ApprovalId::from_entity(id(*approval_id));
                 let choice = crate::domain::approval_owner::ChoiceId::from_entity(id(*choice_id));
-                let input = crate::domain::approval_owner::RegisterDecision::new(approval, choice);
+                let input = crate::domain::approval_owner::RegisterDecision::new(approval, choice)
+                    .with_expected_control_epoch(
+                        expected_control_epoch.map(session_protocol::DecimalU64::as_u64),
+                    );
                 pending.push(Box::pin(async move {
                     match services.approval_register(&actor, input).await {
                         Ok(registration) => CommandOutcome::Result(management_success(
@@ -1925,6 +1981,7 @@ pub(super) fn start(
             }
             SessionAction::ApprovalDecide {
                 approval_registration_id,
+                expected_control_epoch,
             } => {
                 let Some(services) = state.session_services.get().cloned() else {
                     return Some(CommandOutcome::Result(management_error(
@@ -1938,7 +1995,10 @@ pub(super) fn start(
                     crate::domain::approval_owner::ApprovalRegistrationId::from_entity(id(
                         *approval_registration_id,
                     ));
-                let input = crate::domain::approval_owner::SubmitDecision::new(registration);
+                let input = crate::domain::approval_owner::SubmitDecision::new(registration)
+                    .with_expected_control_epoch(
+                        expected_control_epoch.map(session_protocol::DecimalU64::as_u64),
+                    );
                 pending.push(Box::pin(async move {
                     use crate::domain::approval_owner::DecisionAcceptance;
                     match services.approval_decide(&actor, input).await {
@@ -1970,6 +2030,230 @@ pub(super) fn start(
                         }
                         Err(error) => approval_write_failure(&state, &actor, request, error).await,
                     }
+                }));
+                return None;
+            }
+            SessionAction::SessionControlInspect { target_id } => {
+                let Some(services) = state.session_services.get().cloned() else {
+                    return Some(CommandOutcome::Result(management_error(
+                        request,
+                        "product_not_ready",
+                    )));
+                };
+                let state = state.clone();
+                let actor = actor.clone();
+                let target = id(*target_id);
+                pending.push(Box::pin(async move {
+                    if let Err(error) = services.control_actor(&actor).await {
+                        return failure(&state, &actor, request, QueueReadFailure::Registry(error))
+                            .await;
+                    }
+                    let resolved = match services.resolve_control_root(target).await {
+                        Ok(resolved) => resolved,
+                        Err(error) => {
+                            return failure(
+                                &state,
+                                &actor,
+                                request,
+                                QueueReadFailure::Registry(error),
+                            )
+                            .await;
+                        }
+                    };
+                    let snapshot = services.session_control().inspect(
+                        &resolved.root,
+                        target,
+                        resolved.root_target_id,
+                    );
+                    CommandOutcome::Result(management_success(
+                        request,
+                        &control_snapshot_json(&snapshot),
+                    ))
+                }));
+                return None;
+            }
+            SessionAction::SessionControlTakeover { target_id } => {
+                let Some(services) = state.session_services.get().cloned() else {
+                    return Some(CommandOutcome::Result(management_error(
+                        request,
+                        "product_not_ready",
+                    )));
+                };
+                let state = state.clone();
+                let actor = actor.clone();
+                let target = id(*target_id);
+                let request_entity = id(request);
+                pending.push(Box::pin(async move {
+                    let actor_ctx = match services.control_actor(&actor).await {
+                        Ok(ctx) => ctx,
+                        Err(error) => {
+                            return failure(&state, &actor, request, QueueReadFailure::Registry(error)).await;
+                        }
+                    };
+                    let resolved = match services.resolve_control_root(target).await {
+                        Ok(resolved) => resolved,
+                        Err(error) => {
+                            return failure(&state, &actor, request, QueueReadFailure::Registry(error)).await;
+                        }
+                    };
+                    let display_name = match services
+                        .trusted_client_display_name(actor_ctx.client_id)
+                        .await
+                    {
+                        Ok(Some(name)) => name,
+                        Ok(None) => {
+                            return failure(
+                                &state,
+                                &actor,
+                                request,
+                                QueueReadFailure::Registry(RegistryError::InvalidActor),
+                            )
+                            .await;
+                        }
+                        Err(error) => {
+                            return failure(&state, &actor, request, QueueReadFailure::Registry(error)).await;
+                        }
+                    };
+                    let outcome = match services.session_control().takeover(
+                        actor_ctx.client_id,
+                        &display_name,
+                        request_entity,
+                        target,
+                        &resolved.root,
+                        resolved.root_target_id,
+                    ) {
+                        Ok(outcome) => outcome,
+                        Err(crate::application::session_control::ControlError::RequestConflict) => {
+                            return CommandOutcome::Result(management_error(
+                                request,
+                                "request_conflict",
+                            ));
+                        }
+                        Err(crate::application::session_control::ControlError::NotControlled) => {
+                            return CommandOutcome::Result(management_error(
+                                request,
+                                "session_not_controlled",
+                            ));
+                        }
+                    };
+                    if outcome.state_changed {
+                        let audit_target = format!(
+                            "{}:{}",
+                            outcome.snapshot.source_id.encode(),
+                            outcome.snapshot.root_native_session_id
+                        );
+                        let outcome_json = serde_json::json!({
+                            "controllerClientId": actor_ctx.client_id.encode(),
+                            "controllerDisplayName": display_name,
+                            "controlEpoch": outcome.snapshot.control_epoch.to_string(),
+                            "previousController": outcome.previous_controller.map(crate::domain::EntityId::encode),
+                            "previousEpoch": outcome.previous_epoch.to_string(),
+                            "targetId": target.encode(),
+                            "rootTargetId": outcome.snapshot.root_target_id.map(crate::domain::EntityId::encode),
+                        })
+                        .to_string();
+                        if let Err(error) = services
+                            .append_control_security_audit(
+                                Some(&actor_ctx.client_id.encode()),
+                                "session.control.takeover",
+                                &audit_target,
+                                &outcome_json,
+                                control_audit_timestamp_seconds(),
+                            )
+                            .await
+                        {
+                            return failure(&state, &actor, request, QueueReadFailure::Registry(error)).await;
+                        }
+                    }
+                    CommandOutcome::Result(management_success(
+                        request,
+                        &control_snapshot_json(&outcome.snapshot),
+                    ))
+                }));
+                return None;
+            }
+            SessionAction::SessionControlRelease {
+                target_id,
+                expected_control_epoch,
+            } => {
+                let Some(services) = state.session_services.get().cloned() else {
+                    return Some(CommandOutcome::Result(management_error(
+                        request,
+                        "product_not_ready",
+                    )));
+                };
+                let state = state.clone();
+                let actor = actor.clone();
+                let target = id(*target_id);
+                let request_entity = id(request);
+                let expected_epoch =
+                    expected_control_epoch.map(session_protocol::DecimalU64::as_u64);
+                pending.push(Box::pin(async move {
+                    let actor_ctx = match services.control_actor(&actor).await {
+                        Ok(ctx) => ctx,
+                        Err(error) => {
+                            return failure(&state, &actor, request, QueueReadFailure::Registry(error)).await;
+                        }
+                    };
+                    let resolved = match services.resolve_control_root(target).await {
+                        Ok(resolved) => resolved,
+                        Err(error) => {
+                            return failure(&state, &actor, request, QueueReadFailure::Registry(error)).await;
+                        }
+                    };
+                    let outcome = match services.session_control().release(
+                        actor_ctx.client_id,
+                        request_entity,
+                        target,
+                        &resolved.root,
+                        resolved.root_target_id,
+                        expected_epoch,
+                    ) {
+                        Ok(outcome) => outcome,
+                        Err(crate::application::session_control::ControlError::RequestConflict) => {
+                            return CommandOutcome::Result(management_error(
+                                request,
+                                "request_conflict",
+                            ));
+                        }
+                        Err(crate::application::session_control::ControlError::NotControlled) => {
+                            return CommandOutcome::Result(management_error(
+                                request,
+                                "session_not_controlled",
+                            ));
+                        }
+                    };
+                    if outcome.state_changed {
+                        let audit_target = format!(
+                            "{}:{}",
+                            outcome.snapshot.source_id.encode(),
+                            outcome.snapshot.root_native_session_id
+                        );
+                        let outcome_json = serde_json::json!({
+                            "previousController": actor_ctx.client_id.encode(),
+                            "previousEpoch": outcome.previous_epoch.to_string(),
+                            "controlEpoch": outcome.snapshot.control_epoch.to_string(),
+                            "targetId": target.encode(),
+                            "rootTargetId": outcome.snapshot.root_target_id.map(crate::domain::EntityId::encode),
+                        })
+                        .to_string();
+                        if let Err(error) = services
+                            .append_control_security_audit(
+                                Some(&actor_ctx.client_id.encode()),
+                                "session.control.release",
+                                &audit_target,
+                                &outcome_json,
+                                control_audit_timestamp_seconds(),
+                            )
+                            .await
+                        {
+                            return failure(&state, &actor, request, QueueReadFailure::Registry(error)).await;
+                        }
+                    }
+                    CommandOutcome::Result(management_success(
+                        request,
+                        &control_snapshot_json(&outcome.snapshot),
+                    ))
                 }));
                 return None;
             }

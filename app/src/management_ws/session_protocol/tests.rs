@@ -83,10 +83,12 @@ fn session_codec_development_constructed_empty_and_nullable_payloads_remain_expl
             target_id: request,
             registration_id: request,
             body_id: None,
+            expected_control_epoch: None,
         },
         SessionAction::InputRegister {
             target_id: request,
             operation: QueueMutation::Resume {},
+            expected_control_epoch: None,
         },
     ] {
         let command = SessionCommand::new(request, action.clone());
@@ -537,5 +539,112 @@ fn session_codec_catalog_registration_and_inventory_round_trip_and_reject_invali
             .expect_err(&format!("expected catalog command rejection for {wire}"));
         assert_eq!(error, expected);
         assert!(!format!("{error:?}").contains("PRIVATE_CANARY"));
+    }
+}
+
+#[test]
+fn sct_001_session_control_commands_and_expected_control_epoch_strict_contract() {
+    let valid_wires = [
+        envelope(
+            "session.control.inspect",
+            &format!(r#"{{"targetId":"{ID}"}}"#),
+        ),
+        envelope(
+            "session.control.takeover",
+            &format!(r#"{{"targetId":"{ID}"}}"#),
+        ),
+        envelope(
+            "session.control.release",
+            &format!(r#"{{"targetId":"{ID}"}}"#),
+        ),
+        envelope(
+            "session.control.release",
+            &format!(r#"{{"targetId":"{ID}","expectedControlEpoch":"42"}}"#),
+        ),
+        envelope(
+            "input.register",
+            &format!(
+                r#"{{"targetId":"{ID}","operation":{{"kind":"resume"}},"expectedControlEpoch":"7"}}"#
+            ),
+        ),
+        envelope(
+            "input.consume",
+            &format!(
+                r#"{{"targetId":"{ID}","registrationId":"{OTHER}","bodyId":null,"expectedControlEpoch":"0"}}"#
+            ),
+        ),
+        envelope(
+            "approval.register",
+            &format!(
+                r#"{{"approvalId":"{ID}","choiceId":"{OTHER}","expectedControlEpoch":"9007199254740993"}}"#
+            ),
+        ),
+        envelope(
+            "approval.decide",
+            &format!(
+                r#"{{"approvalRegistrationId":"{ID}","expectedControlEpoch":"18446744073709551615"}}"#
+            ),
+        ),
+    ];
+
+    for wire in valid_wires {
+        let parsed = parse_session_command(wire.as_bytes())
+            .unwrap_or_else(|err| panic!("expected valid SCT-001 command {wire}: {err}"));
+        let encoded = encode_session_command(&parsed).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&wire).unwrap(),
+            serde_json::from_str::<Value>(&encoded).unwrap()
+        );
+        assert_eq!(parse_session_command(encoded.as_bytes()).unwrap(), parsed);
+    }
+
+    let invalid_cases = [
+        envelope(
+            "session.control.inspect",
+            &format!(r#"{{"targetId":"{ID}","extra":1}}"#),
+        ),
+        envelope(
+            "session.control.takeover",
+            &format!(r#"{{"targetId":"{ID}","expectedControlEpoch":"1"}}"#),
+        ),
+        envelope(
+            "session.control.release",
+            &format!(r#"{{"targetId":"{ID}","expectedControlEpoch":null}}"#),
+        ),
+        envelope(
+            "input.register",
+            &format!(
+                r#"{{"targetId":"{ID}","operation":{{"kind":"resume"}},"expectedControlEpoch":null}}"#
+            ),
+        ),
+        envelope(
+            "input.consume",
+            &format!(
+                r#"{{"targetId":"{ID}","registrationId":"{OTHER}","bodyId":null,"expectedControlEpoch":1}}"#
+            ),
+        ),
+        envelope(
+            "approval.register",
+            &format!(r#"{{"approvalId":"{ID}","choiceId":"{OTHER}","expectedControlEpoch":"01"}}"#),
+        ),
+        envelope(
+            "approval.decide",
+            &format!(
+                r#"{{"approvalRegistrationId":"{ID}","expectedControlEpoch":"18446744073709551616"}}"#
+            ),
+        ),
+        envelope(
+            "input.register",
+            &format!(
+                r#"{{"targetId":"{ID}","operation":{{"kind":"resume"}},"expectedControlEpoch":"-1"}}"#
+            ),
+        ),
+    ];
+
+    for wire in invalid_cases {
+        assert!(
+            parse_session_command(wire.as_bytes()).is_err(),
+            "expected strict rejection for {wire}"
+        );
     }
 }

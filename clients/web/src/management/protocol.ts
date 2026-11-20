@@ -66,6 +66,16 @@ const RESULT_KEYS = [
   "v",
 ] as const;
 const DEVICES_CHANGED_KEYS = ["revision", "type", "v"] as const;
+const SESSION_CONTROL_CHANGED_KEYS = [
+  "controlEpoch",
+  "controllerClientId",
+  "controllerDisplayName",
+  "rootNativeSessionId",
+  "rootTargetId",
+  "sourceId",
+  "type",
+  "v",
+] as const;
 
 export type ManagementErrorCode =
   | "invalid_request"
@@ -79,6 +89,7 @@ export type ManagementErrorCode =
   | "platform_unimplemented"
   | "unsupported_capability"
   | "invalid_target"
+  | "session_not_controlled"
   | "invalid_registration"
   | "request_retired"
   | "read_stale"
@@ -190,6 +201,17 @@ export interface DevicesChangedFrame {
   readonly revision: number;
 }
 
+export interface SessionControlChangedFrame {
+  readonly v: 1;
+  readonly type: "session.control.changed";
+  readonly rootTargetId: string | null;
+  readonly sourceId: string;
+  readonly rootNativeSessionId: string;
+  readonly controllerClientId: string | null;
+  readonly controllerDisplayName: string | null;
+  readonly controlEpoch: string;
+}
+
 export interface CommandResultFrame {
   readonly v: 1;
   readonly type: "result";
@@ -203,6 +225,7 @@ export type ManagementFrame =
   | ChallengeFrame
   | AuthenticatedFrame
   | DevicesChangedFrame
+  | SessionControlChangedFrame
   | CommandResultFrame;
 
 export interface NodeInfo {
@@ -264,6 +287,8 @@ export function parseManagementFrame(input: string): ManagementFrame {
       return parseAuthenticated(object);
     case "devices.changed":
       return parseDevicesChanged(object);
+    case "session.control.changed":
+      return parseSessionControlChanged(object);
     case "result":
       return parseCommandResult(object);
     default:
@@ -493,6 +518,57 @@ function parseDevicesChanged(object: JsonObject): DevicesChangedFrame {
     v: expectLiteral(object.v, 1),
     type: expectLiteral(object.type, "devices.changed"),
     revision: expectSafeInteger(object.revision),
+  };
+}
+
+function expectControlEpoch(value: JsonValue | undefined): string {
+  const epoch = expectString(value);
+  const max = "18446744073709551615";
+  if (
+    epoch.length > max.length ||
+    !/^(?:0|[1-9][0-9]*)$/u.test(epoch) ||
+    (epoch.length === max.length && epoch > max)
+  ) {
+    throw new ManagementProtocolError("invalid_frame");
+  }
+  return epoch;
+}
+
+function expectControlText(value: JsonValue | undefined): string {
+  if (typeof value !== "string" || value.length === 0 || value.includes("\0")) {
+    throw new ManagementProtocolError("invalid_frame");
+  }
+  if (TEXT_ENCODER.encode(value).length > 4096) {
+    throw new ManagementProtocolError("invalid_frame");
+  }
+  return value;
+}
+
+function parseSessionControlChanged(
+  object: JsonObject,
+): SessionControlChangedFrame {
+  assertExactKeys(object, SESSION_CONTROL_CHANGED_KEYS, "invalid_frame");
+  const controllerClientId =
+    object.controllerClientId === null
+      ? null
+      : expectId128(object.controllerClientId);
+  const controllerDisplayName =
+    object.controllerDisplayName === null
+      ? null
+      : expectControlText(object.controllerDisplayName);
+  if ((controllerClientId === null) !== (controllerDisplayName === null)) {
+    throw new ManagementProtocolError("invalid_frame");
+  }
+  return {
+    v: expectLiteral(object.v, 1),
+    type: expectLiteral(object.type, "session.control.changed"),
+    rootTargetId:
+      object.rootTargetId === null ? null : expectId128(object.rootTargetId),
+    sourceId: expectId128(object.sourceId),
+    rootNativeSessionId: expectControlText(object.rootNativeSessionId),
+    controllerClientId,
+    controllerDisplayName,
+    controlEpoch: expectControlEpoch(object.controlEpoch),
   };
 }
 
@@ -730,6 +806,7 @@ function knownManagementError(value: string): ManagementErrorCode {
     case "platform_unimplemented":
     case "unsupported_capability":
     case "invalid_target":
+    case "session_not_controlled":
     case "invalid_registration":
     case "request_retired":
     case "read_stale":

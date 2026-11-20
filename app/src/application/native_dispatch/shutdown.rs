@@ -1080,7 +1080,7 @@ where
                 .map_err(|_| DispatchError::ResourceUnconfirmed)?
                 .retired = true;
         }
-        for resource in resources {
+        for resource in &resources {
             if !closed.resources.iter().any(|r| {
                 r.metadata == resource.pre.metadata && r.lifecycle == ResourceLifecycle::Released
             }) {
@@ -1127,8 +1127,8 @@ where
                     .map_err(|_| DispatchError::ResourceUnconfirmed)?
                     .is_some()
                 {
-                    let retirement = Self::source_resource_retirement(source, &resource)?;
-                    self.retire_converged_run(source, &resource, retirement.as_ref())
+                    let retirement = Self::source_resource_retirement(source, resource)?;
+                    self.retire_converged_run(source, resource, retirement.as_ref())
                         .await?;
                 }
                 self.environment
@@ -1177,17 +1177,31 @@ where
                 .await?;
             resource.pre.authority.closed.store(true, Ordering::SeqCst);
             source.view_attachment.seal_target(resource.pre.native());
-            let retirement = Self::source_resource_retirement(source, &resource)?;
-            self.retire_converged_run(source, &resource, retirement.as_ref())
+            let retirement = Self::source_resource_retirement(source, resource)?;
+            self.retire_converged_run(source, resource, retirement.as_ref())
                 .await?;
             self.environment
                 .retire_closed_target(resource.pre.native(), &resource.target);
+        }
+        let mut closed_natives = Vec::new();
+        for resource in &resources {
+            if !closed_natives.contains(&resource.pre.native) {
+                closed_natives.push(resource.pre.native.clone());
+            }
+        }
+        if let Ok(capacities) = source.capacity.lock() {
+            for key in capacities.keys() {
+                if !closed_natives.contains(key) {
+                    closed_natives.push(key.clone());
+                }
+            }
         }
         source
             .memory
             .lock()
             .map_err(|_| DispatchError::Stopped)?
             .phase = SourcePhase::Closed;
+        let _ = self.session_control.clear_on_source_closed(&closed_natives);
         Ok(())
     }
     fn source_resource_retirement(

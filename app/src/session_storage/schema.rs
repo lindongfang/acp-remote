@@ -203,7 +203,7 @@ async fn validate_no_legacy_session_objects(
 }
 
 /// Only supplemental layout errors are degradable; engine/required errors are distinct.
-pub(super) async fn validate_management_audit(
+pub async fn validate_management_audit(
     connection: &mut SqliteConnection,
 ) -> Result<(), AuditStoreError> {
     use AuditStoreError::{Layout, NecessaryIntegrity};

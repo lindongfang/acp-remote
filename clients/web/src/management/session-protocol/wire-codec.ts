@@ -12,6 +12,7 @@ import {
 import { MAX_MANAGEMENT_FRAME_BYTES } from "../protocol";
 import {
   closed,
+  closedWithOptional,
   object,
   oneOf,
   requireBoundedSourceText,
@@ -38,12 +39,18 @@ const SHAPES = {
   },
   "input.upload.status": { uploadId: requireSessionId },
   "input.upload.release": { uploadId: requireSessionId },
-  "input.register": { targetId: requireSessionId, operation: mutation },
+  "input.register": {
+    required: { targetId: requireSessionId, operation: mutation },
+    optional: { expectedControlEpoch: requireSessionU64 },
+  },
   "input.consume": {
-    targetId: requireSessionId,
-    registrationId: requireSessionId,
-    bodyId: (value: JsonValue | undefined): string | null =>
-      value === null ? null : requireSessionId(value),
+    required: {
+      targetId: requireSessionId,
+      registrationId: requireSessionId,
+      bodyId: (value: JsonValue | undefined): string | null =>
+        value === null ? null : requireSessionId(value),
+    },
+    optional: { expectedControlEpoch: requireSessionU64 },
   },
   "input.request": {
     targetId: requireSessionId,
@@ -76,11 +83,23 @@ const SHAPES = {
   "approval.list": {},
   "approval.read": { approvalId: requireSessionId },
   "approval.register": {
-    approvalId: requireSessionId,
-    choiceId: requireSessionId,
+    required: {
+      approvalId: requireSessionId,
+      choiceId: requireSessionId,
+    },
+    optional: { expectedControlEpoch: requireSessionU64 },
   },
-  "approval.decide": { approvalRegistrationId: requireSessionId },
+  "approval.decide": {
+    required: { approvalRegistrationId: requireSessionId },
+    optional: { expectedControlEpoch: requireSessionU64 },
+  },
   "approval.status": { approvalId: requireSessionId },
+  "session.control.inspect": { targetId: requireSessionId },
+  "session.control.takeover": { targetId: requireSessionId },
+  "session.control.release": {
+    required: { targetId: requireSessionId },
+    optional: { expectedControlEpoch: requireSessionU64 },
+  },
   "native.release.register": { targetId: requireSessionId },
   "native.release": { releaseOperationId: requireSessionId },
   "native.release.status": { releaseOperationId: requireSessionId },
@@ -117,7 +136,33 @@ const SHAPES = {
   "view.close": { streamId: requireSessionId },
   "view.original": { streamId: requireSessionId },
   "view.rebind": { streamId: requireSessionId },
-} as const satisfies Readonly<Record<string, Shape>>;
+} as const;
+
+type CommandShapeSpec =
+  | Shape
+  | { readonly required: Shape; readonly optional: Shape };
+type CommandPayloadValue<Spec extends CommandShapeSpec> = Spec extends {
+  readonly required: infer R extends Shape;
+  readonly optional: infer O extends Shape;
+}
+  ? ShapeValue<R> & { readonly [K in keyof O]?: ReturnType<O[K]> }
+  : Spec extends Shape
+    ? ShapeValue<Spec>
+    : never;
+
+function isOptionalShapeSpec(
+  spec: CommandShapeSpec,
+): spec is { readonly required: Shape; readonly optional: Shape } {
+  return (
+    Object.hasOwn(spec, "required") &&
+    Object.hasOwn(spec, "optional") &&
+    typeof spec.required === "object" &&
+    typeof spec.optional === "object"
+  );
+}
+
+const VALID_SHAPES = SHAPES satisfies Readonly<Record<string, CommandShapeSpec>>;
+void VALID_SHAPES;
 
 export type SessionAction = keyof typeof SHAPES;
 export type SessionCommand = {
@@ -126,7 +171,7 @@ export type SessionCommand = {
     readonly type: "command";
     readonly requestId: string;
     readonly action: A;
-    readonly payload: ShapeValue<(typeof SHAPES)[A]>;
+    readonly payload: CommandPayloadValue<(typeof SHAPES)[A]>;
   };
 }[SessionAction];
 
@@ -159,7 +204,10 @@ export function parseSessionCommand(input: string): SessionCommand {
       },
       payload: object,
     });
-    const payload = closed(envelope.payload, SHAPES[envelope.action]);
+    const shapeSpec: CommandShapeSpec = SHAPES[envelope.action];
+    const payload = isOptionalShapeSpec(shapeSpec)
+      ? closedWithOptional(envelope.payload, shapeSpec.required, shapeSpec.optional)
+      : closed(envelope.payload, shapeSpec);
     // The action selects the exact closed shape before this discriminated union is built.
     return Object.freeze({ ...envelope, payload }) as SessionCommand;
   } catch (error) {

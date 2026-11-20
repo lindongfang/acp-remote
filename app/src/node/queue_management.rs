@@ -68,6 +68,18 @@ pub enum NodeQueueMutation {
     },
     Resume,
 }
+impl NodeQueueMutation {
+    #[must_use]
+    pub const fn action(self) -> QueueAction {
+        match self {
+            Self::Submit { .. } => QueueAction::Submit,
+            Self::Edit { .. } => QueueAction::Edit,
+            Self::Cancel { .. } => QueueAction::Cancel,
+            Self::Prioritize { .. } => QueueAction::Prioritize,
+            Self::Resume => QueueAction::Resume,
+        }
+    }
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NodeConsumeResult {
     Observed {
@@ -281,12 +293,37 @@ impl NodeQueueManagement {
         operation: NodeQueueMutation,
         requested: Option<RegistrationId>,
     ) -> Result<RegistrationFact, NodeQueueError> {
+        self.register_with_id_and_epoch(client, target, operation, requested, None)
+            .await
+    }
+    pub(crate) async fn register_with_id_and_epoch(
+        &self,
+        client: &SocketViewClient,
+        target: EntityId,
+        operation: NodeQueueMutation,
+        requested: Option<RegistrationId>,
+        expected_control_epoch: Option<u64>,
+    ) -> Result<RegistrationFact, NodeQueueError> {
+        self.socket_wait(
+            client,
+            self.core.queue.preflight_register_control(
+                client.context.actor(),
+                target,
+                operation.action(),
+                expected_control_epoch,
+            ),
+        )
+        .await?
+        .map_err(NodeQueueError::Registry)?;
         let (mutation, lease) = self.mutation(client, target, operation).await?;
         // Original register copies the complete descriptor before returning its future.
-        let registration =
-            self.core
-                .queue
-                .register_with_id(client.context.actor(), target, &mutation, requested);
+        let registration = self.core.queue.register_with_id_and_epoch(
+            client.context.actor(),
+            target,
+            &mutation,
+            requested,
+            expected_control_epoch,
+        );
         drop(mutation);
         drop(lease);
         self.socket_wait(client, registration)
@@ -314,6 +351,17 @@ impl NodeQueueManagement {
         target: EntityId,
         id: RegistrationId,
         body: Option<Id128>,
+    ) -> Result<NodeConsumeReceipt, NodeQueueError> {
+        self.begin_consume_with_epoch(client, target, id, body, None)
+            .await
+    }
+    pub(crate) async fn begin_consume_with_epoch(
+        &self,
+        client: &SocketViewClient,
+        target: EntityId,
+        id: RegistrationId,
+        body: Option<Id128>,
+        expected_control_epoch: Option<u64>,
     ) -> Result<NodeConsumeReceipt, NodeQueueError> {
         self.check(client)?;
         let fact = self.query(client, target, id).await?;
@@ -357,6 +405,20 @@ impl NodeQueueManagement {
         };
         if let Some(receipt) = self.existing(client, id, &intent, body, &fact)? {
             return Ok(receipt);
+        }
+        if !matches!(fact, RequestFact::Settled { .. }) {
+            self.socket_wait(
+                client,
+                self.core.queue.preflight_consume_control(
+                    client.context.actor(),
+                    target,
+                    intent.action(),
+                    id,
+                    expected_control_epoch,
+                ),
+            )
+            .await?
+            .map_err(NodeQueueError::Registry)?;
         }
         // Temporary leases may overlap; the complete mutation is constructed only inside the
         // stable identity insertion fence. An invalid/cancelled draft never reserves the ID.
@@ -408,7 +470,11 @@ impl NodeQueueManagement {
                 let mut table = self.core.table.lock().map_err(|_| ViewError::ReadFailure)?;
                 Ok(if table.sealed {
                     Err(NodeQueueError::NodeStopping)
-                } else if let Some(existing) = table.operations.get(&id) {
+                } else if let Some(existing) = table.operations.get(&id).filter(|op| {
+                    Arc::ptr_eq(&op.context, &client.context)
+                        || !matches!(fact, RequestFact::Settled { .. })
+                        || op.context.lifetime.with_live(|| Ok(())).is_ok()
+                }) {
                     if !Arc::ptr_eq(&existing.context, &client.context)
                         || existing.intent != intent
                         || existing.body != body
@@ -431,7 +497,14 @@ impl NodeQueueManagement {
                     slot.lease = prepared;
                     slot.future = Some(Box::pin(async move {
                         queue
-                            .consume_observed(&actor, target, id, mutation, custody)
+                            .consume_observed_with_epoch(
+                                &actor,
+                                target,
+                                id,
+                                mutation,
+                                custody,
+                                expected_control_epoch,
+                            )
                             .await
                     }));
                     drop(slot);
@@ -463,6 +536,11 @@ impl NodeQueueManagement {
                     table
                         .operations
                         .get(&id)
+                        .filter(|operation| {
+                            Arc::ptr_eq(&operation.context, &client.context)
+                                || !matches!(fact, RequestFact::Settled { .. })
+                                || operation.context.lifetime.with_live(|| Ok(())).is_ok()
+                        })
                         .map(|operation| {
                             if !Arc::ptr_eq(&operation.context, &client.context)
                                 || operation.intent != *intent

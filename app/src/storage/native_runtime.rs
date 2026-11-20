@@ -294,6 +294,7 @@ impl Storage {
                     service.native_clock(),
                     runtime,
                     ctx.claim(),
+                    self.inner.session_control.clone(),
                     options,
                 );
                 let native = NativeRuntimeHandle { core };

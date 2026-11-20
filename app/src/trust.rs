@@ -153,6 +153,7 @@ impl CursorState {
 #[derive(Clone)]
 pub struct TrustStore {
     registry: crate::session_storage::request_registry::SqliteRequestRegistry,
+    session_control: Arc<crate::application::session_control::SessionControlCoordinator>,
     cursors: Arc<Mutex<CursorState>>,
     client_gates: Arc<Mutex<HashMap<String, Weak<AsyncMutex<()>>>>>,
     clock: Arc<dyn TrustClock>,
@@ -166,13 +167,23 @@ pub struct TrustStore {
 }
 
 impl TrustStore {
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn new(
         registry: crate::session_storage::request_registry::SqliteRequestRegistry,
     ) -> Self {
+        Self::new_with_session_control(registry, Arc::default())
+    }
+
+    #[must_use]
+    pub(crate) fn new_with_session_control(
+        registry: crate::session_storage::request_registry::SqliteRequestRegistry,
+        session_control: Arc<crate::application::session_control::SessionControlCoordinator>,
+    ) -> Self {
         let (revision_notify, _) = watch::channel(0);
         Self {
             registry,
+            session_control,
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: Arc::new(SystemClock),
@@ -184,6 +195,13 @@ impl TrustStore {
             #[cfg(test)]
             revoke_write_barrier: Arc::new(Mutex::new(None)),
         }
+    }
+
+    #[must_use]
+    pub(crate) fn session_control(
+        &self,
+    ) -> Arc<crate::application::session_control::SessionControlCoordinator> {
+        self.session_control.clone()
     }
 
     async fn connection(&self) -> Result<crate::session_storage::RegistryConnection, TrustError> {
@@ -358,8 +376,18 @@ impl TrustStore {
                     return Err(TrustError::RequestConflict);
                 }
                 let result_json: String = row.get("result_json");
-                return serde_json::from_str(&result_json)
-                    .map_err(|_| TrustError::StorageUnavailable);
+                let parsed: RevokeResult = serde_json::from_str(&result_json)
+                    .map_err(|_| TrustError::StorageUnavailable)?;
+                drop(transaction);
+                drop(connection);
+                if let Ok(revoked_entity) = crate::domain::EntityId::decode(client_id) {
+                    let cleared = self.session_control.clear_revoked_client(revoked_entity);
+                    if !cleared.is_empty() {
+                        self.record_revoke_control_audit(actor, &cleared, now_i64(now)?)
+                            .await?;
+                    }
+                }
+                return Ok(parsed);
             }
         }
 
@@ -453,7 +481,55 @@ impl TrustStore {
         transaction.commit().await?;
         self.publish_revision(revision);
         let _ = connection.retain_for_trust();
+        if let Ok(revoked_entity) = crate::domain::EntityId::decode(client_id) {
+            let cleared = self.session_control.clear_revoked_client(revoked_entity);
+            if !cleared.is_empty() {
+                self.record_revoke_control_audit(actor, &cleared, now_i64(now)?)
+                    .await?;
+            }
+        }
         Ok(result)
+    }
+
+    async fn record_revoke_control_audit(
+        &self,
+        actor: &str,
+        cleared: &[crate::application::session_control::ControlClearedRecord],
+        occurred_at: i64,
+    ) -> Result<(), TrustError> {
+        let mut connection = self.connection().await?;
+        let mut transaction = connection
+            .connection()
+            .map_err(|_| TrustError::StorageUnavailable)?
+            .begin_with("BEGIN IMMEDIATE")
+            .await?;
+        for item in cleared {
+            let target_id = format!(
+                "{}:{}",
+                item.root.source().0.encode(),
+                item.root.native_id()
+            );
+            let outcome = serde_json::json!({
+                "previousController": item.previous_controller.encode(),
+                "previousEpoch": item.previous_epoch.to_string(),
+                "controlEpoch": item.control_epoch.to_string(),
+                "rootTargetId": item.root_target_id.map(crate::domain::EntityId::encode),
+            })
+            .to_string();
+            sqlx::query(
+                "INSERT INTO security_audit(actor_id, action, target_id, outcome, occurred_at) \
+                 VALUES (?, 'session.control.revoke_clear', ?, ?, ?)",
+            )
+            .bind(actor)
+            .bind(target_id)
+            .bind(outcome)
+            .bind(occurred_at)
+            .execute(&mut *transaction)
+            .await?;
+        }
+        transaction.commit().await?;
+        let _ = connection.retain_for_trust();
+        Ok(())
     }
 
     /// Registers a newly paired client in one durable transaction.
@@ -987,6 +1063,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
             registry: storage.request_registry(),
+            session_control: Arc::default(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock,
@@ -1046,6 +1123,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
             registry: storage.request_registry(),
+            session_control: Arc::default(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: clock.clone(),
@@ -1210,6 +1288,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
             registry: storage.request_registry(),
+            session_control: Arc::default(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: clock.clone(),
@@ -1388,6 +1467,7 @@ mod tests {
         let clock = Arc::new(TestClock::new());
         let trust = TrustStore {
             registry: storage.request_registry(),
+            session_control: Arc::default(),
             cursors: Arc::new(Mutex::new(CursorState::default())),
             client_gates: Arc::new(Mutex::new(HashMap::new())),
             clock: clock.clone(),
@@ -1417,6 +1497,72 @@ mod tests {
             Err(TrustError::StaleCursor)
         ));
 
+        storage.close().await;
+        path.observe().await;
+        path.roots.remove_owned().expect("cleanup");
+    }
+
+    #[tokio::test]
+    async fn sct_014_revoke_clears_control_and_audits_without_single_pool_deadlock() {
+        let path = test_database();
+        let storage = path.open().await.expect("storage");
+        let target_client_bytes = [0x44; 16];
+        let target_client_id = Id128::new(target_client_bytes).to_base64url();
+        let target_entity = crate::domain::EntityId::from_bytes(target_client_bytes);
+        insert_client(&storage, &target_client_id, "Phone", "trusted").await;
+        let trust = storage.trust_store();
+        let control = trust.session_control();
+        let mut rx = control.subscribe();
+        let root = crate::domain::native::NativeSessionKey::from_config(
+            Some(crate::domain::EntityId::from_bytes([1; 16])),
+            "root-1",
+        )
+        .unwrap();
+        let target_entity_id = crate::domain::EntityId::from_bytes([2; 16]);
+        let req = crate::domain::EntityId::from_bytes([3; 16]);
+        let taken = control
+            .takeover(
+                target_entity,
+                "Phone",
+                req,
+                target_entity_id,
+                &root,
+                Some(target_entity_id),
+            )
+            .unwrap();
+        assert_eq!(taken.snapshot.control_epoch, 1);
+        let _ = rx.try_recv().unwrap();
+
+        let revoke_req = Id128::new([0x45; 16]).to_base64url();
+        let revoked = trust
+            .revoke("owner", &revoke_req, &target_client_id)
+            .await
+            .expect("revoke completes without single-connection deadlock");
+        assert_eq!(revoked.status, ClientStatus::Revoked);
+
+        let cleared_evt = rx
+            .try_recv()
+            .expect("session.control.changed emitted on revoke");
+        assert_eq!(cleared_evt.controller_client_id, None);
+        assert_eq!(cleared_evt.controller_display_name, None);
+        assert_eq!(cleared_evt.root_target_id, Some(target_entity_id));
+        assert_eq!(cleared_evt.control_epoch, 2);
+
+        let snap = control.inspect(&root, target_entity_id, Some(target_entity_id));
+        assert_eq!(snap.controller_client_id, None);
+        assert_eq!(snap.control_epoch, 2);
+
+        let audit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM security_audit WHERE action = 'session.control.revoke_clear'",
+        )
+        .fetch_one(storage.pool_for_test())
+        .await
+        .unwrap();
+        assert_eq!(audit_count, 1);
+
+        drop(rx);
+        drop(control);
+        drop(trust);
         storage.close().await;
         path.observe().await;
         path.roots.remove_owned().expect("cleanup");

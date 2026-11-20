@@ -1026,6 +1026,7 @@ async fn run_authenticated_loop(
     let mut last_sent_revision = None;
     let mut command_window = CommandWindow::new();
     let mut pending_reads = session_commands::PendingReads::new();
+    let mut control_changes = state.trust.session_control().subscribe();
 
     let close_frame = loop {
         tokio::select! {
@@ -1045,6 +1046,22 @@ async fn run_authenticated_loop(
                     }
                     Some(CommandOutcome::Close(error)) => break error,
                     None => {}
+                }
+            }
+            control_event = control_changes.recv() => {
+                match control_event {
+                    Ok(event) => {
+                        let frame = SessionControlChangedMessage::from_event(&event);
+                        let enqueued = tokio::select! {
+                            biased;
+                            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                            result = enqueue_authenticated(state, &authenticated, outbound, &frame) => result,
+                        };
+                        if let Err(error) = enqueued {
+                            break error;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_) | tokio::sync::broadcast::error::RecvError::Closed) => {}
                 }
             }
             changed = revisions.changed() => {
@@ -1785,6 +1802,37 @@ struct DevicesChangedMessage {
     #[serde(rename = "type")]
     kind: &'static str,
     revision: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionControlChangedMessage {
+    v: u8,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    root_target_id: Option<String>,
+    source_id: String,
+    root_native_session_id: String,
+    controller_client_id: Option<String>,
+    controller_display_name: Option<String>,
+    control_epoch: String,
+}
+
+impl SessionControlChangedMessage {
+    fn from_event(event: &crate::application::session_control::SessionControlChangedEvent) -> Self {
+        Self {
+            v: 1,
+            kind: crate::application::session_control::CONTROL_CHANGED_EVENT_TYPE,
+            root_target_id: event.root_target_id.map(crate::domain::EntityId::encode),
+            source_id: event.source_id.encode(),
+            root_native_session_id: event.root_native_session_id.clone(),
+            controller_client_id: event
+                .controller_client_id
+                .map(crate::domain::EntityId::encode),
+            controller_display_name: event.controller_display_name.clone(),
+            control_epoch: event.control_epoch.to_string(),
+        }
+    }
 }
 
 struct CommandWindow {

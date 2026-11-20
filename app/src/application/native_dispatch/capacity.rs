@@ -111,6 +111,7 @@ where
             core.restore_tree_members(&source, &self.resource.pre.native)
                 .await
                 .map_err(ViewError::NativeFailure)?;
+            core.session_control.mark_loaded(&self.resource.pre.native);
             Ok(())
         })
     }
@@ -313,6 +314,7 @@ where
             source.view_attachment.restore_target(resource.pre.native())
         })
         .map_err(|_| DispatchError::ResourceUnconfirmed)?;
+        self.session_control.mark_loaded(&resource.pre.native);
         Ok(())
     }
 
@@ -336,6 +338,9 @@ where
         self.repository
             .confirm_capacity_closed(expected, &self.deadline()?)
             .await?;
+        if let Some(native) = &expected.native {
+            let _ = self.session_control.clear_on_capacity_closed(native);
+        }
         Ok(())
     }
 }

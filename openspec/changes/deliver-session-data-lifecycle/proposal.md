@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[deliver-native-session-import](../deliver-native-session-import/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../archive/2026-11-20-deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
+- 依赖：[deliver-native-session-import](../deliver-native-session-import/proposal.md)、[deliver-session-capacity](../archive/2026-11-19-deliver-session-capacity/proposal.md)、[deliver-session-control-takeover](../archive/2026-11-20-deliver-session-control-takeover/proposal.md) 及 [deliver-session-transcript-cache](../archive/2026-11-20-deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
 - 影响范围：原生删除协议适配、控制权校验、展示快照库同步擦除、管理事务与审计清理、临时上传回收及 Web 删除确认交互；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration

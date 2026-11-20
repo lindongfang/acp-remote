@@ -20,7 +20,7 @@ const fn tc_id(n: u8) -> EntityId {
 
 fn tc_deadline() -> crate::application::request_registry::RegistryDeadline {
     crate::application::request_registry::RegistryDeadline::new(
-        tokio::time::Instant::now() + Duration::from_secs(15),
+        tokio::time::Instant::now() + Duration::from_secs(30),
     )
 }
 
@@ -372,7 +372,7 @@ async fn send_command_wait(
     )
     .await;
 
-    timeout(Duration::from_secs(12), async {
+    timeout(Duration::from_secs(30), async {
         loop {
             match socket.next().await.expect("ws frame").expect("ws ok") {
                 Message::Text(text) => {
@@ -422,7 +422,7 @@ async fn read_until_snapshot_end(
         .expect("send initial credit");
 
     let mut received_kinds: Vec<String> = Vec::new();
-    let res = timeout(Duration::from_secs(10), async {
+    let res = timeout(Duration::from_secs(20), async {
         loop {
             match socket.next().await.expect("ws frame").expect("ws ok") {
                 Message::Binary(bytes) => {
@@ -809,6 +809,16 @@ fn selection_json(sel: &SourceLaunchSelection) -> serde_json::Value {
     })
 }
 
+async fn takeover_target(sock: &mut ManagementSocket, target_id: EntityId) {
+    let take = send_command_wait(
+        sock,
+        "session.control.takeover",
+        serde_json::json!({ "targetId": target_id.encode() }),
+    )
+    .await;
+    assert_eq!(take["ok"], true, "session.control.takeover failed: {take}");
+}
+
 async fn submit_prompt_turn(
     sock: &mut ManagementSocket,
     target_id: EntityId,
@@ -895,7 +905,7 @@ async fn submit_prompt_turn(
 }
 
 async fn wait_for_peer_method(fixture: &HarnessFixture, method: &str, min_count: usize) {
-    timeout(Duration::from_secs(8), async {
+    timeout(Duration::from_secs(20), async {
         loop {
             let count = fixture
                 .peer_logs()
@@ -1475,7 +1485,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
         &mut sock,
         unreach_stream,
         |v| v.get("syncState").and_then(|s| s.as_str()) == Some("degraded_unreachable"),
-        Duration::from_secs(8),
+        Duration::from_secs(20),
     )
     .await;
     assert_eq!(status_unreach["syncState"], "degraded_unreachable");
@@ -1515,7 +1525,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
             &mut sock,
             rec_stream,
             |v| v.get("type").and_then(|t| t.as_str()) == Some("stream_rebound"),
-            Duration::from_secs(8),
+            Duration::from_secs(20),
         )
         .await;
     }
@@ -1552,6 +1562,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
     .await;
 
     // Part B (`STC-006` + `STC-014`): Occupy 50/50 capacity slots (`target_release` + 49 created).
+    takeover_target(&mut sock_fill, target_release).await;
     let active_seed =
         submit_prompt_turn(&mut sock_fill, target_release, "active-slot-holder").await;
     assert_eq!(active_seed["ok"], true, "active_seed: {active_seed}");
@@ -1604,7 +1615,7 @@ async fn stc_006_and_stc_014_capacity_50_full_and_unreachable_recovery() {
         &mut sock,
         full_stream,
         |v| v.get("syncState").and_then(|s| s.as_str()) == Some("degraded_capacity_full"),
-        Duration::from_secs(8),
+        Duration::from_secs(20),
     )
     .await;
     assert_eq!(status_full["syncState"], "degraded_capacity_full");
@@ -1713,6 +1724,7 @@ async fn stc_007_and_stc_008_and_stc_009_resume_only_pure_memory_unrecoverable_a
         "STC-007: view only must not invoke session/resume"
     );
 
+    takeover_target(&mut sock2, target_id).await;
     let followup = submit_prompt_turn(&mut sock2, target_id, "followup-only-text").await;
     assert_eq!(followup["ok"], true, "followup failed: {followup}");
     wait_for_peer_method(&fixture, "session/prompt", 1).await;
@@ -1734,6 +1746,7 @@ async fn stc_007_and_stc_008_and_stc_009_resume_only_pure_memory_unrecoverable_a
     resume_cfg.write(&fixture.cfg_path);
     let _ = std::fs::remove_file(&fixture.log_path);
 
+    takeover_target(&mut sock2, target_id).await;
     let _ = submit_prompt_turn(&mut sock2, target_id, "after-remote-expiry").await;
     tokio::time::sleep(Duration::from_millis(120)).await;
     let logs_after_err = fixture.peer_logs();

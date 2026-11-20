@@ -420,6 +420,8 @@ mod tests {
     mod queue_management_development {
         include!("node/queue_management/development_tests.rs");
         include!("node/session_services/queue_read_development_tests.rs");
+        include!("node/session_services/session_control_queue_acceptance.rs");
+        include!("node/session_services/session_control_queue_matrix_acceptance.rs");
     }
     #[cfg(windows)]
     mod document_transfer_development {
@@ -540,6 +542,8 @@ mod tests {
         include!("node/session_services/capacity_extended_acceptance.rs");
         include!("node/session_services/capacity_additional_acceptance.rs");
         include!("node/session_services/capacity_restart_acceptance.rs");
+        include!("node/session_services/session_control_takeover_acceptance.rs");
+        include!("node/session_services/session_control_lifecycle_acceptance.rs");
     }
 
     #[cfg(windows)]
@@ -1123,12 +1127,14 @@ mod tests {
         let mut stop_signal = runtime.control.stop_receiver();
         let mut report = runtime.control.shutdown_receiver();
         let address = runtime.ipc_address().clone();
+        // `wait_stop()` starts the `StopRequest` budget as soon as `ipc::stop` sets the stop
+        // signal, so capture `started` before spawning `ipc::stop` rather than after waking.
+        let started = tokio::time::Instant::now();
         let owner_stop = tokio::spawn(async move { ipc::stop(&address).await });
         timeout(Duration::from_secs(2), stop_signal.changed())
             .await
             .expect("owner stop reaches node")
             .expect("stop signal");
-        let started = tokio::time::Instant::now();
         let shutdown = tokio::spawn(runtime.shutdown(None));
         timeout(Duration::from_secs(2), barrier.wait_until_entered())
             .await

@@ -13,6 +13,7 @@ import {
   type ManagementFrame,
   type NodeInfo,
   type RevokeResult,
+  type SessionControlChangedFrame,
   ManagementProtocolError,
   createClientProof,
   createHello,
@@ -49,6 +50,7 @@ import {
   parseProductTargetRecord,
   parseSessionCommand,
   parseSessionConsumeResult,
+  parseSessionControlSnapshot,
   parseSessionQueue,
   parseSessionRegistration,
   parseSessionQueuedBodyDescriptor,
@@ -81,6 +83,7 @@ import {
   type NativeReleaseRegistered,
   type NativeReleaseStatus,
   type SessionCapacity,
+  type SessionControlSnapshot,
   type ProductTargetRecord,
   type QueueMutationDto,
   type SessionConsumeResult,
@@ -193,6 +196,7 @@ export interface ManagementClose {
 
 export interface ManagementConnectionCallbacks {
   readonly onDevicesChanged?: (revision: number) => void;
+  readonly onSessionControlChanged?: (frame: SessionControlChangedFrame) => void;
   readonly onViewData?: (frame: ViewDataFrame) => void;
   readonly onClose?: (close: ManagementClose) => void;
 }
@@ -337,13 +341,18 @@ export class ManagementConnection {
   async registerSessionResume(
     targetId: string,
     requestId: string,
+    expectedControlEpoch?: string,
   ): Promise<SessionRegistration> {
+    const payload: Record<string, JsonValue> = {
+      targetId: requireSessionId(targetId),
+      operation: { kind: "resume" },
+    };
+    if (expectedControlEpoch !== undefined) {
+      payload.expectedControlEpoch = requireSessionU64(expectedControlEpoch);
+    }
     const parsed = await this.#commandWithId(
       "input.register",
-      {
-        targetId: requireSessionId(targetId),
-        operation: { kind: "resume" },
-      },
+      payload,
       requireSessionId(requestId),
       parseSessionRegistration,
     );
@@ -357,15 +366,20 @@ export class ManagementConnection {
     targetId: string,
     registrationId: string,
     requestId: string,
+    expectedControlEpoch?: string,
   ): Promise<SessionResumeResult> {
     const canonicalRegistrationId = requireSessionId(registrationId);
+    const payload: Record<string, JsonValue> = {
+      targetId: requireSessionId(targetId),
+      registrationId: canonicalRegistrationId,
+      bodyId: null,
+    };
+    if (expectedControlEpoch !== undefined) {
+      payload.expectedControlEpoch = requireSessionU64(expectedControlEpoch);
+    }
     const parsed = await this.#commandWithId(
       "input.consume",
-      {
-        targetId: requireSessionId(targetId),
-        registrationId: canonicalRegistrationId,
-        bodyId: null,
-      },
+      payload,
       requireSessionId(requestId),
       parseSessionConsumeResult,
     );
@@ -710,17 +724,22 @@ export class ManagementConnection {
     targetId: string,
     mutation: QueueMutationDto,
     requestId: string,
+    expectedControlEpoch?: string,
   ): Promise<SessionRegistration> {
     const canonicalRequestId = requireSessionId(requestId);
+    const payload: Record<string, JsonValue> = {
+      targetId: requireSessionId(targetId),
+      operation: mutation,
+    };
+    if (expectedControlEpoch !== undefined) {
+      payload.expectedControlEpoch = requireSessionU64(expectedControlEpoch);
+    }
     const command = parseSessionCommand(JSON.stringify({
       v: 1,
       type: "command",
       requestId: canonicalRequestId,
       action: "input.register",
-      payload: {
-        targetId: requireSessionId(targetId),
-        operation: mutation,
-      },
+      payload,
     }));
     if (command.action !== "input.register") {
       throw new ManagementProtocolError("invalid_response");
@@ -741,15 +760,20 @@ export class ManagementConnection {
     targetId: string,
     registrationId: string,
     bodyId: string | null,
+    expectedControlEpoch?: string,
   ): Promise<SessionConsumeResult> {
     const canonicalRegistrationId = requireSessionId(registrationId);
+    const payload: Record<string, JsonValue> = {
+      targetId: requireSessionId(targetId),
+      registrationId: canonicalRegistrationId,
+      bodyId: bodyId === null ? null : requireSessionId(bodyId),
+    };
+    if (expectedControlEpoch !== undefined) {
+      payload.expectedControlEpoch = requireSessionU64(expectedControlEpoch);
+    }
     const parsed = await this.#command(
       "input.consume",
-      {
-        targetId: requireSessionId(targetId),
-        registrationId: canonicalRegistrationId,
-        bodyId: bodyId === null ? null : requireSessionId(bodyId),
-      },
+      payload,
       parseSessionConsumeResult,
     );
     if (
@@ -889,15 +913,20 @@ export class ManagementConnection {
   async registerApproval(
     approvalId: string,
     choiceId: string,
+    expectedControlEpoch?: string,
   ): Promise<ApprovalRegistration> {
     const canonicalApprovalId = requireSessionId(approvalId);
     const canonicalChoiceId = requireSessionId(choiceId);
+    const payload: Record<string, JsonValue> = {
+      approvalId: canonicalApprovalId,
+      choiceId: canonicalChoiceId,
+    };
+    if (expectedControlEpoch !== undefined) {
+      payload.expectedControlEpoch = requireSessionU64(expectedControlEpoch);
+    }
     const parsed = await this.#command(
       "approval.register",
-      {
-        approvalId: canonicalApprovalId,
-        choiceId: canonicalChoiceId,
-      },
+      payload,
       parseApprovalRegistration,
     );
     if (
@@ -912,13 +941,20 @@ export class ManagementConnection {
   async decideApproval(
     approvalId: string,
     approvalRegistrationId: string,
+    expectedControlEpoch?: string,
   ): Promise<ApprovalDecisionResult> {
     const canonicalApprovalId = requireSessionId(approvalId);
     const canonicalRegistrationId =
       requireSessionId(approvalRegistrationId);
+    const payload: Record<string, JsonValue> = {
+      approvalRegistrationId: canonicalRegistrationId,
+    };
+    if (expectedControlEpoch !== undefined) {
+      payload.expectedControlEpoch = requireSessionU64(expectedControlEpoch);
+    }
     const parsed = await this.#command(
       "approval.decide",
-      { approvalRegistrationId: canonicalRegistrationId },
+      payload,
       parseApprovalDecisionResult,
     );
     if (
@@ -975,6 +1011,39 @@ export class ManagementConnection {
 
   async inspectSessionCapacity(): Promise<SessionCapacity> {
     return this.#command("session.capacity.inspect", {}, parseSessionCapacity);
+  }
+
+  async inspectSessionControl(targetId: string): Promise<SessionControlSnapshot> {
+    return await this.#command(
+      "session.control.inspect",
+      { targetId: requireSessionId(targetId) },
+      parseSessionControlSnapshot,
+    );
+  }
+
+  async takeoverSessionControl(targetId: string): Promise<SessionControlSnapshot> {
+    return await this.#command(
+      "session.control.takeover",
+      { targetId: requireSessionId(targetId) },
+      parseSessionControlSnapshot,
+    );
+  }
+
+  async releaseSessionControl(
+    targetId: string,
+    expectedControlEpoch?: string,
+  ): Promise<SessionControlSnapshot> {
+    const payload: Record<string, JsonValue> = {
+      targetId: requireSessionId(targetId),
+    };
+    if (expectedControlEpoch !== undefined) {
+      payload.expectedControlEpoch = requireSessionU64(expectedControlEpoch);
+    }
+    return await this.#command(
+      "session.control.release",
+      payload,
+      parseSessionControlSnapshot,
+    );
   }
 
   async inspectNativeReleaseStatus(
@@ -1217,6 +1286,10 @@ export class ManagementConnection {
 
     if (frame.type === "devices.changed") {
       this.#callbacks.onDevicesChanged?.(frame.revision);
+      return;
+    }
+    if (frame.type === "session.control.changed") {
+      this.#callbacks.onSessionControlChanged?.(frame);
       return;
     }
     if (frame.type === "result") {

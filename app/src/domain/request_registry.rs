@@ -274,6 +274,10 @@ pub enum RegistryError {
     InvalidIntent,
     #[error("request actor is not current")]
     InvalidActor,
+    #[error("session is not controlled by this client or control epoch changed")]
+    SessionNotControlled,
+    #[error("session tree verification failed")]
+    SessionTreeUnverified,
     #[error("request target is not current")]
     InvalidTarget,
     #[error("request identity is not registered")]

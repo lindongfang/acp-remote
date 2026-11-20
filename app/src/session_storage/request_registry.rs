@@ -22,6 +22,12 @@ use crate::{
 };
 use sqlx::{Decode, Row, Sqlite, SqliteConnection, SqlitePool, Type, sqlite::SqliteRow};
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ResolvedControlRoot {
+    pub(crate) root: NativeSessionKey,
+    pub(crate) root_target_id: Option<EntityId>,
+}
+
 impl From<sqlx::Error> for RegistryError {
     fn from(_: sqlx::Error) -> Self {
         Self::StorageUnavailable
@@ -135,6 +141,97 @@ impl SqliteRequestRegistry {
                 .await;
                 match connection.close().await {
                     CloseOutcome::Confirmed => selected,
+                    CloseOutcome::Unconfirmed => Err(RegistryError::StorageUnavailable),
+                }
+            })
+            .await
+    }
+
+    pub(crate) async fn resolve_control_root(
+        &self,
+        target: EntityId,
+    ) -> Result<ResolvedControlRoot, RegistryError> {
+        let scope = self.owner_scope();
+        scope
+            .while_open(async {
+                let mut connection = self.detached_owned_connection().await?;
+                let selected = resolve_control_root_inner(connection.connection()?, target).await;
+                match connection.close().await {
+                    CloseOutcome::Confirmed => selected,
+                    CloseOutcome::Unconfirmed => Err(RegistryError::StorageUnavailable),
+                }
+            })
+            .await
+    }
+
+    pub(crate) async fn trusted_client_display_name(
+        &self,
+        client_id: EntityId,
+    ) -> Result<Option<String>, RegistryError> {
+        let scope = self.owner_scope();
+        scope
+            .while_open(async {
+                let mut connection = self.detached_owned_connection().await?;
+                let selected = sqlx::query_scalar::<_, String>(
+                    "SELECT display_name FROM main.clients WHERE client_id=? AND status='trusted'",
+                )
+                .bind(client_id.encode())
+                .fetch_optional(connection.connection()?)
+                .await
+                .map_err(RegistryError::from);
+                match connection.close().await {
+                    CloseOutcome::Confirmed => selected,
+                    CloseOutcome::Unconfirmed => Err(RegistryError::StorageUnavailable),
+                }
+            })
+            .await
+    }
+
+    pub(crate) async fn append_control_security_audit(
+        &self,
+        actor_id: Option<&str>,
+        action: &str,
+        target_id: &str,
+        outcome: &str,
+        occurred_at: i64,
+    ) -> Result<(), RegistryError> {
+        let scope = self.owner_scope();
+        scope
+            .while_open(async {
+                let mut connection = self.detached_owned_connection().await?;
+                let res = async {
+                    sqlx::query("BEGIN IMMEDIATE")
+                        .execute(connection.connection()?)
+                        .await?;
+                    let insert = sqlx::query(
+                        "INSERT INTO main.security_audit(actor_id, action, target_id, outcome, occurred_at) VALUES (?, ?, ?, ?, ?)",
+                    )
+                    .bind(actor_id)
+                    .bind(action)
+                    .bind(target_id)
+                    .bind(outcome)
+                    .bind(occurred_at)
+                    .execute(connection.connection()?)
+                    .await;
+                    match insert {
+                        Ok(_) => {
+                            sqlx::query("COMMIT")
+                                .execute(connection.connection()?)
+                                .await
+                                .map_err(|_| RegistryError::CommitUnconfirmed)?;
+                            Ok(())
+                        }
+                        Err(err) => {
+                            let _ = sqlx::query("ROLLBACK")
+                                .execute(connection.connection()?)
+                                .await;
+                            Err(RegistryError::from(err))
+                        }
+                    }
+                }
+                .await;
+                match connection.close().await {
+                    CloseOutcome::Confirmed => res,
                     CloseOutcome::Unconfirmed => Err(RegistryError::StorageUnavailable),
                 }
             })
@@ -261,6 +358,100 @@ impl SqliteRequestRegistry {
     #[cfg(test)]
     pub(crate) fn faults_for_test(&self) -> std::sync::Arc<test_hooks::FaultController> {
         self.hooks.clone()
+    }
+}
+
+async fn resolve_control_root_inner(
+    connection: &mut SqliteConnection,
+    target: EntityId,
+) -> Result<ResolvedControlRoot, RegistryError> {
+    let row = sqlx::query("SELECT source_id,native_id FROM main.product_targets WHERE target_id=?")
+        .bind(target.encode())
+        .fetch_optional(&mut *connection)
+        .await?
+        .ok_or(RegistryError::InvalidTarget)?;
+    let source: String = row
+        .try_get("source_id")
+        .map_err(|_| RegistryError::CorruptState)?;
+    let native: String = row
+        .try_get("native_id")
+        .map_err(|_| RegistryError::CorruptState)?;
+    let source = EntityId::decode(&source).map_err(|_| RegistryError::CorruptState)?;
+    let subject = NativeSessionKey::from_config(Some(source), &native)
+        .map_err(|_| RegistryError::CorruptState)?;
+
+    let mut current = subject;
+    let mut ancestors = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        if !seen.insert(current.clone()) {
+            return Err(RegistryError::CorruptState);
+        }
+        let parent_value: Option<String> = sqlx::query_scalar(
+            "SELECT parent_native_id FROM main.node_session_parents WHERE source_id=? AND child_native_id=?",
+        )
+        .bind(current.source().0.encode())
+        .bind(current.native_id())
+        .fetch_optional(&mut *connection)
+        .await?;
+        let next = parent_value
+            .as_deref()
+            .map(|value| {
+                NativeSessionKey::from_config(Some(current.source().0), value)
+                    .map_err(|_| RegistryError::CorruptState)
+            })
+            .transpose()?;
+        let verified_root: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM main.node_session_capacity WHERE source_id=? AND native_id=? AND root_verified=1)",
+        )
+        .bind(current.source().0.encode())
+        .bind(current.native_id())
+        .fetch_one(&mut *connection)
+        .await?;
+        if verified_root != 0 && next.is_some() {
+            return Err(RegistryError::CorruptState);
+        }
+        if let Some(parent) = next {
+            ancestors.push(parent.clone());
+            current = parent;
+            continue;
+        }
+        if !ancestors.is_empty() {
+            if verified_root == 0 {
+                return Err(RegistryError::SessionTreeUnverified);
+            }
+        } else if verified_root == 0 {
+            let has_capacity_row: i64 = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM main.node_session_capacity WHERE source_id=? AND native_id=?)",
+            )
+            .bind(current.source().0.encode())
+            .bind(current.native_id())
+            .fetch_one(&mut *connection)
+            .await?;
+            if has_capacity_row != 0 {
+                return Err(RegistryError::SessionTreeUnverified);
+            }
+        }
+        let root_target_id = if ancestors.is_empty() {
+            Some(target)
+        } else {
+            let root_target: Option<String> = sqlx::query_scalar(
+                "SELECT target_id FROM main.product_targets WHERE source_id=? AND native_id=?",
+            )
+            .bind(current.source().0.encode())
+            .bind(current.native_id())
+            .fetch_optional(&mut *connection)
+            .await?;
+            root_target
+                .as_deref()
+                .map(EntityId::decode)
+                .transpose()
+                .map_err(|_| RegistryError::CorruptState)?
+        };
+        return Ok(ResolvedControlRoot {
+            root: current,
+            root_target_id,
+        });
     }
 }
 

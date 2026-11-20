@@ -68,6 +68,7 @@ where
         self: &Arc<Self>,
         reason: AutomaticReleaseReason,
     ) -> Result<bool, DispatchError> {
+        let _ = self.session_control.sweep_expired();
         let Ok(_selection) = self.capacity_recycling.try_lock() else {
             return Ok(false);
         };

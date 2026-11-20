@@ -12,6 +12,7 @@ const REQUEST_ERROR_MESSAGES: Record<ManagementErrorCode, string> = {
   platform_unimplemented: "平台尚未实现这项操作。",
   unsupported_capability: "当前数据源或原生会话不支持这项能力。",
   invalid_target: "会话目标无效。",
+  session_not_controlled: "当前未持有该会话控制权，或控制权已被其他设备接管。请先接管会话后再执行写操作。",
   invalid_registration: "请求登记身份无效或不存在。",
   request_retired: "请求登记已退出可执行状态。",
   read_stale: "本次读取依据的状态已失效。",

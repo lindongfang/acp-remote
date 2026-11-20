@@ -13,6 +13,7 @@ import {
   statusLine,
 } from "./dom-primitives";
 import { managementErrorMessage } from "./error-formatting";
+import type { SessionControlIntegrationPort } from "./session-control-controller";
 
 export interface ApprovalHostPort {
   readonly getManagement: () => ManagementConnection | null;
@@ -24,6 +25,7 @@ export interface ApprovalHostPort {
     failure?: string,
   ) => void;
   readonly formatError?: (error: unknown) => string;
+  readonly control?: SessionControlIntegrationPort;
 }
 
 export function approvalStatusText(status: ApprovalStatus): string {
@@ -69,6 +71,17 @@ export class ApprovalController {
     this.#approvalStatus = null;
   }
 
+  selectedApprovalTargetId(): string | null {
+    const association = (this.#selectedApproval?.status ?? this.#approvalStatus)?.association;
+    return association !== undefined && association !== null && association.kind !== "unassociated"
+      ? association.targetId
+      : null;
+  }
+
+  #controlTargetId(): string | null {
+    return this.selectedApprovalTargetId() ?? this.#port.control?.getControlTargetId() ?? null;
+  }
+
   sessionApprovalPanel(record: IdentityRecord): HTMLElement {
     const doc = this.#port.getDocument?.() ?? globalThis.document;
     const section = element("section", "session-composer", undefined, doc);
@@ -87,6 +100,13 @@ export class ApprovalController {
       void this.loadApprovalList(record, this.#port.getManagementGeneration());
     });
     section.append(refresh);
+
+    const controlTargetId = this.#controlTargetId();
+    if (controlTargetId !== null) {
+      const banner = this.#port.control?.renderControlBanner(record, controlTargetId);
+      if (banner !== undefined) section.append(banner);
+    }
+    const canWrite = this.#port.control?.canWriteTarget(controlTargetId, record) ?? true;
 
     const approvals = this.#approvalList;
     if (approvals === null) {
@@ -182,7 +202,7 @@ export class ApprovalController {
         choice.selectable ? "secondary-button" : undefined,
         doc,
       );
-      select.disabled = !choice.selectable;
+      select.disabled = !choice.selectable || !canWrite;
       select.addEventListener("click", () => {
         select.disabled = true;
         void this.registerApprovalChoice(
@@ -206,6 +226,7 @@ export class ApprovalController {
       );
       const actions = element("div", "action-row", undefined, doc);
       const decide = button("提交已登记决定", "submit", doc);
+      decide.disabled = !canWrite;
       decide.addEventListener("click", () => {
         decide.disabled = true;
         void this.submitApprovalDecision(record, decide);
@@ -286,6 +307,13 @@ export class ApprovalController {
     try {
       const approval = await connection.readApproval(approvalId);
       if (generation !== this.#port.getManagementGeneration()) return;
+      const assoc = approval.status?.association;
+      if (assoc !== undefined && assoc.kind !== "unassociated") {
+        await this.#port.control
+          ?.inspectSessionControl(assoc.targetId, generation)
+          .catch(() => null);
+        if (generation !== this.#port.getManagementGeneration()) return;
+      }
       this.#selectedApproval = approval;
       this.#approvalRegistration = null;
       this.#approvalStatus = approval.status;
@@ -318,11 +346,13 @@ export class ApprovalController {
       );
       return;
     }
+    const targetId = this.#controlTargetId();
     try {
-      const registration = await connection.registerApproval(
-        approvalId,
-        choiceId,
-      );
+      const epoch = this.#port.control?.getControlEpoch(targetId);
+      const registration =
+        epoch === undefined
+          ? await connection.registerApproval(approvalId, choiceId)
+          : await connection.registerApproval(approvalId, choiceId, epoch);
       if (generation !== this.#port.getManagementGeneration()) return;
       this.#approvalRegistration = registration;
       this.#port.renderDashboard(record, "审批决定已登记，尚未交付给 Harness。");
@@ -330,11 +360,20 @@ export class ApprovalController {
       if (generation !== this.#port.getManagementGeneration()) return;
       submit.disabled = false;
       const format = this.#port.formatError ?? managementErrorMessage;
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        `审批决定登记失败：${format(error)}`,
-      );
+      const message = `审批决定登记失败：${format(error)}`;
+      if (
+        targetId !== null &&
+        (await this.#port.control?.onSessionNotControlled(
+          record,
+          targetId,
+          generation,
+          error,
+          message,
+        ))
+      ) {
+        return;
+      }
+      this.#port.renderDashboard(record, undefined, message);
     }
   }
 
@@ -350,11 +389,20 @@ export class ApprovalController {
       this.#port.renderDashboard(record, undefined, "审批决定登记上下文不完整。");
       return;
     }
+    const targetId = this.#controlTargetId();
     try {
-      const result = await connection.decideApproval(
-        approval.approvalId,
-        registration.approvalRegistrationId,
-      );
+      const epoch = this.#port.control?.getControlEpoch(targetId);
+      const result =
+        epoch === undefined
+          ? await connection.decideApproval(
+              approval.approvalId,
+              registration.approvalRegistrationId,
+            )
+          : await connection.decideApproval(
+              approval.approvalId,
+              registration.approvalRegistrationId,
+              epoch,
+            );
       if (generation !== this.#port.getManagementGeneration()) return;
       const status = await connection.inspectApprovalStatus(approval.approvalId);
       if (generation !== this.#port.getManagementGeneration()) return;
@@ -368,11 +416,20 @@ export class ApprovalController {
       if (generation !== this.#port.getManagementGeneration()) return;
       submit.disabled = false;
       const format = this.#port.formatError ?? managementErrorMessage;
-      this.#port.renderDashboard(
-        record,
-        undefined,
-        `审批决定提交失败：${format(error)}`,
-      );
+      const message = `审批决定提交失败：${format(error)}`;
+      if (
+        targetId !== null &&
+        (await this.#port.control?.onSessionNotControlled(
+          record,
+          targetId,
+          generation,
+          error,
+          message,
+        ))
+      ) {
+        return;
+      }
+      this.#port.renderDashboard(record, undefined, message);
     }
   }
 

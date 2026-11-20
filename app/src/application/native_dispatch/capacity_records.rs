@@ -137,6 +137,20 @@ pub trait CapacityRepository: super::SessionTreeRepository {
         source: &'a PreSourceProbe,
         deadline: &'a RegistryDeadline,
     ) -> BoxFuture<'a, Result<(), DispatchError>>;
+    fn trusted_client_display_name<'a>(
+        &'a self,
+        client: EntityId,
+        deadline: &'a RegistryDeadline,
+    ) -> BoxFuture<'a, Result<Option<String>, DispatchError>>;
+    fn record_control_security_audit<'a>(
+        &'a self,
+        actor: Option<EntityId>,
+        action: &'static str,
+        root: &'a NativeSessionKey,
+        outcome_json: String,
+        occurred_at: i64,
+        deadline: &'a RegistryDeadline,
+    ) -> BoxFuture<'a, Result<(), DispatchError>>;
 }
 
 #[cfg(test)]

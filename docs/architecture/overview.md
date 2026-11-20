@@ -55,7 +55,7 @@ Magpie / Models / MCP / Tools
 
 Tailscale 是网络接入与部署路径，不是另一个业务节点，也不替代应用认证。未来是否管理多台机器不在当前方案中展开，不预置中心服务器、远程执行节点或节点派发协议。
 
-客户端设备形态（桌面 Web、手机 Web、CLI）本身不构成固定的节点级权限等级：首期面向个人使用，已认证且未撤销的客户端均可执行节点级管理（设备查看/撤销、容量观测、工作区与启动配置管理、新建主会话）并只读查看任意会话；但在单个主会话内部采用**单客户端显式控制权接管**（见 [会话控制权接管规格](../../openspec/changes/deliver-session-control-takeover/specs/session-control-takeover/spec.md)），同一时刻仅当前接管设备可向该会话发起写操作与审批裁决，其他已配对设备对该会话保持只读。团队多租户账号与 RBAC 角色体系暂不展开。
+客户端设备形态（桌面 Web、手机 Web、CLI）本身不构成固定的节点级权限等级：首期面向个人使用，已认证且未撤销的客户端均可执行节点级管理（设备查看/撤销、容量观测、工作区与启动配置管理、新建主会话）并只读查看任意会话；但在单个主会话内部采用**单客户端显式控制权接管**（见 [会话控制权接管规格](../../openspec/specs/session-control-takeover/spec.md)），同一时刻仅当前接管设备可向该会话发起写操作与审批裁决，其他已配对设备对该会话保持只读。团队多租户账号与 RBAC 角色体系暂不展开。
 
 ### 2.2 管理范围
 
@@ -148,7 +148,7 @@ Blob 视图引用原生图片及大型输出，平台只使用受容量与保留
 ### 4.3 关联约束
 
 1. 一个 Harness 定义可以有多个运行实例、多个会话；实例退出不删除会话。
-2. 一个会话可有多个 Run，但前台串行派发；忙碌时允许当前持有主会话控制权的客户端入节点队列（其他受信客户端可共享只读查看队列），排队不表示 Run 已开始，数量及操作由 [session-execution](../../openspec/specs/session-execution/spec.md) 与 [session-control-takeover](../../openspec/changes/deliver-session-control-takeover/specs/session-control-takeover/spec.md) 协同定义。这不禁止 Harness 内部的子 Agent、后台任务或原生并行活动。
+2. 一个会话可有多个 Run，但前台串行派发；忙碌时允许当前持有主会话控制权的客户端入节点队列（其他受信客户端可共享只读查看队列），排队不表示 Run 已开始，数量及操作由 [session-execution](../../openspec/specs/session-execution/spec.md) 与 [session-control-takeover](../../openspec/specs/session-control-takeover/spec.md) 协同定义。这不禁止 Harness 内部的子 Agent、后台任务或原生并行活动。
 3. 同一目录可以关联多个会话，允许并行修改，不加独占约束。
 4. 原生会话绑定用于恢复原会话；恢复失败不能静默创建一个新原生会话替代。
 5. 父子关系按原生事实投影到 AgentParticipant 视图中：根参与者没有父参与者；父关系不能形成循环，子参与者必须能追溯到根。子会话继承所属根主会话的客户端控制权状态，不单独设立独立控制锁。
@@ -239,7 +239,7 @@ Agent 升级后的连接按 ACP 重新协商；不支持或协议错误直接报
 
 ### 5.5 命令、审批与异常
 
-输入、队列变更、取消与审批裁决提交到节点时，除校验客户端受信身份、目标及内容外，还必须校验该客户端当前持有所属主会话的控制权（且若携带期望 `controlEpoch` 则须一致）；只读未接管客户端或已被顶号降级的旧控制端发起写请求将立即被无副作用拒绝。请求一旦在控制权有效时被节点受理，即由节点接管后续派发责任：后续控制权被其他设备顶号接管、原操作者断线或被撤销，均不自动取消已受理输入或已开启的 `Run`，也不在派发时重验原提交者。队列正文仅内存，不跨节点重启保存；必要去重与发送元数据独立保存在核心控制面库中，具体行为见 [session-execution](../../openspec/specs/session-execution/spec.md) 与 [session-control-takeover](../../openspec/changes/deliver-session-control-takeover/specs/session-control-takeover/spec.md)。
+输入、队列变更、取消与审批裁决提交到节点时，除校验客户端受信身份、目标及内容外，还必须校验该客户端当前持有所属主会话的控制权（且若携带期望 `controlEpoch` 则须一致）；只读未接管客户端或已被顶号降级的旧控制端发起写请求将立即被无副作用拒绝。请求一旦在控制权有效时被节点受理，即由节点接管后续派发责任：后续控制权被其他设备顶号接管、原操作者断线或被撤销，均不自动取消已受理输入或已开启的 `Run`，也不在派发时重验原提交者。队列正文仅内存，不跨节点重启保存；必要去重与发送元数据独立保存在核心控制面库中，具体行为见 [session-execution](../../openspec/specs/session-execution/spec.md) 与 [session-control-takeover](../../openspec/specs/session-control-takeover/spec.md)。
 
 受理、原生接收和原生完成分别记录；异常不自动重发。执行终态按协议可靠事实记录，不以展示快照落盘成功为条件，也不代表原生历史必然完整可读。平台 Run、原生前台活动和后台工作分别判断；无 Run 不证明原生空闲，前台完成不证明后台结束。审批有效性按真实请求及协议生命周期判断，控制权顶号接管会将仍在有效期内的待决 `ApprovalRequest` 平滑移交新控制端裁决，而其他只读设备仅可查看待审批详情。无法验证目标、连接和真实请求时保持未授权，不复活旧决定，不用客户端自报正文替代可信来源。
 
@@ -481,4 +481,4 @@ Run 与未发送队列分开，按 ACP 真实语义由派发/执行推进到终�
 
 ## 12. 规格职责归属
 
-队列数量、已受理接管、失败后挂起与新输入优先（旧项须由当前控制端显式点击继续才重新参与调度，新输入成功不自动恢复旧项）、无期限、不跨节点重启保存由 [session-execution](../../openspec/specs/session-execution/spec.md) 定义；单主会话客户端写控制互斥、顶号式接管与只读观察边界由 [session-control-takeover](../../openspec/changes/deliver-session-control-takeover/specs/session-control-takeover/spec.md) 定义。严格批准保存及节点交付归属 [permission-approvals](../../openspec/specs/permission-approvals/spec.md)，必要状态与附加审计归属 [management-audit](../../openspec/specs/management-audit/spec.md)，基础历史与安全边界归属 [structured-history](../../openspec/specs/structured-history/spec.md)，受管持久化展示快照与混合自适应恢复归属 [session-transcript-cache](../../openspec/specs/session-transcript-cache/spec.md)。连接不因累计审批等对端请求次数达到平台阈值而断开，额外平台限制核对统一由 [acp-platform-constraints](../../openspec/specs/acp-platform-constraints/spec.md) 定义，不复制第二套产品规则。
+队列数量、已受理接管、失败后挂起与新输入优先（旧项须由当前控制端显式点击继续才重新参与调度，新输入成功不自动恢复旧项）、无期限、不跨节点重启保存由 [session-execution](../../openspec/specs/session-execution/spec.md) 定义；单主会话客户端写控制互斥、顶号式接管与只读观察边界由 [session-control-takeover](../../openspec/specs/session-control-takeover/spec.md) 定义。严格批准保存及节点交付归属 [permission-approvals](../../openspec/specs/permission-approvals/spec.md)，必要状态与附加审计归属 [management-audit](../../openspec/specs/management-audit/spec.md)，基础历史与安全边界归属 [structured-history](../../openspec/specs/structured-history/spec.md)，受管持久化展示快照与混合自适应恢复归属 [session-transcript-cache](../../openspec/specs/session-transcript-cache/spec.md)。连接不因累计审批等对端请求次数达到平台阈值而断开，额外平台限制核对统一由 [acp-platform-constraints](../../openspec/specs/acp-platform-constraints/spec.md) 定义，不复制第二套产品规则。

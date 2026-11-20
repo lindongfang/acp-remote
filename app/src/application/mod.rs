@@ -15,6 +15,7 @@ pub mod product_commands;
 pub(crate) mod prompt_preparation;
 pub mod queue_owner;
 pub mod request_registry;
+pub mod session_control;
 pub mod shared_views;
 
 #[cfg(windows)]

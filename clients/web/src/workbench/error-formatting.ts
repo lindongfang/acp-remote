@@ -136,9 +136,13 @@ export function managementErrorMessage(error: unknown): string {
     }
   }
   if (error instanceof SessionConsumeOutcomeError) {
-    return error.code === "consume_pending"
-      ? "请求仍在节点确认中，尚未完成结算；请刷新队列或重试。"
-      : `请求被节点拒绝（${error.detail}）。`;
+    if (error.code === "consume_pending") {
+      return "请求仍在节点确认中，尚未完成结算；请刷新队列或重试。";
+    }
+    if (error.detail === "session_not_controlled") {
+      return managementRequestErrorMessage("session_not_controlled");
+    }
+    return `请求被节点拒绝（${error.detail}）。`;
   }
   return pairingErrorMessage(error);
 }
@@ -155,6 +159,9 @@ export function sessionActionErrorMessage(error: unknown): string {
       case "consume_pending":
         return "请求仍在节点确认中，尚未完成结算；请刷新队列核验状态。";
       case "consume_refused":
+        if (error.detail === "session_not_controlled") {
+          return managementRequestErrorMessage("session_not_controlled");
+        }
         return error.detail !== null
           ? `请求被节点拒绝（${error.detail}）。`
           : "请求被节点拒绝。";

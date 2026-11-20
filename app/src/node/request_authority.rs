@@ -2,13 +2,16 @@
 use super::NodeRuntime;
 use crate::{
     access_policy::{AccessPolicyError, ApplicationPolicy, AuthenticatedActor},
-    application::request_registry::{RegistryOwnerScope, RequestAuthority},
+    application::{
+        request_registry::{RegistryOwnerScope, RequestAuthority},
+        session_control::SessionControlCoordinator,
+    },
     domain::{
         ActorContext, EntityId,
         native::NativeSessionKey,
         request_registry::{QueueAction, RegistryError},
     },
-    session_storage::request_registry::SqliteRequestRegistry,
+    session_storage::request_registry::{ResolvedControlRoot, SqliteRequestRegistry},
 };
 use std::sync::Arc;
 
@@ -17,6 +20,7 @@ use std::sync::Arc;
 pub struct NodeRequestAuthority {
     policy: Arc<ApplicationPolicy>,
     registry: SqliteRequestRegistry,
+    session_control: Arc<SessionControlCoordinator>,
 }
 
 impl NodeRuntime {
@@ -40,10 +44,28 @@ impl NodeRequestAuthority {
     ) -> Result<Self, RegistryError> {
         let registry = storage.request_registry();
         registry.owner_scope().require_open()?;
-        Ok(Self { policy, registry })
+        Ok(Self {
+            policy,
+            registry,
+            session_control: storage.session_control(),
+        })
     }
     pub(super) fn registry_scope(&self) -> RegistryOwnerScope {
         self.registry.owner_scope()
+    }
+    #[must_use]
+    pub(crate) const fn session_control(&self) -> &Arc<SessionControlCoordinator> {
+        &self.session_control
+    }
+    #[must_use]
+    pub(crate) const fn registry(&self) -> &SqliteRequestRegistry {
+        &self.registry
+    }
+    pub(crate) async fn resolve_control_root(
+        &self,
+        target: EntityId,
+    ) -> Result<ResolvedControlRoot, RegistryError> {
+        self.registry.resolve_control_root(target).await
     }
     pub(super) async fn current(
         &self,
@@ -93,10 +115,84 @@ impl RequestAuthority for NodeRequestAuthority {
     async fn authorize(
         &self,
         actor: &AuthenticatedActor,
-        _target: EntityId,
-        _action: QueueAction,
+        target: EntityId,
+        action: QueueAction,
     ) -> Result<ActorContext, RegistryError> {
-        self.current(actor).await
+        self.authorize_with_epoch(actor, target, action, None)
+            .await
+            .map(|(context, _, _)| context)
+    }
+
+    async fn authorize_with_epoch(
+        &self,
+        actor: &AuthenticatedActor,
+        target: EntityId,
+        _action: QueueAction,
+        expected_control_epoch: Option<u64>,
+    ) -> Result<(ActorContext, Option<NativeSessionKey>, Option<u64>), RegistryError> {
+        let context = self.current(actor).await?;
+        let resolved = self.resolve_control_root(target).await?;
+        let epoch = self
+            .session_control
+            .authorize_controlled(&resolved.root, context.client_id, expected_control_epoch)
+            .map_err(|_| RegistryError::SessionNotControlled)?;
+        Ok((context, Some(resolved.root), Some(epoch)))
+    }
+
+    async fn authorize_input_consume(
+        &self,
+        actor: &AuthenticatedActor,
+        target: EntityId,
+        _action: QueueAction,
+        registration: crate::domain::request_registry::RegistrationId,
+        expected_control_epoch: Option<u64>,
+    ) -> Result<(ActorContext, Option<NativeSessionKey>, Option<u64>), RegistryError> {
+        let context = self.current(actor).await?;
+        let resolved = self.resolve_control_root(target).await?;
+        let epoch = self
+            .session_control
+            .verify_input_consume(
+                registration.entity(),
+                &resolved.root,
+                context.client_id,
+                expected_control_epoch,
+            )
+            .map_err(|_| RegistryError::SessionNotControlled)?;
+        Ok((context, Some(resolved.root), Some(epoch)))
+    }
+
+    fn record_input_registration(
+        &self,
+        actor: &crate::application::request_registry::CurrentRequestActor,
+        registration: crate::domain::request_registry::RegistrationId,
+    ) {
+        if let (Some(root), Some(epoch)) = (actor.control_root(), actor.control_epoch()) {
+            self.session_control.bind_input_registration(
+                registration.entity(),
+                root,
+                actor.context().client_id,
+                epoch,
+            );
+        }
+    }
+
+    fn reverify_consume(
+        &self,
+        actor: &crate::application::request_registry::CurrentRequestActor,
+        registration: crate::domain::request_registry::RegistrationId,
+    ) -> Result<(), RegistryError> {
+        let Some(root) = actor.control_root() else {
+            return Err(RegistryError::SessionNotControlled);
+        };
+        self.session_control
+            .verify_input_consume(
+                registration.entity(),
+                root,
+                actor.context().client_id,
+                actor.expected_control_epoch(),
+            )
+            .map(|_| ())
+            .map_err(|_| RegistryError::SessionNotControlled)
     }
 
     async fn authorize_read(

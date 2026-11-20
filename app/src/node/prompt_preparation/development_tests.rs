@@ -249,6 +249,15 @@ async fn body_dev_cpu_pause_keeps_control_progress() {
     let policy = node.application_policy().unwrap();
     let actor = policy_actor(&policy, &key, &client, Id128::new([25; 16])).await;
     let authority = node.request_authority().unwrap();
+    let client_entity = crate::domain::EntityId::decode(&client).unwrap();
+    let root_key = crate::domain::native::NativeSessionKey::from_config(
+        Some(crate::domain::EntityId::from_bytes([1; 16])),
+        "body-control",
+    )
+    .unwrap();
+    authority
+        .session_control()
+        .claim_initial(&root_key, client_entity, "body control", true);
     let (hooks, pause, _release) = paused(Point::RawParsedBeforeBlockChecks);
     let h = attach_with_hooks(node.storage.as_ref().unwrap(), queue.clone(), hooks).unwrap();
     let rx = h.begin(UPLOAD.to_vec()).unwrap();
