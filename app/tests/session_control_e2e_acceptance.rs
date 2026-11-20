@@ -476,7 +476,7 @@ async fn hn_027_controlled_history_navigation() {
         let key = NativeSessionKey::from_config(Some(source), "child-history").unwrap();
         let store = TranscriptCacheStore::open(
             area.temp_root.join("node-data/transcript-cache.sqlite3"),
-            Default::default(),
+            acp_remote::config::TranscriptCacheConfig::default(),
             Arc::new(SystemRetentionClock),
             Arc::new(NoProtectedSessions),
         )
@@ -550,21 +550,62 @@ impl HistoryProcessJob {
     }
 }
 
+fn isolated_history_codex_home(root: &Path) -> PathBuf {
+    let source = std::env::var_os("HN_CODEX_HOME")
+        .or_else(|| std::env::var_os("CODEX_HOME"))
+        .map_or_else(
+            || PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join(".codex"),
+            PathBuf::from,
+        );
+    let home = root.join("codex-home");
+    fs::create_dir(&home).unwrap();
+    fs::copy(source.join("auth.json"), home.join("auth.json")).expect("copy isolated login");
+    let config_path = source.join("config.toml");
+    if config_path.is_file() {
+        let contents = fs::read_to_string(config_path).expect("read Codex configuration");
+        let config: toml::Table = contents
+            .parse()
+            .unwrap_or_else(|_| panic!("invalid Codex configuration"));
+        let mut selected = toml::Table::new();
+        for key in [
+            "model",
+            "model_provider",
+            "openai_base_url",
+            "model_catalog_json",
+            "model_reasoning_effort",
+            "service_tier",
+        ] {
+            if let Some(value) = config.get(key) {
+                selected.insert(key.to_owned(), value.clone());
+            }
+        }
+        if let Some(catalog) = selected.get("model_catalog_json").and_then(|v| v.as_str()) {
+            let path = source.join(catalog);
+            fs::copy(path, home.join("models.json")).expect("copy configured model catalog");
+            selected.insert(
+                "model_catalog_json".to_owned(),
+                home.join("models.json").to_str().unwrap().into(),
+            );
+        }
+        if let Some(name) = config.get("model_provider").and_then(|v| v.as_str())
+            && let Some(provider) = config.get("model_providers").and_then(|v| v.get(name))
+        {
+            let mut providers = toml::Table::new();
+            providers.insert(name.to_owned(), provider.clone());
+            selected.insert("model_providers".to_owned(), providers.into());
+        }
+        fs::write(
+            home.join("config.toml"),
+            toml::to_string(&selected).unwrap(),
+        )
+        .unwrap();
+    }
+    home
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "HN-028: requires explicitly supplied disposable authenticated Codex home"]
+#[ignore = "HN-028: requires installed authenticated Codex and codex-acp"]
 async fn hn_028_real_history_navigation() {
-    // A dedicated home is supplied by its owner. Never import the user's CLI login.
-    let home = PathBuf::from(
-        std::env::var_os("HN_CODEX_HOME").expect("not-run: isolated HN_CODEX_HOME missing"),
-    )
-    .canonicalize()
-    .unwrap();
-    let personal = PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join(".codex");
-    assert_ne!(Some(&home), personal.canonicalize().ok().as_ref());
-    assert!(
-        home.join("auth.json").is_file() && !home.join("sessions").exists(),
-        "not-run: requires a fresh authorized isolated Codex home"
-    );
     let repo = repo_root();
     let adapter = std::env::var_os("HN_CODEX_ADAPTER").map_or_else(||repo.join(
         "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/codex-acp/dist/index.js"),
@@ -588,6 +629,7 @@ async fn hn_028_real_history_navigation() {
         node_child: Some(spawn_daemon(bin, &area.config_path)),
         driver_child: None,
     };
+    let home = isolated_history_codex_home(&area.temp_root);
     let mut job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
     wait_node_ready(&area.ipc_addr).await;
     let evidence = repo.join("testing/runs/deliver-history-navigation/hn-028.json");

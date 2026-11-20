@@ -23,7 +23,7 @@ function observe(page) {
       const frame = JSON.parse(payload);
       if (frame.type !== "command") return;
       requests.set(frame.requestId, frame.action);
-      wire.push({ action: frame.action, mode: frame.payload.mode });
+      wire.push({ action: frame.action, mode: frame.payload.mode, sentAt: Date.now() });
     });
     socket.on("framereceived", ({ payload }) => {
       if (typeof payload !== "string") return;
@@ -163,7 +163,7 @@ try {
   report.failureType = error.name;
   report.line = error.stack?.match(/history-navigation\.mjs:(\d+):/)?.[1];
   report.pages = wire.filter(event => event.page).map(({page}) => ({
-    first:page.firstTurn,last:page.lastTurn,source:page.source,continuity:page.continuity
+    first:page.firstTurn,last:page.lastTurn,source:page.source,turnStatus:page.turnStatus,continuity:page.continuity
   }));
   report.errors = wire.map(e => e.error).filter(e => typeof e === "string" && /^[a-z_]+$/.test(e));
   process.exitCode = 1;
