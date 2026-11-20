@@ -648,3 +648,159 @@ fn sct_001_session_control_commands_and_expected_control_epoch_strict_contract()
         );
     }
 }
+
+#[test]
+fn history_page_source_cursor_binds_each_selection_field_and_child() {
+    let base = serde_json::json!({"kind":"source","selection":serde_json::from_str::<Value>(&valid_selection_json()).unwrap(),"nativeSessionId":"ab"});
+    let scope = |target: &Value, child: Option<&str>| {
+        let payload = serde_json::json!({"target":target, "mode":{"kind":"first"}});
+        let command =
+            parse_session_command(envelope("history.page", &payload.to_string()).as_bytes())
+                .unwrap();
+        let SessionAction::HistoryPage(page) = command.action() else {
+            panic!("history command")
+        };
+        page.target.fingerprint(child)
+    };
+    let original = scope(&base, Some("c"));
+    for (field, replacement) in [
+        ("sourceId", OTHER),
+        ("harnessId", ID),
+        ("profileId", OTHER),
+        ("profileRevision", "8"),
+        ("workspaceId", ID),
+        ("launchPath", "C:/other"),
+    ] {
+        let mut foreign = base.clone();
+        foreign["selection"][field] = Value::String(replacement.to_owned());
+        assert_ne!(scope(&foreign, Some("c")), original);
+    }
+    let mut foreign_session = base.clone();
+    foreign_session["nativeSessionId"] = Value::String("a".into());
+    assert_ne!(scope(&foreign_session, Some("bc")), original);
+    assert_ne!(scope(&base, Some("d")), original);
+    assert_ne!(scope(&base, None), original);
+}
+
+#[test]
+fn history_page_legacy_view_open_keeps_wire_bytes() {
+    let original = envelope(
+        "view.open",
+        &format!(r#"{{"targetId":"{ID}","reason":"first_open"}}"#),
+    );
+    let command = parse_session_command(original.as_bytes()).unwrap();
+    assert_eq!(encode_session_command(&command).unwrap(), original);
+}
+
+#[test]
+fn history_page_command_contract_preserves_optional_fields() {
+    let target = format!(r#"{{"kind":"target","targetId":"{ID}"}}"#);
+    let source = format!(
+        r#"{{"kind":"source","selection":{},"nativeSessionId":"s"}}"#,
+        valid_selection_json()
+    );
+    for target in [target, source] {
+        for mode in [
+            r#"{"kind":"first"}"#,
+            r#"{"kind":"continue","cursor":"x","direction":"older"}"#,
+            r#"{"kind":"locate","fromTurn":"1","direction":"newer"}"#,
+        ] {
+            for optional in ["", r#","child":"子","turns":"1""#, r#","turns":"50""#] {
+                let cmd = envelope(
+                    "history.page",
+                    &format!(r#"{{"target":{target},"mode":{mode}{optional}}}"#),
+                );
+                let parsed = parse_session_command(cmd.as_bytes()).expect("valid history page");
+                assert_eq!(
+                    serde_json::from_str::<Value>(&encode_session_command(&parsed).unwrap())
+                        .unwrap(),
+                    serde_json::from_str::<Value>(&cmd).unwrap()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn history_page_protocol_rejects_unknown_fields_and_invalid_numbers() {
+    let target = serde_json::json!({"kind":"target","targetId":ID});
+    let first = serde_json::json!({"kind":"first"});
+    let base = serde_json::json!({"target":target,"mode":first});
+    let check = |payload: &Value| {
+        parse_session_command(envelope("history.page", &payload.to_string()).as_bytes()).is_ok()
+    };
+    for value in [
+        serde_json::json!(10),
+        Value::Null,
+        serde_json::json!("0"),
+        serde_json::json!("-1"),
+        serde_json::json!("1.5"),
+        serde_json::json!("010"),
+        serde_json::json!("51"),
+        serde_json::json!(" 10"),
+        serde_json::json!(""),
+    ] {
+        let mut p = base.clone();
+        p["turns"] = value;
+        assert!(!check(&p));
+    }
+    for mode in [
+        serde_json::json!({"kind":"first","cursor":"x"}),
+        serde_json::json!({"kind":"first","direction":"older"}),
+        serde_json::json!({"kind":"first","fromTurn":"1"}),
+        serde_json::json!({"kind":"continue","cursor":"x"}),
+        serde_json::json!({"kind":"continue","cursor":"x","direction":"up"}),
+        serde_json::json!({"kind":"continue","cursor":"x","direction":"older","fromTurn":"1"}),
+        serde_json::json!({"kind":"locate","cursor":"x","direction":"older","fromTurn":"1"}),
+        serde_json::json!({"kind":"locate","direction":"older","fromTurn":"0"}),
+        serde_json::json!({"kind":"locate","direction":"older","fromTurn":"01"}),
+        serde_json::json!({"kind":"locate","direction":"older","fromTurn":1}),
+        serde_json::json!({"kind":"first","future":true}),
+    ] {
+        let mut p = base.clone();
+        p["mode"] = mode;
+        assert!(!check(&p));
+    }
+    for bad in [
+        serde_json::json!({"target":target}),
+        serde_json::json!({"mode":first}),
+        serde_json::json!({"target":target,"mode":first,"child":""}),
+        serde_json::json!({"target":target,"mode":first,"unknown":null}),
+        serde_json::json!({"target":{"kind":"future"},"mode":first}),
+        serde_json::json!({"target":{"kind":"target","targetId":ID,"unknown":1},"mode":first}),
+    ] {
+        assert!(!check(&bad));
+    }
+    for (action, mut body) in [
+        (
+            "view.open",
+            serde_json::json!({"targetId":ID,"reason":"first_open"}),
+        ),
+        (
+            "view.open_source",
+            serde_json::json!({"selection":serde_json::from_str::<Value>(&valid_selection_json()).unwrap(),"nativeSessionId":"s","reason":"first_open"}),
+        ),
+    ] {
+        for (page, ok) in [
+            (None, true),
+            (Some(serde_json::json!({})), true),
+            (Some(serde_json::json!({"turns":"5"})), true),
+            (Some(Value::Null), false),
+            (Some(serde_json::json!({"unknown":1})), false),
+        ] {
+            if let Some(page) = page {
+                body["page"] = page;
+            }
+            let cmd = envelope(action, &body.to_string());
+            let parsed = parse_session_command(cmd.as_bytes());
+            assert_eq!(parsed.is_ok(), ok);
+            if let Ok(parsed) = parsed {
+                assert_eq!(
+                    serde_json::from_str::<Value>(&encode_session_command(&parsed).unwrap())
+                        .unwrap(),
+                    serde_json::from_str::<Value>(&cmd).unwrap()
+                );
+            }
+        }
+    }
+}

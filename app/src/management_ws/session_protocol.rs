@@ -6,6 +6,9 @@ use crate::{
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
+mod history;
+pub use history::{HistoryMode, HistoryPageInput, HistoryTarget, PageOptions};
+
 const MAX_SOURCE_TEXT_BYTES: usize = 4096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
@@ -240,16 +243,22 @@ pub enum SessionAction {
     SourceSessionResultOpen { source_operation_id: Id128 },
     #[serde(rename = "source.session.result.release")]
     SourceSessionResultRelease { source_operation_id: Id128 },
+    #[serde(rename = "history.page")]
+    HistoryPage(HistoryPageInput),
     #[serde(rename = "view.open")]
     ViewOpen {
         target_id: Id128,
         reason: ViewOpenReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        page: Option<PageOptions>,
     },
     #[serde(rename = "view.open_source")]
     ViewOpenSource {
         selection: SourceLaunchSelectionInput,
         native_session_id: String,
         reason: ViewOpenReason,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        page: Option<PageOptions>,
     },
     #[serde(rename = "view.close")]
     ViewClose { stream_id: Id128 },
@@ -530,6 +539,7 @@ fn parse_action(
         "session.control.inspect" | "session.control.takeover" | "session.control.release" => {
             parse_session_control_action(action, p)
         }
+        "history.page" => history::parse_page(p).map(SessionAction::HistoryPage),
         "view.open" | "view.open_source" | "view.close" | "view.original" | "view.rebind" => {
             parse_view_action(action, p)
         }
@@ -838,18 +848,20 @@ fn parse_view_action(
 ) -> Result<SessionAction, SessionProtocolError> {
     Ok(match action {
         "view.open" => {
-            closed(p, &["targetId", "reason"])?;
+            closed_with_optional(p, &["targetId", "reason"], &["page"])?;
             SessionAction::ViewOpen {
                 target_id: id(p.get("targetId"))?,
                 reason: view_open_reason(p.get("reason"))?,
+                page: p.get("page").map(history::parse_options).transpose()?,
             }
         }
         "view.open_source" => {
-            closed(p, &["selection", "nativeSessionId", "reason"])?;
+            closed_with_optional(p, &["selection", "nativeSessionId", "reason"], &["page"])?;
             SessionAction::ViewOpenSource {
                 selection: source_selection(p.get("selection"))?,
                 native_session_id: bounded_non_empty_text(p.get("nativeSessionId"), true)?,
                 reason: view_open_reason(p.get("reason"))?,
+                page: p.get("page").map(history::parse_options).transpose()?,
             }
         }
         "view.close" => {

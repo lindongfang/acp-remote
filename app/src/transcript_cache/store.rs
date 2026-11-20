@@ -36,6 +36,9 @@ use super::{
     writer::{TranscriptCacheWriter, WriterControl, spawn_writer},
 };
 
+mod history;
+pub use history::{CachedPage, PageReadError};
+
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
 
 struct OpenBackend {
@@ -793,9 +796,12 @@ async fn write_replay_generation_rows(
             native_recovery_state,
             record_count,
             byte_size
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?)
+        , generation_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?, randomblob(16))
         ON CONFLICT(source_id, native_session_id) DO UPDATE SET
             active_generation = excluded.active_generation,
+            generation_token = excluded.generation_token,
+            turn_state = 'pending',
+            turn_count = 0,
             protocol_version = excluded.protocol_version,
             content_digest = excluded.content_digest,
             last_updated_at_ms = excluded.last_updated_at_ms,
@@ -830,33 +836,15 @@ async fn write_replay_generation_rows(
     .execute(&mut **tx)
     .await?;
 
-    for (index, (frame, conn_seq)) in frames.iter().enumerate() {
-        let ordinal_i64 = i64::try_from(index + 1)
-            .map_err(|_| TranscriptCacheError::Protocol("ordinal exceeds i64".to_owned()))?;
-        let conn_seq_i64 = i64::try_from(*conn_seq).map_err(|_| {
-            TranscriptCacheError::Protocol("connection_sequence exceeds i64".to_owned())
-        })?;
-        sqlx::query(
-            r"
-            INSERT INTO transcript_records (
-                source_id,
-                native_session_id,
-                generation,
-                ordinal,
-                connection_sequence,
-                raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            ",
-        )
-        .bind(source_bytes)
-        .bind(native_id)
-        .bind(next_generation)
-        .bind(ordinal_i64)
-        .bind(conn_seq_i64)
-        .bind(frame.bytes())
-        .execute(&mut **tx)
-        .await?;
-    }
+    write_replay_frames(
+        tx,
+        source_bytes,
+        native_id,
+        next_generation,
+        version_i64,
+        frames,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1071,4 +1059,61 @@ fn parse_session_row(
         record_count: u64::try_from(record_count_i64).unwrap_or(0),
         byte_size: u64::try_from(byte_size_i64).unwrap_or(0),
     })
+}
+
+async fn write_replay_frames(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    source_bytes: &[u8],
+    native_id: &str,
+    next_generation: i64,
+    version_i64: i64,
+    frames: &[(RawMessage, u64)],
+) -> Result<(), TranscriptCacheError> {
+    let rows = super::turns::TurnRows {
+        source: source_bytes,
+        native: native_id,
+        generation: next_generation,
+    };
+    rows.clear(tx).await?;
+    let mut turns = crate::domain::history_page::TurnIndexer::default();
+    let version = match version_i64 {
+        1 => Version::V1,
+        2 => Version::V2,
+        _ => {
+            return Err(TranscriptCacheError::Protocol(String::from(
+                "invalid replay version",
+            )));
+        }
+    };
+    for (index, (frame, conn_seq)) in frames.iter().enumerate() {
+        let ordinal_i64 = i64::try_from(index + 1)
+            .map_err(|_| TranscriptCacheError::Protocol("ordinal exceeds i64".to_owned()))?;
+        rows.observe(tx, &mut turns, version, frame, ordinal_i64)
+            .await?;
+        let conn_seq_i64 = i64::try_from(*conn_seq).map_err(|_| {
+            TranscriptCacheError::Protocol("connection_sequence exceeds i64".to_owned())
+        })?;
+        sqlx::query(
+            r"
+            INSERT INTO transcript_records (
+                source_id,
+                native_session_id,
+                generation,
+                ordinal,
+                connection_sequence,
+                raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ",
+        )
+        .bind(source_bytes)
+        .bind(native_id)
+        .bind(next_generation)
+        .bind(ordinal_i64)
+        .bind(conn_seq_i64)
+        .bind(frame.bytes())
+        .execute(&mut **tx)
+        .await?;
+    }
+    rows.finish(tx, &turns).await?;
+    Ok(())
 }

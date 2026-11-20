@@ -135,7 +135,7 @@ async fn stc_001_isolated_db_schema_version_projection_and_windows_handle_cleanu
             .expect("count node tables");
     assert_eq!(main_tables, 0);
 
-    // Check WAL, foreign_keys = ON, secure_delete = ON, and schema_version = 1 on transcript-cache.sqlite3.
+    // Check WAL, foreign_keys = ON, secure_delete = ON, and the current cache schema version on transcript-cache.sqlite3.
     let cache_pool = cache.pool_for_test().await.expect("cache pool open");
     let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
         .fetch_one(&cache_pool)
@@ -157,7 +157,7 @@ async fn stc_001_isolated_db_schema_version_projection_and_windows_handle_cleanu
             .fetch_one(&cache_pool)
             .await
             .expect("schema version");
-    assert_eq!(schema_ver, 1);
+    assert_eq!(schema_ver, 2);
 
     let key_v1 = sample_key(1, "sess-v1");
     let key_v2 = sample_key(2, "sess-v2");
@@ -590,4 +590,86 @@ async fn stc_013_purge_deleted_native_session_wipes_sqlite_wal_and_seals_writer(
             "deleted native transcript plaintext must not remain in transcript-cache.sqlite3-wal"
         );
     }
+}
+
+#[tokio::test]
+async fn history_page_read_indexes_pending_rows_without_renewing_content() {
+    use crate::domain::history_page::{Direction, PageSize, TurnRange};
+    let temp = TempDirGuard::new("history-index");
+    let clock = Arc::new(ManualRetentionClock::new(1_000_000));
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::new(30, 1_000_000).unwrap(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let key = sample_key(44, "s");
+    let mut frames = Vec::new();
+    for turn in 1..=25 {
+        let raw = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","messageId":turn.to_string(),"content":{"type":"text","text":"turn"}}}});
+        frames.push((raw_msg(&raw.to_string()), turn));
+    }
+    cache
+        .replace_with_replay(
+            &key,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            frames.clone(),
+        )
+        .await
+        .unwrap();
+    let pool = cache.pool_for_test().await.unwrap();
+    sqlx::query("DELETE FROM transcript_turns")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE transcript_sessions SET turn_state='pending', turn_count=0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    clock.set_millis(1_001_000);
+    let latest = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::first(total, PageSize::default(), false).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.total, 25);
+    assert_eq!(
+        latest.boundaries,
+        (16..=25).map(|i| (i, i)).collect::<Vec<_>>()
+    );
+    assert_eq!(latest.snapshot.records.len(), 10);
+    assert_eq!(latest.snapshot.session.last_updated_at_ms, 1_000_000);
+    let previous = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::locate(total, PageSize::default(), Direction::Older, 15).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        previous.boundaries,
+        (6..=15).map(|i| (i, i)).collect::<Vec<_>>()
+    );
+    assert_eq!(previous.generation, latest.generation);
+    frames.pop();
+    cache
+        .replace_with_replay(&key, Version::V1, CapabilityProfile::ReplayCapable, frames)
+        .await
+        .unwrap();
+    let changed = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::first(total, PageSize::default(), true).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(changed.generation, latest.generation);
+    assert_eq!(changed.total, 24);
+    drop(pool);
+    cache.shutdown().await.unwrap();
 }

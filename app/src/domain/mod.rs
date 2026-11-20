@@ -3,6 +3,7 @@ pub mod activity;
 pub mod approval_audit;
 pub mod approval_owner;
 pub mod approval_records;
+pub mod history_page;
 pub mod input_queue;
 pub(crate) mod management_audit;
 pub mod native;

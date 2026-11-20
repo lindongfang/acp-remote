@@ -11,7 +11,7 @@ use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use crate::{
     adapters::acp::{RawMessage, Version},
-    domain::native::NativeSessionKey,
+    domain::{history_page::TurnIndexer, native::NativeSessionKey},
 };
 
 use super::{
@@ -236,6 +236,7 @@ impl TranscriptCacheWriter {
 }
 
 struct SessionWriterState {
+    turns: TurnIndexer,
     active_generation: i64,
     next_ordinal: u64,
     record_count: u64,
@@ -351,6 +352,7 @@ async fn run_writer_loop(
         };
 
         if let Err(ref error) = batch_result {
+            cache.clear(); // Memory advanced inside the rolled-back transaction.
             tracing::warn!(%error, "transcript cache background write failed; degrading cache health");
             control.mark_degraded(error.to_string());
         }
@@ -522,6 +524,20 @@ async fn persist_live_item(
     .bind(raw_bytes)
     .execute(&mut **tx)
     .await?;
+    let rows = super::turns::TurnRows {
+        source: source_bytes,
+        native: native_id,
+        generation: state.active_generation,
+    };
+    rows.observe(
+        tx,
+        &mut state.turns,
+        item.protocol_version,
+        &item.raw,
+        ordinal_i64,
+    )
+    .await?;
+    rows.finish(tx, &state.turns).await?;
     Ok(())
 }
 
@@ -577,8 +593,8 @@ async fn upsert_live_session(
                 capability_profile,
                 native_recovery_state,
                 record_count,
-                byte_size
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                byte_size, generation_token
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, randomblob(16))
             ",
         )
         .bind(source_bytes)
@@ -622,6 +638,7 @@ async fn load_or_init_session_state(
 
     let Some(row) = existing else {
         return Ok(SessionWriterState {
+            turns: TurnIndexer::default(),
             active_generation: 1,
             next_ordinal: 1,
             record_count: 0,
@@ -657,6 +674,32 @@ async fn load_or_init_session_state(
     let stored_bytes: i64 = row.try_get("byte_size")?;
     let total_bytes = u64::try_from(stored_bytes).unwrap_or(0);
 
+    let rows = super::turns::TurnRows {
+        source: source_bytes,
+        native: native_id,
+        generation: active_generation,
+    };
+    let (turns, digest, record_count, max_ordinal) =
+        restore_frame_state(tx, &rows, version).await?;
+    Ok(SessionWriterState {
+        turns,
+        active_generation,
+        next_ordinal: max_ordinal.saturating_add(1),
+        record_count,
+        total_bytes,
+        digest,
+        capability_profile,
+        native_recovery_state,
+        last_synced_at_ms,
+        exists_in_db: true,
+    })
+}
+
+async fn restore_frame_state(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    rows: &super::turns::TurnRows<'_>,
+    version: Version,
+) -> Result<(TurnIndexer, IncrementalDigest, u64, u64), TranscriptCacheError> {
     let record_rows = sqlx::query(
         r"
         SELECT ordinal, raw_json
@@ -665,12 +708,14 @@ async fn load_or_init_session_state(
         ORDER BY ordinal ASC
         ",
     )
-    .bind(source_bytes)
-    .bind(native_id)
-    .bind(active_generation)
+    .bind(rows.source)
+    .bind(rows.native)
+    .bind(rows.generation)
     .fetch_all(&mut **tx)
     .await?;
 
+    rows.clear(tx).await?;
+    let mut turns = TurnIndexer::default();
     let mut digest = IncrementalDigest::new(version);
     let mut max_ordinal: u64 = 0;
     let record_count = u64::try_from(record_rows.len()).unwrap_or(0);
@@ -684,18 +729,10 @@ async fn load_or_init_session_state(
         let raw = RawMessage::parse(raw_bytes).map_err(|error| {
             TranscriptCacheError::Protocol(format!("invalid cached raw frame: {error}"))
         })?;
+        rows.observe(tx, &mut turns, version, &raw, ordinal_i64)
+            .await?;
         digest.push_frame(&raw)?;
     }
 
-    Ok(SessionWriterState {
-        active_generation,
-        next_ordinal: max_ordinal.saturating_add(1),
-        record_count,
-        total_bytes,
-        digest,
-        capability_profile,
-        native_recovery_state,
-        last_synced_at_ms,
-        exists_in_db: true,
-    })
+    Ok((turns, digest, record_count, max_ordinal))
 }

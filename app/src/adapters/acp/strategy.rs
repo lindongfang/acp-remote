@@ -69,6 +69,17 @@ pub(super) fn at<'a>(
     }
     Ok(Some(v))
 }
+
+pub(super) fn update_message_id(
+    version: Version,
+    update: RawValueRef<'_>,
+) -> Result<Option<MessageId>, AcpError> {
+    at(update, &["messageId"])?
+        .filter(|v| version != Version::V1 || !v.is_null())
+        .map(MessageId::parse)
+        .transpose()
+}
+
 impl Strategy {
     pub(super) fn select(
         offer: Version,
@@ -513,10 +524,7 @@ impl Strategy {
             | "agent_thought"
             | "agent_thought_chunk" => Ok(SessionEvent::Message {
                 session,
-                message: at(update, &["messageId"])?
-                    .filter(|v| self.version() != Version::V1 || !v.is_null())
-                    .map(MessageId::parse)
-                    .transpose()?,
+                message: update_message_id(self.version(), update)?,
                 kind,
             }),
             _ => Ok(SessionEvent::Other { session, kind }),

@@ -5,6 +5,7 @@ mod coordinator;
 mod digest;
 mod schema;
 mod store;
+mod turns;
 mod writer;
 
 #[cfg(test)]
@@ -32,7 +33,7 @@ pub use coordinator::{
     CachedViewHandle, RevalidationOutcome, TranscriptCacheCoordinator, encode_cache_state_json,
 };
 pub use digest::compute_content_digest;
-pub use store::TranscriptCacheStore;
+pub use store::{CachedPage, PageReadError, TranscriptCacheStore};
 pub use writer::TranscriptCacheWriter;
 
 pub(crate) fn entity_id_to_bytes(id: EntityId) -> Result<[u8; 16], TranscriptCacheError> {

@@ -2563,7 +2563,19 @@ pub(super) fn start(
                 }));
                 return None;
             }
-            SessionAction::ViewOpen { target_id, reason } => {
+            SessionAction::HistoryPage(_)
+            | SessionAction::ViewOpen { page: Some(_), .. }
+            | SessionAction::ViewOpenSource { page: Some(_), .. } => {
+                return Some(CommandOutcome::Result(management_error(
+                    request,
+                    "unsupported_capability",
+                )));
+            }
+            SessionAction::ViewOpen {
+                target_id,
+                reason,
+                page: None,
+            } => {
                 let Some(services) = state.session_services.get().cloned() else {
                     return Some(CommandOutcome::Result(management_error(
                         request,
@@ -2594,6 +2606,7 @@ pub(super) fn start(
                 selection,
                 native_session_id,
                 reason,
+                page: None,
             } => {
                 let Some(services) = state.session_services.get().cloned() else {
                     return Some(CommandOutcome::Result(management_error(
