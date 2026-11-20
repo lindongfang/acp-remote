@@ -168,8 +168,8 @@
 ### HN-021 无重放会话：重启后快照只读分页、外部增量边界与淘汰后限制
 
 - 用例级别：L5
-- 操作步骤：1) 受控对端为 `resume_only`（另以 `pure_memory` 重复一次），`echoUserChunk = true`，完成 25 轮后重启节点；B 以 `view.open` 携带 `page = {"turns":"10"}` 打开并以游标读取 6–15、1–5；2) 令外部客户端在对端侧追加内容后，B 触发显式同步刷新，再使用刷新前的游标；3) 推进保留期时钟删除快照后，B 重新打开会话并请求 `history.page`；4) 在第 3 步状态下由控制客户端提交新输入，并调用 `product.status` 与会话列表。
-- 预期结果：1) 页元数据 `source = "transcript_cache"`，视图状态标明 `resume_only`/`pure_memory` 能力边界与后续恢复、外部完整性边界提示，对端 `initialize` 与 `session/load` 新增 0 次；2) 无 `session/load`，`generationId` 不变、旧游标仍有效，状态明显提示外部增量不可见，不伪造新增轮次；3) 打开结果说明历史无法从原生补回，`history.page` 返回 `unsupported_capability`，不返回伪造历史；4) `resume_only` 会话的新输入经 `session/resume` 正常受理执行（`pure_memory` 按既有规则明确不可继续），`product.status` 与会话列表正常，不出现整体接入失败。
+- 操作步骤：1) 受控对端为 `resume_only`（另以 `pure_memory` 重复一次），`echoUserChunk = true`，完成 25 轮后重启节点；B 以 `view.open` 携带 `page = {"turns":"10"}` 打开并以游标读取 6–15、1–5；2) 令外部客户端在对端侧追加内容后，B 触发显式同步刷新，再使用刷新前的游标；3) 推进保留期时钟删除快照后，B 重新打开会话并请求 `history.page`；4) 在第 3 步状态下由控制客户端提交新输入，并在同一已认证管理连接调用 `session.capacity.inspect` 与会话列表。
+- 预期结果：1) 页元数据 `source = "transcript_cache"`，视图状态标明 `resume_only`/`pure_memory` 能力边界与后续恢复、外部完整性边界提示，对端 `initialize` 与 `session/load` 新增 0 次；2) 无 `session/load`，`generationId` 不变、旧游标仍有效，状态明显提示外部增量不可见，不伪造新增轮次；3) 打开结果说明历史无法从原生补回，`history.page` 返回 `unsupported_capability`，不返回伪造历史；4) `resume_only` 会话的新输入经 `session/resume` 正常受理执行（`pure_memory` 按既有规则明确不可继续），容量查询返回当前占用和上限，会话列表包含目标会话，该连接可继续使用。
 
 ### HN-022 分页中的工具原位更新与旧代际读取不覆盖新代际
 
