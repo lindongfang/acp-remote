@@ -1389,7 +1389,17 @@ async fn hn_014_append_over_the_original_socket_view() {
     assert_eq!(initial["result"]["page"]["firstTurn"], "16");
     let stream = Id128::parse_base64url(initial["result"]["streamId"].as_str().unwrap()).unwrap();
     let initial_frames = read_until_snapshot_end(&mut reader, stream).await;
-    assert_eq!(initial_frames.turns.len(), 10);
+    assert!(initial_frames.turns.is_empty());
+    let initial_turns: Vec<_> = initial["result"]["page"]["turns"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["turn"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        initial_turns,
+        ["16", "17", "18", "19", "20", "21", "22", "23", "24", "25"]
+    );
     let scope = json!({"kind":"target","targetId":root.target.encode()});
     let mid=send_command_wait(&mut a,"history.page",json!({"target":scope,"mode":{"kind":"continue","direction":"older","cursor":initial["result"]["page"]["olderCursor"]}})).await;
     let p = &mid["result"]["page"];
