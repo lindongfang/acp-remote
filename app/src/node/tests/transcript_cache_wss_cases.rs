@@ -2652,6 +2652,6 @@ async fn stc_010_revoke_during_cached_and_revalidating_stream_closes_4410() {
     node2.shutdown(None).await.expect("shutdown stc010 node2");
 }
 
-mod history_acceptance;
 #[path = "child_history_wss_cases.rs"]
 mod child_history_wss_cases;
+mod history_acceptance;
