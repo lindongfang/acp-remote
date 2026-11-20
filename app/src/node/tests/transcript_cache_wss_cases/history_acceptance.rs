@@ -2350,19 +2350,19 @@ async fn check_unprovable_prompt_history(mixed: bool) {
 
 #[tokio::test]
 async fn hn_f06_reopen_reads_external_history() {
-    check_external_history("reopen").await;
+    Box::pin(check_external_history("reopen")).await;
 }
 
 #[tokio::test]
 async fn hn_f06_reconnect_reads_external_history() {
-    check_external_history("reconnect").await;
+    Box::pin(check_external_history("reconnect")).await;
 }
 
 async fn check_external_history(reason: &str) {
     use serde_json::json;
     let f = HarnessFixture::new(reason);
     configure(&f, &json!({"replayTurns":25}));
-    let root = cold_root(&f).await;
+    let root = Box::pin(cold_root(&f)).await;
     let owner = start_node(&f);
     let node = owner.ready().await.unwrap();
     let mut first = connected(&f, &node, &root.key, &root.id).await;
