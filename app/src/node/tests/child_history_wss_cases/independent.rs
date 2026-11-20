@@ -170,9 +170,17 @@ async fn two_observers(version: u8) {
     compare_page(&snapshot(&mut c, &other).await, &expected[..11]);
     let mut next = scope;
     next["mode"] = json!({"kind":"continue","direction":"newer","cursor":first["result"]["page"]["newerCursor"]});
-    let last = send_command_wait(&mut b, "history.page", next).await;
-    assert_eq!(last["result"]["page"]["lastTurn"], "12");
+    let (last, other_last) = tokio::join!(
+        send_command_wait(&mut b, "history.page", next.clone()),
+        send_command_wait(&mut c, "history.page", next)
+    );
+    for page in [&last, &other_last] {
+        assert_eq!(page["result"]["page"]["firstTurn"], "11");
+        assert_eq!(page["result"]["page"]["lastTurn"], "12");
+        assert_eq!(page["result"]["page"]["order"], "ascending");
+    }
     compare_page(&snapshot(&mut b, &last).await, &expected[11..]);
+    compare_page(&snapshot(&mut c, &other_last).await, &expected[11..]);
     let stored = s
         .node
         .session_services
