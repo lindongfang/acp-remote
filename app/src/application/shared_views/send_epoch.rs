@@ -45,6 +45,7 @@ impl RestoredDisplayTarget {
             group: group.clone(),
             epoch,
             sealed: Arc::new(AtomicBool::new(false)),
+            confirmed_against: Arc::default(),
             target: Some(self.flag.clone()),
         })
     }
@@ -54,6 +55,7 @@ pub struct OwnedDisplaySendView {
     pub(super) group: OwnedDisplaySendGroup,
     pub(super) epoch: ViewEpoch,
     pub(super) sealed: Arc<AtomicBool>,
+    confirmed_against: Arc<std::sync::OnceLock<Arc<AtomicBool>>>,
     target: Option<Arc<AtomicBool>>,
 }
 impl OwnedDisplaySendGroup {
@@ -88,6 +90,7 @@ impl OwnedDisplaySendGroup {
             group: self.clone(),
             epoch,
             sealed: Arc::new(AtomicBool::new(false)),
+            confirmed_against: Arc::default(),
             target: None,
         }
     }
@@ -139,6 +142,7 @@ impl OwnedDisplaySendGroup {
             group: self.clone(),
             epoch,
             sealed: Arc::new(AtomicBool::new(false)),
+            confirmed_against: Arc::default(),
             target: Some(target),
         })
     }
@@ -199,11 +203,19 @@ impl Default for OwnedDisplaySendGroup {
     }
 }
 impl OwnedDisplaySendView {
+    // A follower can drain its own completed candidate until a genuinely new
+    // publication seals the byte-identical current view.
+    pub(crate) fn retain_until_replaced(&self, current: &Self) -> Result<(), ViewError> {
+        self.confirmed_against
+            .set(Arc::clone(&current.sealed))
+            .map_err(|_| ViewError::InvalidStage)
+    }
     pub(crate) fn next_epoch(&self, epoch: ViewEpoch) -> Self {
         Self {
             group: self.group.clone(),
             epoch,
             sealed: Arc::new(AtomicBool::new(false)),
+            confirmed_against: Arc::default(),
             target: self.target.clone(),
         }
     }
@@ -231,7 +243,12 @@ impl OwnedDisplaySendView {
         Ok(self.current_in(&fence))
     }
     pub(super) fn current_in(&self, group: &Group) -> bool {
-        !self.sealed.load(Ordering::Acquire) && self.target_generation_current_in(group)
+        !self.sealed.load(Ordering::Acquire)
+            && !self
+                .confirmed_against
+                .get()
+                .is_some_and(|flag| flag.load(Ordering::Acquire))
+            && self.target_generation_current_in(group)
     }
     /// A normal replay may replace a projection while retaining the original native generation.
     pub(super) fn target_generation_current_in(&self, group: &Group) -> bool {

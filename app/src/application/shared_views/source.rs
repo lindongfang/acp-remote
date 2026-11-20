@@ -560,12 +560,6 @@ impl<S, R> SourceCore<S, R> {
             .target_publication(key)?
             .upgrade()
             .ok_or(ViewError::SourceReleased)?;
-        // A reader selecting the in-flight candidate needs its own read epoch
-        // to remain the published generation after completion.
-        let mut comparison = publication
-            .comparison
-            .lock()
-            .map_err(|_| ViewError::ReadFailure)?;
         let candidate = publication
             .candidate
             .read()
@@ -584,10 +578,6 @@ impl<S, R> SourceCore<S, R> {
         {
             return Err(ViewError::StaleCursor);
         }
-        if comparison.upgrade().is_some_and(|entry| entry.read == read) {
-            *comparison = std::sync::Weak::new();
-        }
-        drop(comparison);
         Ok(candidate)
     }
     #[allow(
@@ -1486,7 +1476,10 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
         if let Some(comparison) = comparison.filter(|c| c.read == read)
             && Self::unchanged_replay(&target.current, candidate)?
         {
-            candidate.published.send.seal()?;
+            candidate
+                .published
+                .send
+                .retain_until_replaced(&target.current.published.send)?;
             *target
                 .published
                 .candidate

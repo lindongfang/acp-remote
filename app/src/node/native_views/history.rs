@@ -81,6 +81,21 @@ impl HistoryRequest {
             }
         }))
     }
+    fn requires_native_replay(
+        &self,
+        tc: &TranscriptCacheCoordinator,
+        key: &NativeSessionKey,
+    ) -> bool {
+        use super::CapabilityProfile::{PureMemory, ResumeOnly};
+        match self.open {
+            Some(ReadReason::ExplicitRefresh) => true,
+            Some(ReadReason::Reopen | ReadReason::Reconnect) => !matches!(
+                tc.known_source_capabilities(key.source()),
+                Some((_, ResumeOnly | PureMemory))
+            ),
+            _ => false,
+        }
+    }
     fn require_replayable_mode(&self) -> Result<(), PageError> {
         if let HistoryMode::Continue { cursor, direction } = &self.input.mode {
             self.scope(*direction)
@@ -181,7 +196,7 @@ impl NodeNativeViewsService {
         }
         let (read, source) = if let Some(live) = live.filter(|candidate| {
             (candidate.is_loaded || candidate.replay_complete)
-                && reason != ReadReason::ExplicitRefresh
+                && !request.requires_native_replay(tc, &key)
         }) {
             let read = live.reader.open_current(client, &key).await?;
             (

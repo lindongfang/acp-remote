@@ -919,7 +919,7 @@ async fn check_two_readers(real_timeout: bool) {
         }
         let inspect = send_command_wait(&mut a, "session.capacity.inspect", json!({})).await;
         assert_eq!(inspect["result"]["occupied"], 1);
-        assert!(since.elapsed() < Duration::from_secs(1800));
+        assert!(since.elapsed() < Duration::from_mins(30));
         eprintln!("HN-023 sampled original occupied root at 1799 seconds");
         let pool = node.storage.as_ref().unwrap().pool_for_test();
         timeout(Duration::from_secs(60),async {
@@ -929,7 +929,7 @@ async fn check_two_readers(real_timeout: bool) {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }).await.expect("idle timeout physically reclaims this root on the real scanner");
-        assert!(since.elapsed() >= Duration::from_secs(1800));
+        assert!(since.elapsed() >= Duration::from_mins(30));
         assert_eq!(
             send_command_wait(&mut a, "session.capacity.inspect", json!({})).await["result"]["occupied"],
             0
@@ -1790,6 +1790,70 @@ async fn hn_014_cold_resume_over_25_interactive_turns() {
     Box::pin(check_original_view_append(true)).await;
 }
 
+async fn follow_local_replay(
+    f: &HarnessFixture,
+    node: &NodeRuntime,
+    root: &ColdRoot,
+    gate_name: &str,
+) -> (
+    crate::node::native_views::NativeLocalViewRead,
+    crate::application::shared_views::local_authority::AuthenticatedLocalViewClient,
+) {
+    use crate::application::shared_views::budget::ReadReason;
+    use crate::domain::shared_view::ReadMode;
+    use crate::node::native_views::NativeLocalReadProgress;
+    let gate = f.area.directory.join(gate_name);
+    configure(f, &serde_json::json!({"loadBarrierReleaseFile":gate}));
+    let views = &node.session_services.as_ref().unwrap().views;
+    let policy = node.application_policy().unwrap();
+    let actor = policy_actor(&policy, &root.key, &root.id, Id128::new([77; 16])).await;
+    let client = views.accept_actor(actor).await.unwrap();
+    let original = views
+        .open(&client, root.target, ReadReason::Reopen)
+        .await
+        .unwrap();
+    timeout(Duration::from_secs(8), async {
+        while original.original_progress(&client).await.unwrap()
+            != NativeLocalReadProgress::CandidateReady
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let (follow, meta) = original
+        .inflight_original(&client)
+        .await
+        .unwrap()
+        .into_parts();
+    assert_ne!(original.descriptor().view_epoch(), meta.view_epoch());
+    assert_eq!(follow.descriptor().read_epoch(), Some(meta.read_epoch()));
+    assert!(original.inflight_original(&client).await.is_err());
+    std::fs::write(gate, b"done").unwrap();
+    timeout(Duration::from_secs(8), async {
+        loop {
+            let descriptor = follow.wait_change(&client).await.unwrap();
+            assert_eq!(descriptor.read_epoch(), Some(meta.read_epoch()));
+            assert_eq!(descriptor.view_epoch(), meta.view_epoch());
+            if descriptor.read_mode() == ReadMode::ReplayComplete {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    timeout(Duration::from_secs(8), async {
+        while follow.original_progress(&client).await.unwrap() != NativeLocalReadProgress::Complete
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let _ = original.release();
+    (follow, client)
+}
+
 async fn check_original_view_append(interactive: bool) {
     use serde_json::json;
     let f = HarnessFixture::new("hn014-tail");
@@ -1862,9 +1926,35 @@ async fn check_original_view_append(interactive: bool) {
             .is_empty()
     );
     assert_eq!(p["liveTail"], false);
+    if !interactive {
+        let (follow, _) = Box::pin(follow_local_replay(&f, &node, &root, "local-replay")).await;
+        let _ = follow.release();
+    }
     let ordinary_key = SigningKey::from_slice(&[98; 32]).unwrap();
     let ordinary_id = pair_browser(&node, &ordinary_key, "Ordinary view observer").await;
     let mut ordinary_reader = connected(&f, &node, &ordinary_key, &ordinary_id).await;
+    if !interactive {
+        let loads = f
+            .peer_logs()
+            .iter()
+            .filter(|e| e["method"] == "session/load")
+            .count();
+        let same = send_command_wait(
+            &mut ordinary_reader,
+            "view.open",
+            json!({"targetId":root.target.encode(),"reason":"reconnect","page":{}}),
+        )
+        .await;
+        assert_eq!(
+            same["result"]["page"]["generationId"],
+            initial["result"]["page"]["generationId"]
+        );
+        assert_eq!(
+            snapshot(&mut ordinary_reader, &same).await.raw,
+            initial_frames.raw
+        );
+        wait_for_peer_method(&f, "session/load", loads + 1).await;
+    }
     let ordinary = send_command_wait(
         &mut ordinary_reader,
         "view.open",
@@ -2350,15 +2440,29 @@ async fn check_unprovable_prompt_history(mixed: bool) {
 
 #[tokio::test]
 async fn hn_f06_reopen_reads_external_history() {
-    Box::pin(check_external_history("reopen")).await;
+    Box::pin(check_external_history("reopen", None)).await;
 }
 
 #[tokio::test]
 async fn hn_f06_reconnect_reads_external_history() {
-    Box::pin(check_external_history("reconnect")).await;
+    Box::pin(check_external_history("reconnect", None)).await;
 }
 
-async fn check_external_history(reason: &str) {
+#[tokio::test]
+async fn hn_r06_paged_reopen() {
+    for page in [serde_json::json!({}), serde_json::json!({"turns":"4"})] {
+        Box::pin(check_external_history("reopen", Some(page))).await;
+    }
+}
+
+#[tokio::test]
+async fn hn_r06_paged_reconnect() {
+    for page in [serde_json::json!({}), serde_json::json!({"turns":"4"})] {
+        Box::pin(check_external_history("reconnect", Some(page))).await;
+    }
+}
+
+async fn check_external_history(reason: &str, page_request: Option<serde_json::Value>) {
     use serde_json::json;
     let f = HarnessFixture::new(reason);
     configure(&f, &json!({"replayTurns":25}));
@@ -2387,6 +2491,96 @@ async fn check_external_history(reason: &str) {
         .iter()
         .filter(|e| e["method"] == "session/load")
         .count();
+    if let Some(page_request) = page_request {
+        let opened = send_command_wait(
+            &mut third,
+            "view.open",
+            json!({"targetId":root.target.encode(),"reason":reason,"page":page_request}),
+        )
+        .await;
+        let meta = &opened["result"]["page"];
+        assert_eq!(meta["lastTurn"], "26", "{opened}");
+        wait_for_peer_method(&f, "session/load", loads + 1).await;
+        let turns = page_request["turns"]
+            .as_str()
+            .map_or(10, |v| v.parse::<usize>().unwrap());
+        assert_eq!(meta["firstTurn"], (27 - turns).to_string());
+        let frames = snapshot(&mut third, &opened).await;
+        assert_eq!(frames.raw.len(), turns);
+        for (frame, n) in frames.raw.iter().zip(29 - turns..=28) {
+            assert_eq!(
+                frame["params"]["update"]["content"]["text"],
+                format!("U{n:04}")
+            );
+        }
+        let older = |cursor: &serde_json::Value| json!({"target":{"kind":"target","targetId":root.target.encode()},"mode":{"kind":"continue","direction":"older","cursor":cursor}});
+        let stale = send_command_wait(
+            &mut third,
+            "history.page",
+            older(&page["result"]["page"]["olderCursor"]),
+        )
+        .await;
+        assert_eq!(stale["error"]["code"], "stale_cursor");
+        let mut cursor = meta["olderCursor"].clone();
+        let mut last = 26 - turns;
+        while last > 0 {
+            let mut request = older(&cursor);
+            request["turns"] = json!(turns.to_string());
+            let prev = send_command_wait(&mut third, "history.page", request).await;
+            assert_eq!(prev["result"]["page"]["lastTurn"], last.to_string());
+            let first_turn = last.saturating_sub(turns - 1).max(1);
+            let frames = snapshot(&mut third, &prev).await;
+            assert_eq!(frames.raw.len(), last - first_turn + 1);
+            for (frame, n) in frames.raw.iter().zip(first_turn..=last) {
+                let original = if n > 2 { n + 2 } else { n };
+                let prefix = if original == 10 { "edited" } else { "U" };
+                assert_eq!(
+                    frame["params"]["update"]["content"]["text"],
+                    format!("{prefix}{original:04}")
+                );
+            }
+            cursor = prev["result"]["page"]["olderCursor"].clone();
+            last = first_turn - 1;
+        }
+        assert_eq!(
+            f.peer_logs()
+                .iter()
+                .filter(|e| e["method"] == "session/load")
+                .count(),
+            loads + 1
+        );
+        let (equivalent, client) =
+            Box::pin(follow_local_replay(&f, &node, &root, "identical-replay")).await;
+        configure(&f, &json!({"externalRewrite": false, "replayTurns": 29}));
+        let (follow, _) = Box::pin(follow_local_replay(&f, &node, &root, "local-replay")).await;
+        let _ = follow.release();
+        assert!(matches!(
+            timeout(Duration::from_secs(5), equivalent.wait_change(&client))
+                .await
+                .unwrap(),
+            Err(crate::domain::shared_view::ViewError::StaleCursor)
+        ));
+        let _ = equivalent.release();
+        let changed = send_command_wait(
+            &mut third,
+            "view.open",
+            json!({"targetId":root.target.encode(),"reason":"first_open","page":{}}),
+        )
+        .await;
+        let changed_page = &changed["result"]["page"];
+        assert_eq!(changed_page["lastTurn"], "29");
+        assert_ne!(changed_page["generationId"], meta["generationId"]);
+        assert_eq!(
+            snapshot(&mut third, &changed).await.raw.last().unwrap()["params"]["update"]["content"]
+                ["text"],
+            "U0029"
+        );
+        third.close(None).await.unwrap();
+        held.close(None).await.unwrap();
+        first.close(None).await.unwrap();
+        node.shutdown(None).await.unwrap();
+        return;
+    }
     let opened = send_command_wait(
         &mut third,
         "view.open",

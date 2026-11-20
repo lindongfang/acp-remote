@@ -45,6 +45,24 @@ impl<R> ObservedReferences<R> {
         }
     }
 }
+impl<R> TargetPublication<R> {
+    fn generation_for_progress(
+        &self,
+        mode: ReadMode,
+    ) -> Result<Option<Arc<TargetGeneration<R>>>, ViewError> {
+        Ok(match mode {
+            ReadMode::Replaying => self
+                .candidate
+                .read()
+                .map_err(|_| ViewError::ReadFailure)?
+                .upgrade(),
+            ReadMode::ReplayComplete => Some(Arc::clone(
+                &*self.current.read().map_err(|_| ViewError::ReadFailure)?,
+            )),
+            _ => None,
+        })
+    }
+}
 impl<S, R, A, C> ViewReadService<S, R, A, C>
 where
     S: Clone + Eq + Send + Sync + 'static,
@@ -136,40 +154,30 @@ where
         {
             return Ok(OriginalReadProgress::Failed(error));
         }
-        retained.generation = match status.read_mode() {
-            ReadMode::Replaying => publication
-                .candidate
-                .read()
-                .map_err(|_| ViewError::ReadFailure)?
-                .upgrade(),
-            ReadMode::ReplayComplete => Some(Arc::clone(
-                &*publication
-                    .current
-                    .read()
-                    .map_err(|_| ViewError::ReadFailure)?,
-            )),
-            _ => return Ok(OriginalReadProgress::Pending),
-        };
+        retained.generation = publication.generation_for_progress(status.read_mode())?;
         let Some(generation) = retained.generation.as_ref() else {
             return Ok(OriginalReadProgress::Pending);
         };
-        retained.snapshot = Some(Arc::clone(
-            &*generation
-                .snapshot
-                .read()
-                .map_err(|_| ViewError::ReadFailure)?,
-        ));
         let descriptor = retained
             .snapshot
-            .as_ref()
-            .ok_or(ViewError::ReadFailure)?
+            .insert(Arc::clone(
+                &*generation
+                    .snapshot
+                    .read()
+                    .map_err(|_| ViewError::ReadFailure)?,
+            ))
             .descriptor;
         let epoch = descriptor.view_epoch();
-        let confirmed_current = status.read_mode() == ReadMode::ReplayComplete
-            && epoch == handle.descriptor.view_epoch()
-            && request.confirms_view(epoch);
+        let confirmed =
+            status.read_mode() == ReadMode::ReplayComplete && request.confirms_view(epoch);
+        let confirmed_current = confirmed && epoch == handle.descriptor.view_epoch();
+        // A follower finishes its own candidate even when the previous
+        // publication remains current. Its send fence follows that publication.
+        let confirmed_follower = confirmed
+            && handle.descriptor.read_epoch() == Some(read)
+            && handle.stream.view_current()?;
         if descriptor.source_stamp() != handle.descriptor.source_stamp()
-            || (!confirmed_current && descriptor.read_epoch() != Some(read))
+            || (!confirmed_current && !confirmed_follower && descriptor.read_epoch() != Some(read))
         {
             return Ok(OriginalReadProgress::Pending);
         }
@@ -185,6 +193,12 @@ where
         Ok(match (status.read_mode(), descriptor.read_mode()) {
             (ReadMode::ReplayComplete, ReadMode::ReplayComplete) if confirmed_current => {
                 OriginalReadProgress::ConfirmedCurrent { read, epoch }
+            }
+            (ReadMode::ReplayComplete, ReadMode::ReplayComplete) if confirmed_follower => {
+                OriginalReadProgress::Complete {
+                    read,
+                    epoch: handle.descriptor.view_epoch(),
+                }
             }
             (ReadMode::Replaying, ReadMode::Replaying) => {
                 OriginalReadProgress::CandidateReady { read, epoch }
