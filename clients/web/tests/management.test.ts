@@ -324,7 +324,7 @@ describe("C50 authenticated request isolation", () => {
       const oldId = commands()[0]!.requestId;
       fake.receive({ v:1, type:"result", requestId:oldId, ok:false, result:null, error:{code:"not_found"} });
       await expect(first).rejects.toMatchObject({code:"not_found"});
-      const current = connection.nodeInfo();
+      const current = connection.nodeInfo().catch((error: unknown) => error);
       const currentId = commands()[1]!.requestId;
       const opened = (requestId: unknown, streamId: string) => ({
         v:1, type:"view.opened", requestId, streamId, viewEpoch:id(19), snapshotRevision:"1",
@@ -340,6 +340,20 @@ describe("C50 authenticated request isolation", () => {
       const otherId = commands()[3]!.requestId;
       fake.receive(result(otherId, opened(otherId, id(22))));
       await other;
+      for (const stream of [id(22), id(20)]) {
+        const mismatched = connection.openSessionView(id(11), "explicit_refresh", {}, true);
+        const waitingId = commands().at(-1)!.requestId;
+        const crossed = result(waitingId, opened(oldId, stream));
+        fake.receive(crossed);
+        await expect(mismatched).rejects.toMatchObject({code:"invalid_response"});
+        fake.receive(crossed);
+      }
+      const next = connection.openSessionView(id(11), "explicit_refresh", {}, true);
+      const nextId = commands().at(-1)!.requestId;
+      const repeated = result(nextId, opened(nextId, id(25)));
+      fake.receive(repeated);
+      fake.receive(repeated);
+      await next;
       fake.receive(result(oldId, opened(oldId, id(22))));
       fake.receive(result(retryId, active));
       fake.receive(result(oldId, opened(otherId, id(23))));

@@ -231,17 +231,12 @@ export class SharedViewController {
         } else void this.rebindSharedView(record, opened);
       },
       retrySyncRequested: () => {
+        if (this.#sharedSessionDisplay !== display) return;
         const spec = this.#sharedViewSpec;
         if (spec?.kind === "target") {
-          void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh");
+          return this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh", { turns });
         } else if (spec?.kind === "source") {
-          void this.openSharedSourceView(
-            record,
-            spec.selection,
-            spec.nativeSessionId,
-            null,
-            "explicit_refresh",
-          );
+          return this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "explicit_refresh", { turns });
         }
       },
       snapshotReady: () => {
@@ -262,8 +257,8 @@ export class SharedViewController {
     let retired = false;
     const reload = (windowTurns?: string) => {
       const page = windowTurns ? { turns: windowTurns } : {};
-      if (spec.kind === "target") void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh", page);
-      else void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "explicit_refresh", page);
+      if (spec.kind === "target") return this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh", page);
+      return this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "explicit_refresh", page);
     };
     const controller = new HistoryPageController(doc, spec, connection, {
       credit: (id, seq) => connection.sendSessionViewCredit(id, seq),
@@ -538,7 +533,10 @@ export class SharedViewController {
     const generation = this.#port.getManagementGeneration();
     const attempt = ++this.#sharedViewAttempt;
     this.#sharedViewTargetId = null;
-    this.#sharedViewSpec = { kind: "source", selection, nativeSessionId };
+    const previousSpec = this.#sharedViewSpec;
+    if (previousSpec?.kind !== "source" || previousSpec.selection !== selection || previousSpec.nativeSessionId !== nativeSessionId) {
+      this.#sharedViewSpec = { kind: "source", selection, nativeSessionId };
+    }
     this.#port.persistSourceViewSpec?.(selection, nativeSessionId);
     if (connection === null) {
       if (submit !== null) submit.disabled = false;

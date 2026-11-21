@@ -1568,8 +1568,14 @@ export class ManagementConnection {
       pending.reject(new ManagementRequestError(frame.error.code));
       return;
     }
-    void Promise.resolve(frame.result)
-      .then((value) => pending.parse(value))
+    const value = frame.result;
+    if (pending.parse === this.#trackOpenedView && value !== null && typeof value === "object" &&
+        !Array.isArray(value) && value.type === "view.opened" && value.requestId !== frame.requestId) {
+      pending.reject(new ManagementProtocolError("invalid_response"));
+      return;
+    }
+    // Register the stream before a duplicate frame can enter late-refresh cleanup.
+    void (async () => pending.parse(value))()
       .then((value) => pending.resolve(value))
       .catch(() => {
         pending.reject(

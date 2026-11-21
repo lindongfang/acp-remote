@@ -20,7 +20,7 @@ export interface ViewDisplayTransport {
   snapshotReady?(): void;
   readFailed?(reason: string): void;
   reopenRequested?(fullHistory?: boolean): void;
-  retrySyncRequested?(): void;
+  retrySyncRequested?(): void | Promise<void>;
 }
 
 interface StagingRebindState {

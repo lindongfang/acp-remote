@@ -417,8 +417,11 @@ describe("HN-030 manual history refresh", () => {
     expect(body.textContent).not.toMatch(/old twelve|请刷新|old late|invalid_sequence/);
     expect(open.mock.calls.slice(1)).toEqual(Array(2).fill(source ? [selection,"native-R","explicit_refresh",{turns:"5"},true] : [TARGET_ID,"explicit_refresh",{turns:"5"},true]));
   });
-  it.each([false, true])("retries degraded sync in the promoted five-turn window (source=%s)", async source => {
-    const {body, open, button, end, pageMessages} = await fixture(source);
+  it.each([
+    {source:false, rejected:false}, {source:true, rejected:false},
+    {source:false, rejected:true}, {source:true, rejected:true},
+  ])("retries degraded sync in the promoted five-turn window (source=$source, rejected=$rejected)", async ({source, rejected}) => {
+    const {controller, body, open, button, end, pageMessages} = await fixture(source);
     const opened = paged(STREAM_B);
     open.mockResolvedValueOnce({...opened, status: {...opened.status, syncState: "degraded_capacity_full"}});
     button.click();
@@ -426,10 +429,26 @@ describe("HN-030 manual history refresh", () => {
     end(STREAM_B, pageMessages(STREAM_B, "degraded twelve"));
     const retry = body.findAll(node => node.tagName === "BUTTON" && node.textContent === "重试同步" && !node.hidden);
     expect(retry).toHaveLength(1);
-    retry[0]!.click();
-    expect(open.mock.calls.slice(2)).toEqual([source
-      ? [selection, "native-R", "explicit_refresh", {turns: "5"}]
-      : [TARGET_ID, "explicit_refresh", {turns: "5"}]]);
+    const request = source ? [selection, "native-R", "explicit_refresh", {turns: "5"}]
+      : [TARGET_ID, "explicit_refresh", {turns: "5"}];
+    const streams = [b64(20), b64(21), b64(22)];
+    for (const [index, stream] of (rejected ? [null, ...streams] : streams).entries()) {
+      const page = controller.sharedSessionDisplay!.element as unknown as DomNode;
+      const buttons = page.findAll(n => n.tagName === "BUTTON" && n.textContent === "重试同步" && !n.hidden);
+      expect(buttons).toHaveLength(1);
+      expect(buttons[0]!.disabled).toBe(false);
+      if (stream) open.mockResolvedValueOnce({...paged(stream), status: {...opened.status, syncState: "degraded_capacity_full"}});
+      else open.mockRejectedValueOnce(new ManagementRequestError("not_found"));
+      buttons[0]!.click();
+      buttons[0]!.click();
+      expect(open.mock.calls.slice(2)).toEqual(Array(index + 1).fill(request));
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (stream) end(stream, pageMessages(stream, "another degraded twelve"));
+      else {
+        expect(controller.sharedSessionDisplay!.element).toBe(page);
+        expect(page.textContent).toContain("degraded twelve");
+      }
+    }
   });
   it("renders the unchanged stream's next turn once without reopening", async () => {
     const {body,open,button,send} = await fixture(false,false);
