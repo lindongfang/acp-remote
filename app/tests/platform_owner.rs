@@ -373,18 +373,15 @@ async fn fixture_process() {
     }
     if mode == "escape" {
         use std::os::windows::process::CommandExt;
-        use windows_sys::Win32::{
-            Foundation::GetHandleInformation, System::Threading::CREATE_BREAKAWAY_FROM_JOB,
-        };
+        use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
         let inherited: usize = std::env::var("ACP_OWNER_SENTINEL")
             .unwrap()
             .parse()
             .unwrap();
-        let mut flags = 0;
-        // SAFETY: A numeric sentinel is probed without taking ownership/closing it.
-        assert_eq!(
-            unsafe { GetHandleInformation(inherited as HANDLE, &raw mut flags) },
-            0,
+        let expected = std::env::var("ACP_OWNER_SENTINEL_FILE_ID").unwrap();
+        assert_ne!(
+            file_identity(inherited as HANDLE).as_deref(),
+            Some(expected.as_str()),
             "unlisted inheritable handle escaped"
         );
         let attempted = std::process::Command::new(powershell())
@@ -426,24 +423,40 @@ async fn fixture_process() {
     std::process::exit(23);
 }
 
+fn file_identity(handle: HANDLE) -> Option<String> {
+    use windows_sys::Win32::Storage::FileSystem::GetFileInformationByHandle;
+    let mut info = std::mem::MaybeUninit::uninit();
+    // SAFETY: Windows validates the handle and initializes the output on success.
+    if unsafe { GetFileInformationByHandle(handle, info.as_mut_ptr()) } == 0 {
+        return None;
+    }
+    // SAFETY: The call succeeded.
+    let info = unsafe { info.assume_init() };
+    Some(format!(
+        "{}-{}-{}",
+        info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
+    ))
+}
+
 #[tokio::test]
 async fn unlisted_inheritable_handle_and_breakaway_are_rejected() {
-    use windows_sys::Win32::{Security::SECURITY_ATTRIBUTES, System::Threading::CreateEventW};
+    use windows_sys::Win32::Foundation::{HANDLE_FLAG_INHERIT, SetHandleInformation};
     let scratch = Scratch::new();
-    let attributes = SECURITY_ATTRIBUTES {
-        nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>()).unwrap(),
-        lpSecurityDescriptor: std::ptr::null_mut(),
-        bInheritHandle: 1,
-    };
-    // SAFETY: A dedicated inheritable unnamed event tests the explicit child allowlist.
-    let event = unsafe { CreateEventW(&raw const attributes, 1, 0, std::ptr::null()) };
-    assert!(!event.is_null());
-    // SAFETY: CreateEvent transferred this event handle.
-    let event = unsafe { OwnedHandle::from_raw_handle(event) };
+    let sentinel = std::fs::File::create_new(scratch.0.join("sentinel")).unwrap();
+    let handle = sentinel.as_raw_handle();
+    // SAFETY: The scratch file owns this handle throughout the child run.
+    assert_ne!(
+        unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) },
+        0
+    );
     let mut input = fixture_spec("escape", &scratch.0.join("unused"));
     input.env.push((
         "ACP_OWNER_SENTINEL".into(),
-        format!("{}", event.as_raw_handle() as usize).into(),
+        format!("{}", handle as usize).into(),
+    ));
+    input.env.push((
+        "ACP_OWNER_SENTINEL_FILE_ID".into(),
+        file_identity(handle).unwrap().into(),
     ));
     let mut owner = OwnedProcess::spawn(input, Instant::now() + Duration::from_secs(10))
         .await
@@ -468,7 +481,7 @@ async fn unlisted_inheritable_handle_and_breakaway_are_rejected() {
         .unwrap()
         .unwrap();
     assert_eq!(exit, 0, "{}", String::from_utf8_lossy(&detail));
-    drop((event, io.stdin, io.stdout));
+    drop((sentinel, io.stdin, io.stdout));
 }
 
 #[tokio::test]
