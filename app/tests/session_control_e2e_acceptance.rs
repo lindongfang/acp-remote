@@ -424,6 +424,20 @@ async fn hn_030_revoke_before_notice_in_edge() {
     run_controlled_history("revoke-before-notice").await;
 }
 
+async fn pair_history_readers(area: &E2eTempArea) {
+    for name in ["a", "b"] {
+        tokio::time::timeout(
+            Duration::from_secs(50),
+            pair_one_client(
+                &area.ipc_addr,
+                &area.work_dir.join(format!("pairing-{name}.json")),
+            ),
+        )
+        .await
+        .expect("browser pairing deadline");
+    }
+}
+
 async fn run_controlled_history(scenario: &str) {
     let repo = repo_root();
     let area = setup_temp_e2e_area();
@@ -460,17 +474,7 @@ async fn run_controlled_history(scenario: &str) {
             .spawn()
             .unwrap(),
     );
-    for name in ["a", "b"] {
-        tokio::time::timeout(
-            Duration::from_secs(50),
-            pair_one_client(
-                &area.ipc_addr,
-                &area.work_dir.join(format!("pairing-{name}.json")),
-            ),
-        )
-        .await
-        .expect("browser pairing deadline");
-    }
+    pair_history_readers(&area).await;
     let seed = area.work_dir.join("seed-child.json");
     while !seed.exists() {
         if guard
