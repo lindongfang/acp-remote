@@ -1,5 +1,6 @@
 import { createInterface } from "node:readline";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 
 function parseArgs(argv) {
@@ -17,8 +18,11 @@ function parseArgs(argv) {
 const stateDir = parseArgs(process.argv.slice(2));
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+let replayHash;
 function emit(payload) {
-  process.stdout.write(`${JSON.stringify(payload)}\n`);
+  const line = `${JSON.stringify(payload)}\n`;
+  if (payload.method === "session/update") replayHash?.update(line);
+  process.stdout.write(line);
 }
 
 function appendEvent(entry) {
@@ -72,7 +76,10 @@ async function processPromptQueue() {
           result: { messageId: `e2e-inserted-${promptCounter}` },
         });
       }
-      const replyText = `E2E回复:${rawPrompt}`;
+      const historyAppend = existsSync(path.join(stateDir,"manual-refresh")) && req.params.prompt?.[0]?.text === "HN live user 13";
+      if (historyAppend) emit({jsonrpc:"2.0",method:"session/update",params:{sessionId,
+        update:{sessionUpdate:"user_message_chunk",messageId:"13",content:{type:"text",text:"HN live user 13"}}}});
+      const replyText = historyAppend ? "HN live reply 13" : `E2E回复:${rawPrompt}`;
       historyTexts.push(replyText);
       emit({
         jsonrpc: "2.0",
@@ -206,6 +213,33 @@ rl.on("line", (line) => {
     case "session/load":
     case "session/resume": {
       const sessionId = params.sessionId ?? activeSessionId;
+      if (existsSync(path.join(stateDir,"manual-refresh")) && method === "session/resume" && params.replayFrom === undefined) {
+        emit({jsonrpc:"2.0",method:"session/update",params:{sessionId,update:{sessionUpdate:"state_update",state:"idle"}}});
+        emit({jsonrpc:"2.0",id:msg.id,result:{sessionId}});
+        break;
+      }
+      if (existsSync(path.join(stateDir, "history-navigation"))) {
+        replayHash = createHash("sha256");
+        const version = existsSync(path.join(stateDir, "changed")) ? "new" : "original";
+        const update = (sessionUpdate, text, id) => emit({
+          jsonrpc: "2.0", method: "session/update",
+          params: { sessionId, update: { sessionUpdate, messageId: id, content: { type: "text", text } } },
+        });
+        update("agent_message_chunk", "HN prelude", "prelude");
+        const manualRefresh = existsSync(path.join(stateDir, "manual-refresh"));
+        const editFile = path.join(stateDir, "edit-twelfth");
+        const edited = existsSync(editFile) && readFileSync(editFile, "utf8") === "1";
+        const firstNative = path.join(stateDir,"first-native");
+        const otherSession = existsSync(firstNative) && sessionId !== readFileSync(firstNative,"utf8");
+        const defaultPrefix = otherSession ? "other target" : version;
+        let twelfthPrefix = defaultPrefix;
+        if (manualRefresh && edited && !otherSession) twelfthPrefix = "edited";
+        if (existsSync(path.join(stateDir,"failed-attempt"))) twelfthPrefix = "failed attempt";
+        for (let turn = 1; turn <= (sessionId === "child-history" || manualRefresh ? 12 : 25); turn++) {
+          const prefix = turn === 12 ? twelfthPrefix : defaultPrefix;
+          update("user_message_chunk", `HN ${prefix} turn ${turn}`, String(turn));
+        }
+      }
       const entries = historyTexts.length > 0 ? historyTexts : ["E2E重放历史输出"];
       for (const text of entries) {
         emit({
@@ -238,6 +272,10 @@ rl.on("line", (line) => {
           update: { sessionUpdate: "state_update", state: processing ? "running" : "idle" },
         },
       });
+      if (replayHash) {
+        appendEvent({method:"fixture/replay",sessionId,digest:replayHash.digest("hex")});
+        replayHash = undefined;
+      }
       emit({
         jsonrpc: "2.0",
         id: msg.id,

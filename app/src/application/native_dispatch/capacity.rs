@@ -42,7 +42,18 @@ pub(super) struct CapacityResource<P: super::NativeApprovalPort> {
     pub(super) reads: Mutex<Vec<Weak<TaskSlot>>>,
 }
 
+pub struct ChildHistoryLease {
+    guard: Arc<dyn crate::application::queue_owner::AutomaticCloseGuard>,
+    operation: super::EntityId,
+}
+impl Drop for ChildHistoryLease {
+    fn drop(&mut self) {
+        let _ = self.guard.finish(self.operation);
+    }
+}
+
 pub(super) trait ReadCapacityAdmission: Send + Sync {
+    fn claim_child_history(&self) -> Result<ChildHistoryLease, ViewError>;
     fn reserve(&self) -> BoxFuture<'_, Result<(), ViewError>>;
 }
 struct OriginalAdmission<P, L, G, N>
@@ -71,6 +82,22 @@ where
         + NativeControlRepository
         + super::NativeApprovalRepository,
 {
+    fn claim_child_history(&self) -> Result<ChildHistoryLease, ViewError> {
+        let core = self.core.upgrade().ok_or(ViewError::NodeStopping)?;
+        let source = self.source.upgrade().ok_or(ViewError::SourceReleased)?;
+        let operation =
+            NativeCoordinator::<P, L, G, N>::new_id().map_err(ViewError::NativeFailure)?;
+        let guard = core
+            .claim_child_history_tree(&source, &self.resource, operation)
+            .map_err(|error| {
+                if error == DispatchError::NotReady {
+                    ViewError::InvalidStage
+                } else {
+                    ViewError::NativeFailure(error)
+                }
+            })?;
+        Ok(ChildHistoryLease { guard, operation })
+    }
     fn reserve(&self) -> BoxFuture<'_, Result<(), ViewError>> {
         Box::pin(async move {
             let core = self.core.upgrade().ok_or(ViewError::NodeStopping)?;

@@ -51,7 +51,7 @@
 
 ## Impact
 
-- 依赖：[deliver-codex-session-loop](../2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../2026-11-19-deliver-session-capacity/proposal.md)、[refactor-web-workbench](../2026-11-20-refactor-web-workbench/proposal.md)，并为下游 [deliver-history-navigation](../../deliver-history-navigation/proposal.md)、[deliver-agent-session-tree](../../deliver-agent-session-tree/proposal.md)、[deliver-session-data-lifecycle](../../deliver-session-data-lifecycle/proposal.md) 提供持久化展示快照底座；跨变更关系见 [能力地图](../../../../docs/architecture/capability-map.md)。
+- 依赖：[deliver-codex-session-loop](../2026-11-16-deliver-codex-session-loop/proposal.md)、[deliver-session-capacity](../2026-11-19-deliver-session-capacity/proposal.md)、[refactor-web-workbench](../2026-11-20-refactor-web-workbench/proposal.md)，并为下游 [deliver-history-navigation](../2026-11-21-deliver-history-navigation/proposal.md)、[deliver-agent-session-tree](../../deliver-agent-session-tree/proposal.md)、[deliver-session-data-lifecycle](../../deliver-session-data-lifecycle/proposal.md) 提供持久化展示快照底座；跨变更关系见 [能力地图](../../../../docs/architecture/capability-map.md)。
 - 影响范围：独立展示快照存储引擎（`transcript-cache.sqlite3`）与生命周期清理任务、节点配置（`acp-remote.toml`）、共享视图与后台自动重放协调端口、WSS 历史秒开与同步状态推送协议及 Web 前缀保持无感补齐与来源状态提示；具体工作包划分与写范围见 [plan.md](plan.md)。
 
 ## Exploration

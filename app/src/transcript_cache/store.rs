@@ -36,6 +36,9 @@ use super::{
     writer::{TranscriptCacheWriter, WriterControl, spawn_writer},
 };
 
+mod history;
+pub use history::{CachedPage, PageReadError};
+
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(300);
 
 struct OpenBackend {
@@ -427,6 +430,38 @@ impl TranscriptCacheStore {
         capability_profile: CapabilityProfile,
         frames: Vec<(RawMessage, u64)>,
     ) -> Result<ReplaceOutcome, TranscriptCacheError> {
+        self.replace_checked(
+            key,
+            protocol_version,
+            capability_profile,
+            frames,
+            None,
+            async { Ok(()) },
+        )
+        .await
+    }
+
+    pub(crate) async fn history_generation(
+        &self,
+        key: &NativeSessionKey,
+    ) -> Result<super::HistoryGeneration, TranscriptCacheError> {
+        let (pool, _) = self
+            .open_handles()
+            .await
+            .ok_or(TranscriptCacheError::DatabaseUnavailable)?;
+        Ok(super::HistoryGeneration(sqlx::query_as("SELECT generation_token, content_digest FROM transcript_sessions WHERE source_id=? AND native_session_id=?")
+            .bind(entity_id_to_bytes(key.source().0)?.as_slice()).bind(key.native_id()).fetch_optional(&pool).await?))
+    }
+
+    pub(crate) async fn replace_checked<T>(
+        &self,
+        key: &NativeSessionKey,
+        protocol_version: Version,
+        capability_profile: CapabilityProfile,
+        frames: Vec<(RawMessage, u64)>,
+        expected_token: Option<super::HistoryGeneration>,
+        publish: impl Future<Output = Result<T, crate::domain::shared_view::ViewError>>,
+    ) -> Result<ReplaceOutcome, TranscriptCacheError> {
         let raw_only: Vec<RawMessage> = frames.iter().map(|(raw, _)| raw.clone()).collect();
         let new_digest = compute_content_digest(protocol_version, &raw_only)?;
 
@@ -435,7 +470,9 @@ impl TranscriptCacheStore {
             .await
             .ok_or(TranscriptCacheError::DatabaseUnavailable)?;
 
-        self.inner.writer.reset_key(key).await;
+        if expected_token.is_none() {
+            self.inner.writer.reset_key(key).await;
+        }
         let _tx_lock = write_mutex.lock().await;
         let now_ms = self.inner.clock.now_millis();
         apply_replay_generation(
@@ -445,7 +482,11 @@ impl TranscriptCacheStore {
             capability_profile,
             &new_digest,
             &frames,
-            now_ms,
+            ReplayPublication {
+                now_ms,
+                expected_token,
+                publish,
+            },
         )
         .await
     }
@@ -682,15 +723,28 @@ impl TranscriptCacheStore {
     }
 }
 
-async fn apply_replay_generation(
+struct ReplayPublication<F> {
+    now_ms: i64,
+    expected_token: Option<super::HistoryGeneration>,
+    publish: F,
+}
+
+async fn apply_replay_generation<T>(
     pool: &SqlitePool,
     key: &NativeSessionKey,
     protocol_version: Version,
     capability_profile: CapabilityProfile,
     new_digest: &[u8; 32],
     frames: &[(RawMessage, u64)],
-    now_ms: i64,
+    publication: ReplayPublication<
+        impl Future<Output = Result<T, crate::domain::shared_view::ViewError>>,
+    >,
 ) -> Result<ReplaceOutcome, TranscriptCacheError> {
+    let ReplayPublication {
+        now_ms,
+        expected_token,
+        publish,
+    } = publication;
     let source_id_bytes = entity_id_to_bytes(key.source().0)?;
     let source_bytes = source_id_bytes.as_slice();
     let native_id = key.native_id();
@@ -699,10 +753,10 @@ async fn apply_replay_generation(
         Version::V2 => 2_i64,
     };
 
-    let mut tx = pool.begin().await?;
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
     let existing = sqlx::query(
         r"
-        SELECT active_generation, content_digest
+        SELECT active_generation, content_digest, generation_token
         FROM transcript_sessions
         WHERE source_id = ? AND native_session_id = ?
         ",
@@ -712,6 +766,20 @@ async fn apply_replay_generation(
     .fetch_optional(&mut *tx)
     .await?;
 
+    if let Some(expected) = expected_token {
+        let current = existing
+            .as_ref()
+            .map(|row| {
+                Ok::<_, sqlx::Error>((
+                    row.try_get::<Vec<u8>, _>("generation_token")?,
+                    row.try_get::<Vec<u8>, _>("content_digest")?,
+                ))
+            })
+            .transpose()?;
+        if expected.0 != current {
+            return Err(crate::domain::shared_view::ViewError::StaleCursor.into());
+        }
+    }
     let next_generation = if let Some(row) = existing {
         let prev_generation: i64 = row.try_get("active_generation")?;
         let existing_digest: Vec<u8> = row.try_get("content_digest")?;
@@ -731,7 +799,9 @@ async fn apply_replay_generation(
             .bind(native_id)
             .execute(&mut *tx)
             .await?;
+            let permit = publish.await?;
             tx.commit().await?;
+            drop(permit);
             return Ok(ReplaceOutcome::UnchangedDigest);
         }
         prev_generation.checked_add(1).ok_or_else(|| {
@@ -754,7 +824,9 @@ async fn apply_replay_generation(
     )
     .await?;
 
+    let permit = publish.await?;
     tx.commit().await?;
+    drop(permit);
     Ok(ReplaceOutcome::Updated)
 }
 
@@ -793,9 +865,12 @@ async fn write_replay_generation_rows(
             native_recovery_state,
             record_count,
             byte_size
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?)
+        , generation_token) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'normal', ?, ?, randomblob(16))
         ON CONFLICT(source_id, native_session_id) DO UPDATE SET
             active_generation = excluded.active_generation,
+            generation_token = excluded.generation_token,
+            turn_state = 'pending',
+            turn_count = 0,
             protocol_version = excluded.protocol_version,
             content_digest = excluded.content_digest,
             last_updated_at_ms = excluded.last_updated_at_ms,
@@ -830,33 +905,15 @@ async fn write_replay_generation_rows(
     .execute(&mut **tx)
     .await?;
 
-    for (index, (frame, conn_seq)) in frames.iter().enumerate() {
-        let ordinal_i64 = i64::try_from(index + 1)
-            .map_err(|_| TranscriptCacheError::Protocol("ordinal exceeds i64".to_owned()))?;
-        let conn_seq_i64 = i64::try_from(*conn_seq).map_err(|_| {
-            TranscriptCacheError::Protocol("connection_sequence exceeds i64".to_owned())
-        })?;
-        sqlx::query(
-            r"
-            INSERT INTO transcript_records (
-                source_id,
-                native_session_id,
-                generation,
-                ordinal,
-                connection_sequence,
-                raw_json
-            ) VALUES (?, ?, ?, ?, ?, ?)
-            ",
-        )
-        .bind(source_bytes)
-        .bind(native_id)
-        .bind(next_generation)
-        .bind(ordinal_i64)
-        .bind(conn_seq_i64)
-        .bind(frame.bytes())
-        .execute(&mut **tx)
-        .await?;
-    }
+    write_replay_frames(
+        tx,
+        source_bytes,
+        native_id,
+        next_generation,
+        version_i64,
+        frames,
+    )
+    .await?;
     Ok(())
 }
 
@@ -1071,4 +1128,61 @@ fn parse_session_row(
         record_count: u64::try_from(record_count_i64).unwrap_or(0),
         byte_size: u64::try_from(byte_size_i64).unwrap_or(0),
     })
+}
+
+async fn write_replay_frames(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    source_bytes: &[u8],
+    native_id: &str,
+    next_generation: i64,
+    version_i64: i64,
+    frames: &[(RawMessage, u64)],
+) -> Result<(), TranscriptCacheError> {
+    let rows = super::turns::TurnRows {
+        source: source_bytes,
+        native: native_id,
+        generation: next_generation,
+    };
+    rows.clear(tx).await?;
+    let mut turns = crate::domain::history_page::TurnIndexer::default();
+    let version = match version_i64 {
+        1 => Version::V1,
+        2 => Version::V2,
+        _ => {
+            return Err(TranscriptCacheError::Protocol(String::from(
+                "invalid replay version",
+            )));
+        }
+    };
+    for (index, (frame, conn_seq)) in frames.iter().enumerate() {
+        let ordinal_i64 = i64::try_from(index + 1)
+            .map_err(|_| TranscriptCacheError::Protocol("ordinal exceeds i64".to_owned()))?;
+        rows.observe(tx, &mut turns, version, frame, ordinal_i64)
+            .await?;
+        let conn_seq_i64 = i64::try_from(*conn_seq).map_err(|_| {
+            TranscriptCacheError::Protocol("connection_sequence exceeds i64".to_owned())
+        })?;
+        sqlx::query(
+            r"
+            INSERT INTO transcript_records (
+                source_id,
+                native_session_id,
+                generation,
+                ordinal,
+                connection_sequence,
+                raw_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ",
+        )
+        .bind(source_bytes)
+        .bind(native_id)
+        .bind(next_generation)
+        .bind(ordinal_i64)
+        .bind(conn_seq_i64)
+        .bind(frame.bytes())
+        .execute(&mut **tx)
+        .await?;
+    }
+    rows.finish(tx, &turns).await?;
+    Ok(())
 }

@@ -24,7 +24,26 @@ pub trait AutomaticCloseGuard: Send + Sync {
         poll: &mut dyn FnMut(u64) -> IoPoll,
     ) -> IoPoll;
     fn poll_frozen(&self, operation: EntityId, poll: &mut dyn FnMut() -> IoPoll) -> IoPoll;
+    fn claim_history(
+        &self,
+        operation: EntityId,
+        validate: &mut dyn FnMut() -> Result<(), DispatchError>,
+    ) -> Result<(), DispatchError>;
     fn finish(&self, operation: EntityId) -> Result<bool, DispatchError>;
+}
+
+impl<T> super::OwnerState<T> {
+    fn idle_for_exclusive_work(&self) -> bool {
+        self.automatic_close.is_none()
+            && self.queue.waiting().next().is_none()
+            && self.queue.active().is_none()
+            && self.queue.priority().is_none()
+            && self.pending.is_none()
+            && self.active.is_none()
+            && self.external.is_none()
+            && self.priority_handoff.is_none()
+            && self.selected_priority.is_none()
+    }
 }
 
 struct AutomaticCloseOwner<T> {
@@ -81,17 +100,7 @@ impl<T: Send + 'static> AutomaticCloseGuard for AutomaticCloseOwner<T> {
             .map(|owner| lock(&owner.state))
             .collect::<Result<Vec<_>, _>>()?;
         self.core.running()?;
-        if states.iter().any(|state| {
-            state.automatic_close.is_some()
-                || state.queue.waiting().next().is_some()
-                || state.queue.active().is_some()
-                || state.queue.priority().is_some()
-                || state.pending.is_some()
-                || state.active.is_some()
-                || state.external.is_some()
-                || state.priority_handoff.is_some()
-                || state.selected_priority.is_some()
-        }) {
+        if states.iter().any(|state| !state.idle_for_exclusive_work()) {
             return Err(DispatchError::NotReady);
         }
         let revision = states.iter().try_fold(0_u64, |sum, state| {
@@ -124,6 +133,27 @@ impl<T: Send + 'static> AutomaticCloseGuard for AutomaticCloseOwner<T> {
         let result = poll();
         drop(states);
         result
+    }
+
+    fn claim_history(
+        &self,
+        operation: EntityId,
+        validate: &mut dyn FnMut() -> Result<(), DispatchError>,
+    ) -> Result<(), DispatchError> {
+        let mut states = self
+            .owners
+            .iter()
+            .map(|owner| lock(&owner.state))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.core.running()?;
+        if states.iter().any(|state| !state.idle_for_exclusive_work()) {
+            return Err(DispatchError::NotReady);
+        }
+        validate()?;
+        for state in &mut states {
+            state.automatic_close = Some(operation);
+        }
+        Ok(())
     }
 
     fn finish(&self, operation: EntityId) -> Result<bool, DispatchError> {

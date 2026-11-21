@@ -17,10 +17,12 @@
 1. **`acp-remote.toml` 可选 `[transcript_cache]` 配置（`app/src/config.rs`）**：
    - 缺省 `[transcript_cache]` 时自动启用 `retention_days = 30`（`2_592_000_000 ms`）与 `max_bytes = 10_737_418_240`（`10 GiB`），100% 兼容既有配置文件。
    - 保持 `#[serde(deny_unknown_fields)]`，明确拒绝 `0`、负数、毫秒换算溢出及任何未知配置键（返回 `AppError::Config`）。
-2. **表结构（`TRANSCRIPT_CACHE_SCHEMA_VERSION = 1`）**：
+2. **表结构（`TRANSCRIPT_CACHE_SCHEMA_VERSION = 2`）**：
    - `transcript_cache_meta(id INTEGER PRIMARY KEY CHECK (id = 1), schema_version INTEGER NOT NULL)`；
    - `transcript_sessions`：按 `(source_id BLOB, native_session_id TEXT)` 唯一索引会话当前快照代际，持久化 `active_generation`、`protocol_version`（`1` 对应 ACP `V1`、`2` 对应 ACP `V2`）、32 字节规范化 SHA-256 `content_digest`、`last_updated_at_ms`、`last_synced_at_ms`、`capability_profile`、`native_recovery_state`、`record_count` 与精确累计的 `byte_size`，并建立 `idx_transcript_sessions_updated(last_updated_at_ms ASC, source_id ASC, native_session_id ASC)`；
    - `transcript_records`：按 `(source_id, native_session_id, generation, ordinal)` 存储经标准 ACP 观测到的有序原始 `session/update` 帧 `raw_json` 与 `connection_sequence`，外键 `ON DELETE CASCADE` 关联 `transcript_sessions`。
+
+   - `transcript_turns` 按会话、快照代际和轮号保存轮首记录序号。v1 升级在同一事务内写入随机代际标识和待建索引状态。首次分页或恢复写入时从旧记录补建边界；查询和补建均保留原内容更新时间。实时追加保留代际标识，重放替换内容时轮次边界和标识一起换代。
 
 ## 离线版本感知投影、防虚刷滑动保留与安全擦除
 

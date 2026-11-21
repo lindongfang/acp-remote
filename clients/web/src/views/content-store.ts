@@ -1,4 +1,4 @@
-import { viewStreamBytes } from "./binary";
+import { VIEW_U64_MAX, viewStreamBytes } from "./binary";
 import { ProjectionCollection } from "./projection-collection";
 import {
   decodeProjectionRecord, isDecodedProjectedItem, PROJECTION_FIELDS,
@@ -16,6 +16,7 @@ export interface RawValue {
 export interface ReferencedValue {
   readonly raw: ProjectionRawReference;
   readonly value: RawValue | null;
+  readonly fieldSlice?: boolean;
 }
 export interface FieldMaterial {
   readonly knowledge: ProjectionKnowledge;
@@ -50,6 +51,7 @@ function requireIdentifier(value: string): void {
 export class ViewContentStore {
   readonly #streamId: string;
   #raw: Map<bigint, RawEntry>;
+  readonly #ranges: Map<string, RawEntry>;
   #segments: Map<string, ProjectionCollection>;
   #evidence: Map<string, ReadonlyMap<bigint, ProjectionRawReference>>;
   #closed = false;
@@ -59,6 +61,7 @@ export class ViewContentStore {
     this.#streamId = streamId;
     try {
       this.#raw = new Map();
+      this.#ranges = new Map();
       this.#segments = new Map();
       this.#evidence = new Map();
     } catch (error: unknown) { storeError(error); }
@@ -76,6 +79,26 @@ export class ViewContentStore {
     let kind: unknown;
     try { kind = record.kind; } catch { throw new ViewDecodeError("invalid_record"); }
     try {
+      if (kind === "field_bytes") {
+        const body = readViewRecordBody(record, "field_bytes");
+        this.requireStream(body.streamId);
+        if (body.bytes.length <= 8) throw new ViewDecodeError("invalid_record");
+        const start = new DataView(body.bytes.buffer, body.bytes.byteOffset).getBigUint64(0);
+        const bytes = body.bytes.subarray(8);
+        const end = start + BigInt(bytes.length);
+        if (end > VIEW_U64_MAX) throw new ViewDecodeError("invalid_record");
+        const key = `${body.recordId}:${start}:${end}`;
+        const previous = this.#ranges.get(key);
+        if (previous) {
+          if (!bytes.every((b, i) => b === previous.bytes[i])) throw new ViewDecodeError("invalid_record");
+          return false;
+        }
+        const document = RawJsonDocument.parse(bytes);
+        const root = document.tokens[0];
+        if (root?.startByte !== 0 || root.endByte !== bytes.length) throw new ViewDecodeError("invalid_record");
+        this.#ranges.set(key, { bytes, document });
+        return true;
+      }
       if (kind === "original_raw") {
         const body = readViewRecordBody(record, "original_raw");
         this.requireStream(body.streamId);
@@ -140,7 +163,10 @@ export class ViewContentStore {
 
   private reference(raw: ProjectionRawReference): ReferencedValue {
     const entry = this.#raw.get(raw.rawRecordId);
-    if (entry === undefined) return Object.freeze({ raw, value: null });
+    if (entry === undefined) {
+      const range = this.#ranges.get(`${raw.rawRecordId}:${raw.byteStart}:${raw.byteEnd}`);
+      return Object.freeze({ raw, fieldSlice: true, value: range ? Object.freeze({ document: range.document, token: 0 }) : null });
+    }
     if (raw.byteStart > BigInt(entry.bytes.length) || raw.byteEnd > BigInt(entry.bytes.length)) {
       throw new ViewDecodeError("invalid_record");
     }
@@ -184,6 +210,7 @@ export class ViewContentStore {
     if (this.#closed) return;
     this.#closed = true;
     this.#raw.clear();
+    this.#ranges.clear();
     this.#segments.clear();
     this.#evidence.clear();
   }

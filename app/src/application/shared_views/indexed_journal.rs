@@ -150,7 +150,7 @@ impl<R: RetainedRaw> IndexedJournal<R> {
             return Err(ViewError::InvalidCursor);
         }
         let length = raw.len();
-        self.records.append(RawRecord {
+        let record_index = self.records.append(RawRecord {
             segment,
             segment_index,
             raw,
@@ -169,7 +169,14 @@ impl<R: RetainedRaw> IndexedJournal<R> {
             self.projection = ProjectionState::ProjectionUnavailable;
             return Err(error);
         }
-        let projected = self.project(segment, segment_index, id, revision, length, envelope);
+        let projected = self.project(
+            segment,
+            segment_index,
+            id,
+            revision,
+            (record_index, length),
+            envelope,
+        );
         if projected.is_err() {
             self.projection = ProjectionState::ProjectionUnavailable;
         }
@@ -185,7 +192,7 @@ impl<R: RetainedRaw> IndexedJournal<R> {
         segment_index: usize,
         raw: RawRecordId,
         revision: u64,
-        length: usize,
+        (record_index, length): (usize, usize),
         envelope: ProjectionEnvelope,
     ) -> Result<(), ViewError> {
         let anchor = if let Some(anchor) = envelope
@@ -253,6 +260,7 @@ impl<R: RetainedRaw> IndexedJournal<R> {
                 }
                 Some(RawFieldReference {
                     record: raw,
+                    record_index,
                     start,
                     end,
                     append,

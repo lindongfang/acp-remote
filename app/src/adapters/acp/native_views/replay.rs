@@ -83,11 +83,23 @@ struct ReplayState {
     proof: Option<Arc<ReadCompletionProof<ConnectionScope, RetainedAcpRaw>>>,
     replay_frames: Vec<(u64, crate::adapters::acp::RawMessage)>,
 }
-struct ReplayFence {
+pub(super) struct ReplayFence {
+    child: bool,
     scope: ConnectionScope,
     rpc: RpcId,
     key: NativeSessionKey,
     native: Arc<dyn ReadWriteBoundary<ConnectionScope>>,
+}
+impl ReplayFence {
+    pub(super) fn child_history(cap: &SourceReadCapability<AcpNativeAdapter>, rpc: RpcId) -> Self {
+        Self {
+            child: true,
+            scope: cap.scope().clone(),
+            native: cap.write_boundary(scalar(&rpc)),
+            rpc,
+            key: cap.root_native().clone(),
+        }
+    }
 }
 impl WriteFence for ReplayFence {
     fn check_and_poll(
@@ -99,7 +111,14 @@ impl WriteFence for ReplayFence {
     ) -> Result<(), FenceRejection> {
         if identity.scope() != self.scope
             || identity.id() != Some(&self.rpc)
-            || !matches!(identity.kind(), OutboundKind::Request(RequestKind::Replay(session)) if session.as_str()==self.key.native_id())
+            || !(if self.child {
+                matches!(
+                    identity.kind(),
+                    OutboundKind::Request(RequestKind::ChildHistory)
+                )
+            } else {
+                matches!(identity.kind(), OutboundKind::Request(RequestKind::Replay(session)) if session.as_str()==self.key.native_id())
+            })
         {
             return Err(FenceRejection::StaleTarget);
         }
@@ -137,7 +156,7 @@ fn read_scalar(rpc: &RpcId) -> RpcScalar {
         RpcId::String(value) => RpcScalar::String(value.clone()),
     }
 }
-fn session(key: &NativeSessionKey) -> Result<SessionId, ViewError> {
+pub(super) fn session(key: &NativeSessionKey) -> Result<SessionId, ViewError> {
     let raw = RawDocument::parse(
         serde_json::to_vec(key.native_id()).map_err(|_| ViewError::AllocationFailure)?,
     )
@@ -387,6 +406,7 @@ impl NativeHistoryPort for NativeHistoryBridge {
                 });
             };
             let fence = Arc::new(ReplayFence {
+                child: false,
                 scope: reserved.probe.scope(),
                 rpc: operation.rpc.clone(),
                 key: operation.key.clone(),

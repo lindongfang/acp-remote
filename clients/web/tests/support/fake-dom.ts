@@ -93,6 +93,17 @@ export class FakeElement {
     }
   }
 
+  appendChild<T extends FakeElement | FakeTextNode>(child: T): T {
+    this.append(child);
+    return child;
+  }
+
+  insertBefore(child: FakeElement, next: FakeElement | null): void {
+    const at = next === null ? this.children.length : this.children.indexOf(next);
+    if (at < 0) throw new Error("missing reference child");
+    this.children.splice(at, 0, child);
+  }
+
   replaceChildren(...items: Array<FakeElement | FakeTextNode | string>): void {
     this.#textContent = "";
     this.children = [];

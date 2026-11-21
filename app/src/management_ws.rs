@@ -295,6 +295,7 @@ impl ManagementService {
             ManagementBoundary::SubscriptionRevision => {
                 &self.state.test_hooks.subscription_revision
             }
+            ManagementBoundary::HistoryInvalidated => &self.state.test_hooks.history_invalidated,
             ManagementBoundary::BeforeInputDispatch => &self.state.test_hooks.before_input_dispatch,
             ManagementBoundary::BeforeViewControlDispatch => {
                 &self.state.test_hooks.before_view_control_dispatch
@@ -415,6 +416,7 @@ pub(crate) enum ManagementBoundary {
     Enqueue,
     SubscriptionRevision,
     WriteLocked,
+    HistoryInvalidated,
     BeforeInputDispatch,
     BeforeViewControlDispatch,
     InputAcceptedBeforeAck,
@@ -443,6 +445,7 @@ struct ManagementTestHooks {
     admission: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     enqueue: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     subscription_revision: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
+    history_invalidated: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     write_locked: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     before_input_dispatch: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
     before_view_control_dispatch: Mutex<Option<crate::test_support::SharedAsyncBarrier>>,
@@ -1033,19 +1036,13 @@ async fn run_authenticated_loop(
             biased;
             () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
             completion = pending_reads.next(), if !pending_reads.is_empty() => {
-                match completion {
-                    Some(CommandOutcome::Result(result)) => {
-                        let enqueued = tokio::select! {
-                            biased;
-                            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
-                            result = enqueue_authenticated(state, &authenticated, outbound, &result) => result,
-                        };
-                        if let Err(error) = enqueued {
-                            break error;
-                        }
-                    }
-                    Some(CommandOutcome::Close(error)) => break error,
-                    None => {}
+                if let Some(outcome) = completion {
+                    let result = tokio::select! {
+                        biased;
+                        () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                        result = outcome.enqueue(state, &authenticated, outbound) => result,
+                    };
+                    if let Err(error) = result { break error; }
                 }
             }
             control_event = control_changes.recv() => {
@@ -1221,41 +1218,24 @@ async fn run_authenticated_loop(
                     ClientFrame::Command(command) => {
                         if !matches!(command.action.as_str(), "node.info" | "device.list" | "device.revoke") {
                             if let Some(outcome) = session_commands::start(state, &authenticated, attachment, outbound, &command, &mut pending_reads) {
-                                match outcome {
-                                    CommandOutcome::Result(result) => {
-                                        let enqueued = tokio::select! {
-                                            biased;
-                                            () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
-                                            result = enqueue_authenticated(state, &authenticated, outbound, &result) => result,
-                                        };
-                                        if let Err(error) = enqueued {
-                                            break error;
-                                        }
-                                    }
-                                    CommandOutcome::Close(error) => break error,
-                                }
+                                let result = tokio::select! {
+                                    biased;
+                                    () = shutdown.wait() => break close(CLOSE_GOING_AWAY, "node stopping"),
+                                    result = outcome.enqueue(state, &authenticated, outbound) => result,
+                                };
+                                if let Err(error) = result { break error; }
                             }
                             continue;
                         }
-                        match execute_command(
+                        let outcome = execute_command(
                             state,
                             &authenticated,
                             command.request_id,
                             &command.action,
                             command.payload,
                         )
-                        .await
-                        {
-                            CommandOutcome::Result(result) => {
-                                if let Err(error) =
-                                    enqueue_authenticated(state, &authenticated, outbound, &result)
-                                        .await
-                                {
-                                    break error;
-                                }
-                            }
-                            CommandOutcome::Close(close) => break close,
-                        }
+                        .await;
+                        if let Err(error) = outcome.enqueue(state, &authenticated, outbound).await { break error; }
                     }
                     ClientFrame::Subscribe(subscribe) => {
                         let subscribed_res = tokio::select! {
@@ -1518,7 +1498,28 @@ async fn enqueue_authenticated(
     Ok(())
 }
 
+impl CommandOutcome {
+    async fn enqueue(
+        self,
+        state: &ManagementState,
+        actor: &AuthenticatedClient,
+        outbound: &Outbound,
+    ) -> Result<(), CloseFrame> {
+        match self {
+            Self::Close(error) => Err(error),
+            Self::Result(result) => enqueue_authenticated(state, actor, outbound, &result).await,
+            #[cfg(windows)]
+            Self::ViewOpened(result, announced) => {
+                enqueue_authenticated(state, actor, outbound, &result).await?;
+                let _ = announced.send(());
+                Ok(())
+            }
+        }
+    }
+}
 enum CommandOutcome {
+    #[cfg(windows)]
+    ViewOpened(Value, tokio::sync::oneshot::Sender<()>),
     Result(Value),
     Close(CloseFrame),
 }
@@ -1878,6 +1879,12 @@ struct WriteAuthority {
 }
 
 enum QueuedMessage {
+    #[cfg(windows)]
+    HistoryInvalidated {
+        stream: Id128,
+        target: crate::domain::native::NativeSessionKey,
+        stop: watch::Receiver<bool>,
+    },
     Text(String),
     Binary(Vec<u8>),
     Shared(QueuedSocketChunk),
@@ -1919,9 +1926,7 @@ impl Outbound {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(frame)) => match frame.message {
                 QueuedMessage::Shared(chunk) => Err(SocketEnqueueError::Rejected(chunk.rejected())),
-                QueuedMessage::Text(_) | QueuedMessage::Binary(_) => {
-                    Err(SocketEnqueueError::StateLost)
-                }
+                _ => Err(SocketEnqueueError::StateLost),
             },
             Err(mpsc::error::TrySendError::Closed(_)) => Err(SocketEnqueueError::StateLost),
         }
@@ -2111,6 +2116,20 @@ async fn write_loop(
                     }
                 }
                 let message = match message {
+                    #[cfg(windows)]
+                    QueuedMessage::HistoryInvalidated { stream, target, stop } => {
+                        let Some(authority) = &write_authority else { return Err(WriterCloseError::Stopped) };
+                        #[cfg(test)]
+                        pause_boundary(&authority.state.test_hooks.history_invalidated).await;
+                        match authority.attachment.write_history_invalidation(&mut sink, stream, &target, &stop).await {
+                            Ok(()) | Err(crate::domain::shared_view::ViewError::SourceReleased | crate::domain::shared_view::ViewError::StreamSealed) => {}
+                            Err(crate::domain::shared_view::ViewError::Revoked) => return finish_writer_close(&mut sink, CloseDirective::Initiate(close(CLOSE_REVOKED, "revoked"))).await,
+                            Err(_) => return Err(WriterCloseError::Stopped),
+                        }
+                        drop(permit);
+                        capacity_freed.notify_waiters();
+                        continue;
+                    }
                     QueuedMessage::Shared(chunk) => {
                         let Some(authority) = &write_authority else {
                             return Err(WriterCloseError::Stopped);
@@ -2514,6 +2533,12 @@ async fn emit_stream_rebound_and_park(
         wire::{RecordKind, TransferHeader},
     };
     use crate::domain::shared_view::ViewError;
+    if read
+        .history_subscription()
+        .is_some_and(|(_, changed)| *changed.borrow())
+    {
+        return Ok(());
+    }
     let completed = loop {
         if *stop.borrow_and_update() {
             return Ok(());
@@ -2960,6 +2985,50 @@ struct SocketAttachment {
 }
 impl SocketAttachment {
     #[cfg(windows)]
+    async fn write_history_invalidation(
+        &self,
+        sink: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+        id: Id128,
+        target: &crate::domain::native::NativeSessionKey,
+        stop: &watch::Receiver<bool>,
+    ) -> Result<(), crate::domain::shared_view::ViewError> {
+        use crate::domain::shared_view::ViewError;
+        use futures_util::Sink;
+        use std::{future::poll_fn, pin::Pin};
+        let _actor = self
+            .client
+            .context
+            .authority()
+            .current_guard(&self.client, target)
+            .await?;
+        let stream = self
+            .streams
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?
+            .get(&id)
+            .cloned()
+            .ok_or(ViewError::StreamSealed)?;
+        let event = serde_json::json!({"v":1,"type":"history.invalidated","streamId":id});
+        let message = Message::Text(event.to_string().into());
+        timeout(WRITER_SEND_TIMEOUT, async {
+            poll_fn(|cx| Pin::new(&mut *sink).poll_ready(cx))
+                .await
+                .map_err(|_| ViewError::TransportFailure)?;
+            stream.with_history_target(&self.client, target, || {
+                let cancelled = stop.borrow();
+                if *cancelled {
+                    return Err(ViewError::StreamSealed);
+                }
+                Pin::new(&mut *sink)
+                    .start_send(message)
+                    .map_err(|_| ViewError::TransportFailure)
+            })?;
+            sink.flush().await.map_err(|_| ViewError::TransportFailure)
+        })
+        .await
+        .map_err(|_| ViewError::TransportFailure)?
+    }
+    #[cfg(windows)]
     #[expect(
         clippy::significant_drop_tightening,
         reason = "Hold document_pumps mutex across duplicate check, reservation, spawn, and insertion"
@@ -3053,7 +3122,7 @@ impl SocketAttachment {
         &self,
         read: NativeSocketViewRead,
         outbound: &Outbound,
-    ) -> Result<(), crate::domain::shared_view::ViewError> {
+    ) -> Result<tokio::sync::oneshot::Sender<()>, crate::domain::shared_view::ViewError> {
         let stream = read.stream()?;
         if !stream.belongs_to(&self.client) {
             return Err(crate::domain::shared_view::ViewError::InvalidClient);
@@ -3096,13 +3165,50 @@ impl SocketAttachment {
         }
         let client = self.client.context.client();
         let outbound = outbound.clone();
-        let join = tokio::spawn(run_view_pump(read, client, outbound, stop_rx));
+        let (announce, announced) = tokio::sync::oneshot::channel();
+        let subscription = read.history_subscription();
+        let join = tokio::spawn(async move {
+            let mut cancel = stop_rx.clone();
+            let monitor = async {
+                let Some((target, mut changed)) = subscription else {
+                    return;
+                };
+                let deliver = async {
+                    if announced.await.is_err() {
+                        return;
+                    }
+                    if changed.wait_for(|replaced| *replaced).await.is_err() {
+                        return;
+                    }
+                    let Ok(permit) = outbound.bytes.clone().acquire_many_owned(128).await else {
+                        return;
+                    };
+                    let _ = outbound
+                        .sender
+                        .send(QueuedFrame {
+                            message: QueuedMessage::HistoryInvalidated {
+                                stream: stream_id,
+                                target,
+                                stop: stop_rx.clone(),
+                            },
+                            _permit: permit,
+                        })
+                        .await;
+                };
+                tokio::select! { biased; _ = cancel.changed() => {}, () = deliver => {} }
+            };
+            let (done, ()) = tokio::join!(
+                run_view_pump(read, client, outbound.clone(), stop_rx.clone()),
+                monitor
+            );
+            done
+        });
         let mut pumps = self
             .view_pumps
             .lock()
             .map_err(|_| crate::domain::shared_view::ViewError::ReadFailure)?;
         pumps.insert(stream_id, ViewPumpState::Active { stop, join });
-        Ok(())
+        Ok(announce)
     }
     #[cfg(windows)]
     async fn rebind_view_read(
@@ -3424,6 +3530,15 @@ pub(crate) struct DocumentSocketEndpoint {
 }
 #[cfg(test)]
 impl DocumentSocketEndpoint {
+    #[cfg(windows)]
+    pub(crate) fn history_body_sealed(&self, id: Id128) -> bool {
+        let streams = self.attachment.streams.lock().unwrap();
+        !streams
+            .get(&id)
+            .expect("original subscribed stream")
+            .view_current()
+            .unwrap()
+    }
     #[cfg(windows)]
     pub(crate) fn attach_document(
         &self,

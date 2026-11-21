@@ -9,7 +9,7 @@ use std::{
 
 use tokio::{
     runtime::Handle,
-    sync::{Mutex as AsyncMutex, Notify, watch},
+    sync::{Mutex as AsyncMutex, watch},
     task::JoinHandle,
 };
 
@@ -53,6 +53,7 @@ pub enum RevalidationOutcome {
 }
 
 struct CachedStreamRecord {
+    static_page: bool,
     key: NativeSessionKey,
     owner: Arc<SharedViewOwner<ConnectionScope, RetainedAcpRaw>>,
     status_tx: watch::Sender<TranscriptCacheViewStatus>,
@@ -95,8 +96,10 @@ impl CachedViewHandle {
         status.sync_state = TranscriptSyncState::Synced;
         status.capability_boundary = TranscriptCapabilityBoundary::ReplayCapable;
         status.continuable = true;
-        let _ = self.record.status_tx.send(status);
-        let _ = self.record.rebind_tx.send(RevalidationOutcome::SyncedReady);
+        self.record.status_tx.send_replace(status);
+        self.record
+            .rebind_tx
+            .send_replace(RevalidationOutcome::SyncedReady);
         let _ = self
             .record
             .owner
@@ -136,7 +139,7 @@ pub struct TranscriptCacheCoordinator {
     hybrid_sessions: Mutex<HashSet<NativeSessionKey>>,
     remote_missing: Mutex<HashSet<NativeSessionKey>>,
     source_capabilities: Mutex<HashMap<NativeSourceId, (Version, CapabilityProfile)>>,
-    pending_replays: Arc<Mutex<HashMap<NativeSessionKey, Arc<Notify>>>>,
+    pending_replays: Arc<Mutex<HashMap<NativeSessionKey, watch::Receiver<bool>>>>,
     inflight_revalidations: AsyncMutex<HashMap<NativeSessionKey, JoinHandle<()>>>,
 }
 
@@ -316,6 +319,7 @@ impl TranscriptCacheCoordinator {
         authority: &Arc<SocketViewAuthority>,
         snapshot: LoadedTranscriptSnapshot,
         status: TranscriptCacheViewStatus,
+        static_page: bool,
     ) -> Result<(OpenedView, Arc<AcpSocketReadService>, CachedViewHandle), ViewError> {
         let owner = self.build_cached_owner(key, snapshot, status)?;
         let reader = Arc::new(AcpSocketReadService::new(
@@ -324,7 +328,7 @@ impl TranscriptCacheCoordinator {
             owner.supervisor.clone(),
         ));
         let opened = reader.open_current(client, key).await?;
-        let handle = self.register_cached_owner(key, owner, status);
+        let handle = self.register_cached_owner(key, owner, status, static_page);
         Ok((opened, reader, handle))
     }
 
@@ -348,7 +352,7 @@ impl TranscriptCacheCoordinator {
             owner.supervisor.clone(),
         ));
         let opened = reader.open_current(client, key).await?;
-        let handle = self.register_cached_owner(key, owner, status);
+        let handle = self.register_cached_owner(key, owner, status, false);
         Ok((opened, reader, handle))
     }
 
@@ -387,10 +391,12 @@ impl TranscriptCacheCoordinator {
         key: &NativeSessionKey,
         owner: Arc<SharedViewOwner<ConnectionScope, RetainedAcpRaw>>,
         initial_status: TranscriptCacheViewStatus,
+        static_page: bool,
     ) -> CachedViewHandle {
         let (status_tx, _) = watch::channel(initial_status);
         let (rebind_tx, _) = watch::channel(RevalidationOutcome::Pending);
         let record = Arc::new(CachedStreamRecord {
+            static_page,
             key: key.clone(),
             owner,
             status_tx,
@@ -427,8 +433,10 @@ impl TranscriptCacheCoordinator {
             status.capability_boundary = TranscriptCapabilityBoundary::ReplayCapable;
             status.continuable = true;
             status.cache_warning = status.cache_warning || self.has_write_warning();
-            let _ = record.status_tx.send(status);
-            let _ = record.rebind_tx.send(RevalidationOutcome::SyncedReady);
+            record.status_tx.send_replace(status);
+            record
+                .rebind_tx
+                .send_replace(RevalidationOutcome::SyncedReady);
             let _ = record.owner.handle().seal_target_send(&record.key);
         }
     }
@@ -441,11 +449,13 @@ impl TranscriptCacheCoordinator {
         if self.has_write_warning() {
             next_status.cache_warning = true;
         }
-        let _ = record.status_tx.send(next_status);
+        record.status_tx.send_replace(next_status);
         if next_status.sync_state != TranscriptSyncState::Revalidating
             && next_status.sync_state != TranscriptSyncState::Synced
         {
-            let _ = record.rebind_tx.send(RevalidationOutcome::StayCached);
+            record
+                .rebind_tx
+                .send_replace(RevalidationOutcome::StayCached);
         }
         if let Ok(bytes) = encode_cache_state_json(next_status) {
             let _ = record.owner.handle().push_custom_status(&record.key, bytes);
@@ -453,6 +463,12 @@ impl TranscriptCacheCoordinator {
     }
 
     fn matching_cached_records(&self, key: &NativeSessionKey) -> Vec<Arc<CachedStreamRecord>> {
+        self.all_cached_records(key)
+            .into_iter()
+            .filter(|r| !r.static_page)
+            .collect()
+    }
+    fn all_cached_records(&self, key: &NativeSessionKey) -> Vec<Arc<CachedStreamRecord>> {
         let Ok(mut list) = self.active_cached.lock() else {
             return Vec::new();
         };
@@ -492,21 +508,17 @@ impl TranscriptCacheCoordinator {
     /// Waits briefly for any in-flight replay persistence for `key` to finish so subsequent reads
     /// observe committed snapshot state.
     pub async fn wait_pending_replay_persist(&self, key: &NativeSessionKey) {
-        let notify = {
-            let guard = self.pending_replays.lock().ok();
-            guard.and_then(|map| map.get(key).cloned())
-        };
-        if let Some(notify) = notify {
-            let notified = notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            let still_pending = self
-                .pending_replays
-                .lock()
-                .is_ok_and(|map| map.contains_key(key));
-            if still_pending {
-                let _ = tokio::time::timeout(Duration::from_secs(5), notified).await;
-            }
+        let pending = self
+            .pending_replays
+            .lock()
+            .ok()
+            .and_then(|map| map.get(key).cloned());
+        if let Some(mut pending) = pending {
+            let _ = tokio::time::timeout(
+                Duration::from_secs(5),
+                pending.wait_for(|finished| *finished),
+            )
+            .await;
         }
     }
 
@@ -533,7 +545,7 @@ impl TranscriptCacheCoordinator {
         if let Ok(mut set) = self.remote_missing.lock() {
             set.remove(key);
         }
-        for record in self.matching_cached_records(key) {
+        for record in self.all_cached_records(key) {
             let _ = record.owner.handle().seal_target_send(key);
             let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
             let _ = record.owner.shutdown(deadline).await;
@@ -584,7 +596,7 @@ impl ProtectedSessionsPort for TranscriptCacheCoordinator {
         if live_protected {
             return true;
         }
-        self.matching_cached_records(key)
+        self.all_cached_records(key)
             .iter()
             .any(|record| record.owner.handle().has_active_leases_for(key))
     }
@@ -646,10 +658,12 @@ impl AcpTranscriptTap for TranscriptCacheCoordinator {
         if let Ok(mut set) = self.remote_missing.lock() {
             set.remove(key);
         }
-        let notify = Arc::new(Notify::new());
-        if let Ok(mut pending) = self.pending_replays.lock() {
-            pending.insert(key.clone(), Arc::clone(&notify));
-        }
+        let (finished, current) = watch::channel(false);
+        let previous = self
+            .pending_replays
+            .lock()
+            .ok()
+            .and_then(|mut map| map.insert(key.clone(), current.clone()));
         let store = Arc::clone(&self.store);
         let key_owned = key.clone();
         let pending_map = Arc::clone(&self.pending_replays);
@@ -657,6 +671,7 @@ impl AcpTranscriptTap for TranscriptCacheCoordinator {
         let converted: Vec<(RawMessage, u64)> =
             frames.into_iter().map(|(seq, raw)| (raw, seq)).collect();
         self.runtime.spawn(async move {
+            if let Some(mut previous)=previous {let _=previous.wait_for(|done|*done).await;}
             let res = store
                 .replace_with_replay(&key_owned, version, profile, converted)
                 .await;
@@ -665,7 +680,7 @@ impl AcpTranscriptTap for TranscriptCacheCoordinator {
                 for record in &cached_records {
                     let mut st = *record.status_tx.borrow();
                     st.cache_warning = true;
-                    let _ = record.status_tx.send(st);
+                    record.status_tx.send_replace(st);
                     if let Ok(bytes) = encode_cache_state_json(st) {
                         let _ = record.owner.handle().push_custom_status(&key_owned, bytes);
                     }
@@ -676,11 +691,11 @@ impl AcpTranscriptTap for TranscriptCacheCoordinator {
             if let Ok(mut pending) = pending_map.lock()
                 && pending
                     .get(&key_owned)
-                    .is_some_and(|entry| Arc::ptr_eq(entry, &notify))
+                    .is_some_and(|entry| entry.same_channel(&current))
             {
                 pending.remove(&key_owned);
             }
-            notify.notify_waiters();
+            finished.send_replace(true);
         });
     }
 
@@ -787,8 +802,10 @@ impl TranscriptRecoveryObserver for TranscriptCacheCoordinator {
             status.capability_boundary = boundary;
             status.continuable = true;
             status.cache_warning = status.cache_warning || self.has_write_warning();
-            let _ = record.status_tx.send(status);
-            let _ = record.rebind_tx.send(RevalidationOutcome::SyncedReady);
+            record.status_tx.send_replace(status);
+            record
+                .rebind_tx
+                .send_replace(RevalidationOutcome::SyncedReady);
             let _ = record.owner.handle().seal_target_send(&record.key);
         }
     }

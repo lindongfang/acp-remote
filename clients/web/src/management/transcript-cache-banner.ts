@@ -4,7 +4,7 @@ import type {
 } from "./session-protocol";
 
 export interface TranscriptCacheBannerCallbacks {
-  readonly onRetrySync?: () => void;
+  readonly onRetrySync?: () => void | Promise<void>;
 }
 
 export type BannerStateInput = Pick<
@@ -26,8 +26,9 @@ export class TranscriptCacheBanner {
   readonly #warning: HTMLParagraphElement;
   readonly #retryButton: HTMLButtonElement;
   readonly #listeners = new AbortController();
-  #onRetrySync: (() => void) | undefined;
+  #onRetrySync: (() => void | Promise<void>) | undefined;
   #disposed = false;
+  #retryPending = false;
 
   constructor(owner: Document, callbacks: TranscriptCacheBannerCallbacks = {}) {
     this.#onRetrySync = callbacks.onRetrySync;
@@ -52,10 +53,16 @@ export class TranscriptCacheBanner {
     this.#retryButton.hidden = true;
     this.#retryButton.addEventListener(
       "click",
-      () => {
-        if (this.#disposed) return;
+      async () => {
+        if (this.#disposed || this.#retryPending) return;
+        this.#retryPending = true;
         this.#retryButton.disabled = true;
-        this.#onRetrySync?.();
+        try {
+          await this.#onRetrySync?.();
+        } finally {
+          this.#retryPending = false;
+          if (!this.#disposed) this.#retryButton.disabled = false;
+        }
       },
       { signal: this.#listeners.signal },
     );
@@ -88,7 +95,7 @@ export class TranscriptCacheBanner {
     this.#message.textContent = statusCopy ?? "";
     this.#message.hidden = statusCopy === null;
     this.#retryButton.hidden = !showRetry;
-    this.#retryButton.disabled = false;
+    this.#retryButton.disabled = this.#retryPending;
 
     this.#warning.textContent = cacheWarning
       ? "本地展示缓存写入降级告警：当前实时会话与审批不受影响，但断连后可能无法完整保留最新展示快照。"

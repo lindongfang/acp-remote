@@ -27,6 +27,7 @@ where
         self: &Arc<Self>,
         subject: NativeSessionKey,
         path: SessionTreePath,
+        history: bool,
         plan: Arc<SourceInitializationPlan<L::Plan, P::Setup>>,
         read: Arc<ReadAcquisitionState<P>>,
         check: C,
@@ -77,7 +78,7 @@ where
             let task = source.jobs.spawn_guarded(
                 async move {
                     let result = core
-                        .install_child_read(&slot, &owner, subject, read, check)
+                        .install_child_read(&slot, &owner, subject, history, read, check)
                         .await;
                     let _ = sender.send(result);
                 },
@@ -96,6 +97,7 @@ where
         source: &Arc<SourceSlot<P, L>>,
         capacity: &Arc<crate::application::native_dispatch::capacity::CapacityResource<P>>,
         subject: NativeSessionKey,
+        history: bool,
         read: Arc<ReadAcquisitionState<P>>,
         check: C,
     ) -> Result<Arc<SourceReadCapability<P>>, DispatchError>
@@ -126,7 +128,9 @@ where
                 .bind_target(&subject)
                 .map_err(view_dispatch)?;
         }
-        self.activate_child_owner(source, &owner).await?;
+        if !history || !self.protocol.has_child_history(owner.source()) {
+            self.activate_child_owner(source, &owner).await?;
+        }
         let capability = Arc::new(SourceReadCapability::ChildAutoDelivered(
             ChildReadCapability {
                 view_subject: subject.clone(),

@@ -23,6 +23,7 @@ use std::{
     num::NonZeroUsize,
     sync::{Arc, Mutex},
 };
+pub mod child_history;
 mod replay;
 pub use replay::admit_replay_capacity;
 
@@ -82,6 +83,7 @@ pub struct AcpSourceViews {
     pre: Arc<PreSourceProbe>,
     resources: Arc<dyn NativeReadResourceAccess<AcpNativeAdapter>>,
     registrar: Arc<dyn NativeReadTaskRegistrar<AcpNativeAdapter>>,
+    children: child_history::Queries,
     capture: Mutex<AcpViewCapture>,
     owner: Mutex<Option<Arc<SharedViewOwner<ConnectionScope, RetainedAcpRaw>>>>,
     operations: Mutex<Vec<std::sync::Weak<replay::ReplayOperation>>>,
@@ -167,6 +169,7 @@ impl NativeSourceViewFactory<AcpNativeAdapter> for AcpNativeViewFactory {
             pre: context.pre,
             resources: context.resources,
             registrar: context.registrar,
+            children: child_history::Queries::default(),
             capture: Mutex::new(capture),
             owner: Mutex::new(None),
             operations: Mutex::new(Vec::new()),
@@ -420,6 +423,7 @@ impl AcpSourceViews {
             .ok_or(ViewError::CaptureUnavailable)
     }
     pub(super) fn receive(&self, received: &Received) -> Result<(), ViewError> {
+        self.child_response(received)?;
         self.capture_replay_received(received)
     }
     #[cfg(all(test, windows, feature = "native-dispatch-dev-fixtures"))]

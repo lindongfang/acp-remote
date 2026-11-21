@@ -14,7 +14,7 @@ pub struct RetainedAcpRaw {
     observation: crate::application::shared_views::read_observation::ReadObservation,
 }
 impl RetainedAcpRaw {
-    pub(super) const fn message(&self) -> &RawMessage {
+    pub(crate) const fn message(&self) -> &RawMessage {
         &self.message
     }
     pub(crate) const fn from_cached_raw(

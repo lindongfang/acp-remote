@@ -18,3 +18,9 @@
 - **上下文恢复预载与原生删除同步擦除**：
   - `NativeCoordinator::load_resource` 仅向对端发送原生 `Strategy::resume`；若成功且未执行全量重放，先将未过期快照预载为前序历史段（`transcriptSource = "hybrid_resumed"`），再追加后续实时更新。若对端明确拒绝恢复，立即持久化 `native_unrecoverable` 并返回 `ProtocolRejected`。
   - `purge_deleted_native_session(&NativeSessionKey)` 同步终止在途单飞、封存内存缓存代际并立即清零擦除 `transcript-cache.sqlite3` 与 WAL 明文页。
+
+## 历史分页的来源边界
+
+静态历史页在同一个 SQLite 读事务中选择代际、轮次、原始帧和工具补丁。离线翻页期间，读流持有选择租约。命中快照即可在原生进程停止后读取，也可在原生会话不能重放时读取上次留存的内容。快照淘汰后，重新定位需要当前内存视图或原生重放能力。实时流收到无法归入轮次的后续记录时，以 `history_unprovable` 通知客户端重开完整视图。
+
+首次重放仍须通过主会话名额准入。只有发现记录和平台注册目标、缺少已验证根身份的外部会话，在快照缺失时会收到 `session_tree_unverified`。已验证根会话以及根树下已有关系证明的子目标分别沿用原有准入路径。

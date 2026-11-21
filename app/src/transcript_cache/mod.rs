@@ -5,6 +5,7 @@ mod coordinator;
 mod digest;
 mod schema;
 mod store;
+mod turns;
 mod writer;
 
 #[cfg(test)]
@@ -31,8 +32,11 @@ use crate::{
 pub use coordinator::{
     CachedViewHandle, RevalidationOutcome, TranscriptCacheCoordinator, encode_cache_state_json,
 };
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct HistoryGeneration(Option<(Vec<u8>, Vec<u8>)>);
+pub(crate) use digest::IncrementalDigest;
 pub use digest::compute_content_digest;
-pub use store::TranscriptCacheStore;
+pub use store::{CachedPage, PageReadError, TranscriptCacheStore};
 pub use writer::TranscriptCacheWriter;
 
 pub(crate) fn entity_id_to_bytes(id: EntityId) -> Result<[u8; 16], TranscriptCacheError> {

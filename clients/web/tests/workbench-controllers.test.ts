@@ -965,6 +965,7 @@ describe("ManagementWorkbench coordinator, dashboard order, frame routing, and l
           persistedSelection,
           "persisted-native-42",
           "reconnect",
+          {},
         );
       });
       expect(workbench.sharedView.sharedViewSpec).toEqual({

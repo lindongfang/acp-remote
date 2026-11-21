@@ -55,6 +55,48 @@ where
         + NativeControlRepository
         + super::super::NativeApprovalRepository,
 {
+    pub(in crate::application::native_dispatch) fn claim_child_history_tree(
+        &self,
+        source: &SourceSlot<P, L>,
+        capacity: &CapacityResource<P>,
+        operation: super::EntityId,
+    ) -> Result<Arc<dyn AutomaticCloseGuard>, DispatchError> {
+        let tree = self.automatic_tree(source, capacity)?;
+        tree.queue.claim_history(operation, &mut || {
+            let facts = tree
+                .resources
+                .iter()
+                .map(|r| r.target.facts.lock().map_err(|_| DispatchError::Stopped))
+                .collect::<Result<Vec<_>, _>>()?;
+            for target in &facts {
+                if !super::target_reconciled(Some(target))? {
+                    return Err(DispatchError::NotReady);
+                }
+            }
+            let activity = source
+                .capacity_activity
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?;
+            let root = capacity.pre.native.native_id();
+            if !tree.matches(&activity, root)? || activity.history_busy(root) {
+                return Err(DispatchError::NotReady);
+            }
+            let permissions = source
+                .permissions
+                .lock()
+                .map_err(|_| DispatchError::Stopped)?;
+            for slot in permissions.values().filter(|p| tree.contains(&p.session)) {
+                if !super::permission_settled(slot)? {
+                    return Err(DispatchError::NotReady);
+                }
+            }
+            drop(permissions);
+            drop(activity);
+            drop(facts);
+            Ok(())
+        })?;
+        Ok(tree.queue.clone())
+    }
     pub(super) fn automatic_tree(
         &self,
         source: &SourceSlot<P, L>,

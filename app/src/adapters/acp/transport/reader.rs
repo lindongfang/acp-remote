@@ -316,7 +316,19 @@ fn response(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), A
     let id = RpcId::parse(fields.get("id")?.ok_or(AcpError::InvalidMessage)?)?;
     let (key, kind, snapshot, strategy, observed) = {
         let s = core.lock();
-        let p = s.pending.get(&id).ok_or(AcpError::UnmatchedResponse)?;
+        let Some(p) = s.pending.get(&id) else {
+            // Late optional reads cannot affect any operation. While the only outstanding
+            // requests are child reads, unrelated response IDs make no progress.
+            if s.issued_child_id(&id)
+                || (!s.pending.is_empty()
+                    && s.pending
+                        .values()
+                        .all(|p| matches!(p.kind, RequestKind::ChildHistory)))
+            {
+                return Ok(());
+            }
+            return Err(AcpError::UnmatchedResponse);
+        };
         if !p.accepted
             || !cut
                 .eligible
@@ -326,6 +338,9 @@ fn response(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), A
             return Err(AcpError::UnmatchedResponse);
         }
         if matches!(p.deadline,ResponseDeadline::At(at) if cut.at>=at) {
+            if matches!(p.kind, RequestKind::ChildHistory) {
+                return Ok(());
+            }
             return Err(AcpError::Deadline);
         }
         (
@@ -348,7 +363,9 @@ fn response(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), A
         Response::RemoteError { code: error_code }
     } else {
         let result = fields.get("result")?.ok_or(AcpError::InvalidMessage)?;
-        object(result)?;
+        if !matches!(kind, RequestKind::ChildHistory) {
+            object(result)?;
+        }
         match &kind {
             RequestKind::Initialize(offer) => Response::Initialized(Strategy::select(
                 *offer,
@@ -383,6 +400,7 @@ fn response(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), A
                     }
                 }
             }
+            RequestKind::ChildHistory => Response::ChildHistory,
             RequestKind::ListSessions => {
                 let strategy = strategy.as_ref().ok_or(AcpError::NotInitialized)?;
                 if observed {
@@ -399,7 +417,18 @@ fn response(core: &Arc<Core>, cut: &ReceiptCut, raw: RawMessage) -> Result<(), A
     };
     let mut s = core.lock();
     if s.pending.get(&id).is_none_or(|p| p.cell.key != key) {
+        if matches!(kind, RequestKind::ChildHistory) {
+            return Ok(());
+        }
         return Err(AcpError::UnmatchedResponse);
+    }
+    if matches!(kind, RequestKind::ChildHistory)
+        && matches!(response, Response::RemoteError { code: -32601 })
+        && let Some(strategy) = &s.strategy
+    {
+        strategy
+            .child_history_enabled
+            .store(false, std::sync::atomic::Ordering::Release);
     }
     s.pending.remove(&id);
     s.expiry_waiting.remove(&key);

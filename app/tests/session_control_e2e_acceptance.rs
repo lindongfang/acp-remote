@@ -405,3 +405,345 @@ async fn sct_016_real_codex_harness_dual_browser_takeover_and_restart_e2e() {
         root_check.display()
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-027: requires embedded production Web, Edge and Playwright"]
+async fn hn_027_controlled_history_navigation() {
+    run_controlled_history("navigation").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-030: requires embedded production Web, Edge and Playwright"]
+async fn hn_030_identical_live_turn_in_edge() {
+    run_controlled_history("identical").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-030: requires embedded production Web, Edge and Playwright"]
+async fn hn_030_revoke_before_notice_in_edge() {
+    run_controlled_history("revoke-before-notice").await;
+}
+
+async fn pair_history_readers(area: &E2eTempArea) {
+    for name in ["a", "b"] {
+        tokio::time::timeout(
+            Duration::from_secs(50),
+            pair_one_client(
+                &area.ipc_addr,
+                &area.work_dir.join(format!("pairing-{name}.json")),
+            ),
+        )
+        .await
+        .expect("browser pairing deadline");
+    }
+}
+
+async fn run_controlled_history(scenario: &str) {
+    let repo = repo_root();
+    let area = setup_temp_e2e_area();
+    let bin = Path::new(env!("CARGO_BIN_EXE_acp-remote"));
+    let mut guard = E2eCleanupGuard {
+        root: area.temp_root.clone(),
+        ipc_address: area.ipc_addr.clone(),
+        node_child: Some(spawn_daemon(bin, &area.config_path)),
+        driver_child: None,
+    };
+    let job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
+    wait_node_ready(&area.ipc_addr).await;
+    let scripts = repo.join("clients/web/tests/e2e");
+    let evidence = repo
+        .join("testing/runs/deliver-history-navigation")
+        .join(match scenario {
+            "identical" => "hn-030-identical.json",
+            "revoke-before-notice" => "hn-030-revoke-before-notice.json",
+            _ => "hn-027.json",
+        });
+    fs::create_dir_all(evidence.parent().unwrap()).unwrap();
+    fs::write(area.peer_state_dir.join("history-navigation"), b"").unwrap();
+    let config = area.temp_root.join("browser.json");
+    fs::write(&config, serde_json::to_vec(&serde_json::json!({
+        "origin": area.origin, "workspaceDir": area.workspace_dir, "workDir": area.work_dir,
+        "peerStateDir": area.peer_state_dir, "peerScript": scripts.join("controlled-acp-v2-peer.mjs"),
+        "database": area.temp_root.join("node-data/node.sqlite3"), "evidenceOut": evidence,
+        "scenario": scenario,
+    })).unwrap()).unwrap();
+    guard.driver_child = Some(
+        Command::new("node")
+            .arg(scripts.join("history-navigation.mjs"))
+            .arg(config)
+            .spawn()
+            .unwrap(),
+    );
+    pair_history_readers(&area).await;
+    let seed = area.work_dir.join("seed-child.json");
+    while !seed.exists() {
+        if guard
+            .driver_child
+            .as_mut()
+            .unwrap()
+            .try_wait()
+            .unwrap()
+            .is_some()
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    if seed.exists() {
+        use acp_remote::{
+            adapters::acp::{RawMessage, Version},
+            domain::{EntityId, native::NativeSessionKey},
+            transcript_cache::{
+                CapabilityProfile, NoProtectedSessions, SystemRetentionClock, TranscriptCacheStore,
+            },
+        };
+        use std::sync::Arc;
+        let seed: serde_json::Value = serde_json::from_slice(&fs::read(seed).unwrap()).unwrap();
+        let source = EntityId::decode(seed["source_id"].as_str().unwrap()).unwrap();
+        let key = NativeSessionKey::from_config(Some(source), "child-history").unwrap();
+        let store = TranscriptCacheStore::open(
+            area.temp_root.join("node-data/transcript-cache.sqlite3"),
+            acp_remote::config::TranscriptCacheConfig::default(),
+            Arc::new(SystemRetentionClock),
+            Arc::new(NoProtectedSessions),
+        )
+        .await
+        .unwrap();
+        let frames = (1..=12).map(|i| {
+            let frame=serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{
+                "sessionId":"child-history","update":{"sessionUpdate":"user_message_chunk",
+                "messageId":i.to_string(),"content":{"type":"text","text":format!("HN child {i}")}}}});
+            (RawMessage::parse(serde_json::to_vec(&frame).unwrap()).unwrap(),i)
+        }).collect();
+        store
+            .replace_with_replay(&key, Version::V2, CapabilityProfile::ReplayCapable, frames)
+            .await
+            .unwrap();
+        store.shutdown().await.unwrap();
+        fs::write(area.work_dir.join("child-seeded"), b"").unwrap();
+    }
+    let status = guard.driver_child.as_mut().unwrap().wait().unwrap();
+    ipc::stop(&area.ipc_addr).await.unwrap();
+    assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
+    assert_eq!(job.totals().1, 0, "node descendant still active");
+    drop(guard);
+    assert!(!area.temp_root.exists());
+    assert!(TcpListener::bind(area.origin.trim_start_matches("https://")).is_ok());
+    assert!(
+        status.success(),
+        "HN-027 browser assertions failed; see sanitized evidence"
+    );
+}
+
+struct HistoryProcessJob(std::os::windows::io::OwnedHandle);
+
+impl HistoryProcessJob {
+    fn attach(node: &Child) -> Self {
+        use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+        use windows_sys::Win32::System::JobObjects::{AssignProcessToJobObject, CreateJobObjectW};
+        // SAFETY: anonymous job without inherited handles; take ownership after checking creation.
+        let raw = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+        assert!(!raw.is_null());
+        let job = unsafe { OwnedHandle::from_raw_handle(raw) };
+        // SAFETY: both handles outlive this call, before pairing or launching any harness.
+        assert_ne!(
+            unsafe { AssignProcessToJobObject(raw, node.as_raw_handle()) },
+            0
+        );
+        Self(job)
+    }
+
+    fn totals(&self) -> (u32, u32) {
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::System::JobObjects::{
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JobObjectBasicAccountingInformation,
+            QueryInformationJobObject,
+        };
+        let mut counts = JOBOBJECT_BASIC_ACCOUNTING_INFORMATION::default();
+        // SAFETY: the output buffer and its length match the accounting information class.
+        assert_ne!(
+            unsafe {
+                QueryInformationJobObject(
+                    self.0.as_raw_handle(),
+                    JobObjectBasicAccountingInformation,
+                    (&raw mut counts).cast(),
+                    std::mem::size_of_val(&counts).try_into().unwrap(),
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        (counts.TotalProcesses, counts.ActiveProcesses)
+    }
+}
+
+fn isolated_history_codex_home(root: &Path) -> PathBuf {
+    let source = std::env::var_os("HN_CODEX_HOME")
+        .or_else(|| std::env::var_os("CODEX_HOME"))
+        .map_or_else(
+            || PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join(".codex"),
+            PathBuf::from,
+        );
+    let home = root.join("codex-home");
+    fs::create_dir(&home).unwrap();
+    fs::copy(source.join("auth.json"), home.join("auth.json")).expect("copy isolated login");
+    let config_path = source.join("config.toml");
+    let mut selected = toml::Table::new();
+    // session/close unsubscribes. Let this isolated app-server unload its idle
+    // thread immediately so the independent writer can acquire the same thread.
+    selected.insert("thread_unload_delay_secs".to_owned(), 0.into());
+    if config_path.is_file() {
+        let contents = fs::read_to_string(config_path).expect("read Codex configuration");
+        let config: toml::Table = contents
+            .parse()
+            .unwrap_or_else(|_| panic!("invalid Codex configuration"));
+        for key in [
+            "model",
+            "model_provider",
+            "openai_base_url",
+            "model_catalog_json",
+            "model_reasoning_effort",
+            "service_tier",
+        ] {
+            if let Some(value) = config.get(key) {
+                selected.insert(key.to_owned(), value.clone());
+            }
+        }
+        if let Some(catalog) = selected.get("model_catalog_json").and_then(|v| v.as_str()) {
+            let path = source.join(catalog);
+            fs::copy(path, home.join("models.json")).expect("copy configured model catalog");
+            selected.insert(
+                "model_catalog_json".to_owned(),
+                home.join("models.json").to_str().unwrap().into(),
+            );
+        }
+        if let Some(name) = config.get("model_provider").and_then(|v| v.as_str())
+            && let Some(provider) = config.get("model_providers").and_then(|v| v.get(name))
+        {
+            let mut providers = toml::Table::new();
+            providers.insert(name.to_owned(), provider.clone());
+            selected.insert("model_providers".to_owned(), providers.into());
+        }
+    }
+    fs::write(
+        home.join("config.toml"),
+        toml::to_string(&selected).unwrap(),
+    )
+    .unwrap();
+    home
+}
+
+fn history_codex_executables(repo: &Path) -> (PathBuf, PathBuf) {
+    let adapter = std::env::var_os("HN_CODEX_ADAPTER").map_or_else(||repo.join(
+        "testing/probes/codex-session-loop/node_modules/@agentclientprotocol/codex-acp/dist/index.js"),
+        PathBuf::from);
+    let codex = std::env::var_os("HN_CODEX_PATH").map_or_else(
+        || {
+            PathBuf::from(std::env::var_os("LOCALAPPDATA").unwrap())
+                .join("Programs/OpenAI/Codex/bin/codex.exe")
+        },
+        PathBuf::from,
+    );
+    assert!(
+        adapter.is_file() && codex.is_file(),
+        "not-run: missing real adapter or executable"
+    );
+    (adapter, codex)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-028: requires installed authenticated Codex and codex-acp"]
+async fn hn_028_real_history_navigation() {
+    let repo = repo_root();
+    let (adapter, codex) = history_codex_executables(&repo);
+    let area = setup_temp_e2e_area();
+    let bin = Path::new(env!("CARGO_BIN_EXE_acp-remote"));
+    let mut guard = E2eCleanupGuard {
+        root: area.temp_root.clone(),
+        ipc_address: area.ipc_addr.clone(),
+        node_child: Some(spawn_daemon(bin, &area.config_path)),
+        driver_child: None,
+    };
+    let home = isolated_history_codex_home(&area.temp_root);
+    let mut job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
+    wait_node_ready(&area.ipc_addr).await;
+    let evidence = repo.join("testing/runs/deliver-history-navigation/hn-028.json");
+    fs::create_dir_all(evidence.parent().unwrap()).unwrap();
+    let config = area.temp_root.join("browser.json");
+    fs::write(&config,serde_json::to_vec(&serde_json::json!({
+        "realCodexMode":true,"codexHome":home,"codexPath":codex,"codexAdapter":adapter,
+        "origin":area.origin,"workspaceDir":area.workspace_dir,"workDir":area.work_dir,"evidenceOut":evidence,
+    })).unwrap()).unwrap();
+    guard.driver_child = Some(
+        Command::new("node")
+            .arg(repo.join("clients/web/tests/e2e/history-navigation.mjs"))
+            .arg(config)
+            .env_remove("OPENAI_API_KEY")
+            .env_remove("CODEX_API_KEY")
+            .spawn()
+            .unwrap(),
+    );
+    tokio::time::timeout(
+        Duration::from_secs(50),
+        pair_one_client(&area.ipc_addr, &area.work_dir.join("pairing-a.json")),
+    )
+    .await
+    .unwrap();
+    let mut total = None;
+    let mut completed = 0;
+    for step in ["restart", "before-pages", "after-pages"] {
+        let signal = area.work_dir.join(step);
+        while !signal.exists()
+            && guard
+                .driver_child
+                .as_mut()
+                .unwrap()
+                .try_wait()
+                .unwrap()
+                .is_none()
+        {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if !signal.exists() {
+            break;
+        }
+        match step {
+            "restart" => {
+                ipc::stop(&area.ipc_addr).await.unwrap();
+                assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
+                assert_eq!(job.totals().1, 0);
+                guard.node_child = Some(spawn_daemon(bin, &area.config_path));
+                job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
+                wait_node_ready(&area.ipc_addr).await;
+            }
+            "before-pages" => total = Some(job.totals().0),
+            _ => assert_eq!(
+                Some(job.totals().0),
+                total,
+                "a node descendant started during offline paging"
+            ),
+        }
+        fs::write(area.work_dir.join(format!("{step}.done")), b"").unwrap();
+        completed += 1;
+    }
+    let status = guard.driver_child.as_mut().unwrap().wait().unwrap();
+    ipc::stop(&area.ipc_addr).await.unwrap();
+    assert!(guard.node_child.as_mut().unwrap().wait().unwrap().success());
+    assert_eq!(job.totals().1, 0);
+    drop(guard);
+    assert!(!area.temp_root.exists());
+    assert!(TcpListener::bind(area.origin.trim_start_matches("https://")).is_ok());
+    assert!(
+        status.success() && completed == 3,
+        "real browser assertions failed"
+    );
+    let mut report: serde_json::Value =
+        serde_json::from_slice(&fs::read(&evidence).unwrap()).unwrap();
+    report["nodeChecks"] = serde_json::json!({
+        "offlineNewJobProcesses": 0,
+        "activeJobProcessesAfterShutdown": 0,
+        "isolatedDirectoryRemoved": true,
+        "portRebound": true
+    });
+    fs::write(evidence, serde_json::to_vec_pretty(&report).unwrap()).unwrap();
+}

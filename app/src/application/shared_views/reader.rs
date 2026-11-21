@@ -49,11 +49,14 @@ struct Position {
     section: Section,
     item: usize,
     delta: usize,
+    material_field: usize,
+    material_index: usize,
     evidence_field: usize,
     evidence_index: usize,
     projection_record: u64,
     after: u64,
     announced: usize,
+    marker: Option<usize>,
     ended: usize,
     status_delta: usize,
     status_record: u64,
@@ -129,7 +132,41 @@ impl<T> Drop for DeferredRetirement<T> {
         }
     }
 }
+// A range record starts with its original byte offset, followed by one exact JSON token.
+fn field_bytes_chunk(
+    start: usize,
+    value: &[u8],
+    offset: usize,
+) -> Result<(Vec<u8>, usize), ViewError> {
+    let prefix = (start as u64).to_be_bytes();
+    let total = value
+        .len()
+        .checked_add(prefix.len())
+        .ok_or(ViewError::LengthUnrepresentable)?;
+    let end = offset.saturating_add(MAX_PAYLOAD_BYTES).min(total);
+    if offset >= end || value.is_empty() {
+        return Err(ViewError::InvalidCursor);
+    }
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(end - offset)
+        .map_err(|_| ViewError::AllocationFailure)?;
+    if offset < prefix.len() {
+        bytes.extend_from_slice(&prefix[offset..]);
+    }
+    bytes.extend_from_slice(&value[offset.saturating_sub(prefix.len())..end - prefix.len()]);
+    Ok((bytes, total))
+}
 enum Selection<R> {
+    FieldBytes {
+        bytes: Vec<u8>,
+        total: u64,
+        position: Position,
+        next: Position,
+        id: u64,
+        segment: ViewEpoch,
+        source_range: SourceRange,
+    },
     Raw {
         raw: SelectedRaw<R>,
         id: u64,
@@ -160,7 +197,22 @@ struct PendingPosition {
     packet: u64,
     next: Position,
 }
+pub(crate) struct HistoryTail<R> {
+    pub index: crate::domain::history_page::TurnIndexer,
+    pub next: usize,
+    pub classify: Box<dyn Fn(&R) -> crate::domain::history_page::FrameClass + Send + Sync>,
+}
+pub(crate) struct HistoryWindow {
+    pub records: std::ops::Range<usize>,
+    pub turns: Vec<(u64, u64)>,
+    pub live: bool,
+    pub unprovable: bool,
+    pub invalidated: Option<usize>,
+}
 struct ReadData<R> {
+    history: Option<HistoryWindow>,
+    history_lease: Option<SelectionLease>,
+    history_tail: Option<HistoryTail<R>>,
     snapshot: Arc<TargetSnapshot<R>>,
     generation: Arc<TargetGeneration<R>>,
     position: Position,
@@ -774,11 +826,91 @@ where
             .downcast::<ReadSlot<R>>()
             .map_err(|_| ViewError::InvalidClient)
     }
+    /// A finite page keeps its captured projection across later replay publications.
+    /// The independent send fence still shares the source and native target revocation flags.
+    pub(crate) async fn open_history_snapshot(
+        &self,
+        client: &C,
+        read: &OpenedView,
+    ) -> Result<OpenedView, ViewError> {
+        let generation = {
+            let slot = self.slot(client, read)?;
+            let guard = slot.data.lock().map_err(|_| ViewError::ReadFailure)?;
+            let data = guard.as_ref().ok_or(ViewError::StaleCursor)?;
+            Arc::new(TargetGeneration {
+                replaced: tokio::sync::watch::channel(false).0,
+                send: data
+                    .generation
+                    .send
+                    .next_epoch(data.snapshot.descriptor.view_epoch()),
+                snapshot: std::sync::RwLock::new(Arc::clone(&data.snapshot)),
+                custom_statuses: Mutex::new(crate::domain::shared_view_log::AppendLog::new()?),
+            })
+        };
+        self.open_selected(client, &read.handle.target, Some(generation))
+            .await
+    }
     /// Internal current-observation capture. External open also registers its actual read intent.
     #[allow(
         clippy::too_many_lines,
         reason = "Keep consumer ownership registration and cancellation-before-publication in one auditable transaction"
     )]
+    pub(crate) fn history_records(
+        &self,
+        client: &C,
+        read: &OpenedView,
+    ) -> Result<super::indexed_journal::JournalSnapshot<R>, ViewError> {
+        let slot = self.slot(client, read)?;
+        let guard = slot.data.lock().map_err(|_| ViewError::ReadFailure)?;
+        Ok(guard
+            .as_ref()
+            .ok_or(ViewError::StaleCursor)?
+            .snapshot
+            .projection
+            .clone())
+    }
+    pub(crate) fn history_replacement(
+        &self,
+        client: &C,
+        read: &OpenedView,
+    ) -> Result<tokio::sync::watch::Receiver<bool>, ViewError> {
+        let slot = self.slot(client, read)?;
+        let data = slot.data.lock().map_err(|_| ViewError::ReadFailure)?;
+        Ok(data
+            .as_ref()
+            .ok_or(ViewError::StaleCursor)?
+            .generation
+            .replaced
+            .subscribe())
+    }
+    pub(crate) fn select_history_window(
+        &self,
+        client: &C,
+        read: &OpenedView,
+        window: HistoryWindow,
+        tail: Option<HistoryTail<R>>,
+    ) -> Result<(), ViewError> {
+        let slot = self.slot(client, read)?;
+        let mut guard = slot.data.lock().map_err(|_| ViewError::ReadFailure)?;
+        let data = guard.as_mut().ok_or(ViewError::StaleCursor)?;
+        let journal = &data.snapshot.projection;
+        if window.records.end > journal.records.len() || window.records.start > window.records.end {
+            return Err(ViewError::InvalidCursor);
+        }
+        data.position.index = window.records.start;
+        if !window.records.is_empty() {
+            let floor = journal.records.get(window.records.start)?.revision;
+            while data.position.item < journal.anchors.len()
+                && journal.anchors.get(data.position.item)?.first_revision < floor
+            {
+                data.position.item += 1;
+            }
+        }
+        data.history_lease = Some(slot.leases.claim()?);
+        data.history = Some(window);
+        data.history_tail = tail;
+        Ok(())
+    }
     pub(crate) async fn open_current(
         &self,
         client: &C,
@@ -920,6 +1052,9 @@ where
                 },
             )),
             data: Mutex::new(Some(ReadData {
+                history: None,
+                history_lease: None,
+                history_tail: None,
                 snapshot,
                 generation,
                 position: Position {
@@ -929,11 +1064,14 @@ where
                     section: Section::Raw,
                     item: 0,
                     delta: 0,
+                    material_field: 0,
+                    material_index: 0,
                     evidence_field: 0,
                     evidence_index: 0,
                     projection_record: 1,
                     after: descriptor.revision().as_u64(),
                     announced: 0,
+                    marker: None,
                     ended: 0,
                     status_delta: 0,
                     status_record: 2,
@@ -997,7 +1135,8 @@ where
                     let _ = stream.seal();
                 }
                 let _ = slot.sample();
-                let retired = slot.data.lock().map_err(|_| ViewError::ReadFailure)?.take();
+                let mut retired = slot.data.lock().map_err(|_| ViewError::ReadFailure)?.take();
+                if let Some(data)=retired.as_mut(){data.history_lease.take();}
                 slot.leases.wait_empty().await;
                 context.retire(retired).await?;
                 Ok(())
@@ -1085,6 +1224,14 @@ where
         client: &C,
         read: &OpenedView,
     ) -> Result<(), ViewError> {
+        self.wait_read_mode(client, read, false).await.map(|_| ())
+    }
+    pub(crate) async fn wait_read_mode(
+        &self,
+        client: &C,
+        read: &OpenedView,
+        accept_current_only: bool,
+    ) -> Result<crate::domain::shared_view::ReadMode, ViewError> {
         let mut changes = {
             let intent = read
                 .handle
@@ -1119,7 +1266,10 @@ where
                 .await?;
             let status = changes.borrow_and_update().clone();
             match status.read_mode() {
-                crate::domain::shared_view::ReadMode::ReplayComplete => return Ok(()),
+                mode @ crate::domain::shared_view::ReadMode::ReplayComplete => return Ok(mode),
+                mode @ crate::domain::shared_view::ReadMode::CurrentOnly if accept_current_only => {
+                    return Ok(mode);
+                }
                 crate::domain::shared_view::ReadMode::ReplayIncomplete => {
                     return Err(status.failure().unwrap_or(ViewError::ReadFailure));
                 }
@@ -1390,7 +1540,15 @@ where
             );
         }
         if position.section == Section::Raw {
-            let raw = if position.index < journal.records.len() {
+            let end = data
+                .history
+                .as_ref()
+                .filter(|_| !tail)
+                .map_or(journal.records.len(), |w| w.records.end);
+            if tail && data.history.as_ref().is_some_and(|w| !w.live) {
+                return Ok(Selection::Wait);
+            }
+            let raw = if position.index < end {
                 Some(journal.records.get(position.index)?)
             } else {
                 None
@@ -1457,6 +1615,46 @@ where
                         super::segments::SegmentPhase::Update,
                     );
                 }
+                if tail
+                    && let Some(window) = &data.history
+                    && position.offset == 0
+                    && position.marker != Some(position.index)
+                {
+                    let marker = window
+                        .turns
+                        .binary_search_by_key(&raw.revision, |b| b.1)
+                        .ok()
+                        .map(|i| window.turns[i]);
+                    let metadata = if let Some((turn, first)) = marker {
+                        Some((
+                            RecordKind::TurnStart,
+                            serde_json::json!({"turn":turn.to_string(),"firstPosition":first.to_string()}),
+                        ))
+                    } else if window.invalidated == Some(position.index) {
+                        Some((
+                            RecordKind::Status,
+                            serde_json::json!({"type":"history_unprovable"}),
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some((kind, value)) = metadata {
+                        let mut next = position;
+                        next.marker = Some(position.index);
+                        next.status_record = position
+                            .status_record
+                            .checked_add(1)
+                            .ok_or(ViewError::SequenceExhausted)?;
+                        return Ok(Selection::Metadata {
+                            bytes: value.to_string().into_bytes(),
+                            position: original,
+                            next,
+                            id: position.status_record,
+                            kind,
+                            segment: raw.segment,
+                        });
+                    }
+                }
                 return Ok(Selection::Raw {
                     segment: raw.segment,
                     raw: SelectedRaw {
@@ -1491,7 +1689,22 @@ where
                 Arc::clone(&delta.version),
             )
         } else {
-            if position.item >= journal.anchors.len() {
+            let anchor_limit = data
+                .history
+                .as_ref()
+                .map(|w| w.records.end)
+                .filter(|end| *end < journal.records.len())
+                .map(|end| journal.records.get(end))
+                .transpose()?
+                .map(|raw| raw.revision);
+            if position.item >= journal.anchors.len()
+                || anchor_limit.is_some_and(|limit| {
+                    journal
+                        .anchors
+                        .get(position.item)
+                        .is_ok_and(|a| a.first_revision >= limit)
+                })
+            {
                 if position.ended < current.segments.publications.len() {
                     let metadata = *current
                         .segments
@@ -1534,6 +1747,63 @@ where
                 super::segments::SegmentPhase::Update,
             );
         }
+        if !tail
+            && position.section == Section::Item
+            && let Some(window) = &data.history
+        {
+            while let Some(field) = version.fields.get(position.material_field) {
+                // Content's primary is the last entry in its ordered evidence.
+                let reference = if field.evidence_count() > 0 {
+                    (position.material_index < field.evidence_count())
+                        .then(|| field.evidence_at(position.material_index))
+                        .transpose()?
+                } else if position.material_index == 0 {
+                    field.raw_reference()
+                } else {
+                    None
+                };
+                let Some(reference) = reference else {
+                    position.material_field += 1;
+                    position.material_index = 0;
+                    continue;
+                };
+                if window.records.contains(&reference.record_index) {
+                    position.material_index += 1;
+                    continue;
+                }
+                let source = journal.records.get(reference.record_index)?;
+                if source.id != reference.record() || source.segment != publication.segment {
+                    return Err(ViewError::InvalidCursor);
+                }
+                let value = source
+                    .raw
+                    .bytes()
+                    .get(reference.byte_start()..reference.byte_end())
+                    .ok_or(ViewError::InvalidCursor)?;
+                let (bytes, total) =
+                    field_bytes_chunk(reference.byte_start(), value, position.offset)?;
+                let mut next = position;
+                next.offset += bytes.len();
+                if next.offset == total {
+                    next.offset = 0;
+                    next.material_index += 1;
+                }
+                return Ok(Selection::FieldBytes {
+                    bytes,
+                    total: total as u64,
+                    position: original,
+                    next,
+                    id: source.id.as_u64(),
+                    segment: source.segment,
+                    source_range: SourceRange {
+                        sequence: source.sequence,
+                        order: source.receipt_order,
+                    },
+                });
+            }
+        }
+        position.material_index = 0;
+        position.material_field = 0;
         let mut next = position;
         let bytes = if position.section == Section::Item {
             if let Some((field, index)) = super::projection_wire::first_evidence(&version, 0) {
@@ -1659,6 +1929,39 @@ where
                             .map_err(|_| ViewError::ReadFailure)?,
                     )
                 };
+                if !snapshot
+                    && let Some(window) = data.history.as_mut()
+                    && window.live
+                {
+                    let records = &current.projection.records;
+                    if let Some(tail) = data.history_tail.as_mut()
+                        && tail.next == data.position.index
+                        && tail.next < records.len()
+                    {
+                        let raw = records.get(tail.next)?;
+                        if let Some(turn) = tail.index.observe((tail.classify)(&raw.raw)) {
+                            window.turns.push((turn, raw.revision));
+                        }
+                        if !tail.index.provable() && !window.unprovable {
+                            window.invalidated.get_or_insert(tail.next);
+                        }
+                        tail.next += 1;
+                    }
+                    if let Some(i) = window.invalidated
+                        && data.position.marker == Some(i)
+                    {
+                        return Err(ViewError::StaleCursor);
+                    }
+                    if !window.records.is_empty() {
+                        let floor = records.get(window.records.start)?.revision;
+                        let versions = &current.projection.versions;
+                        while data.position.delta < versions.len()
+                            && versions.get(data.position.delta)?.first_position < floor
+                        {
+                            data.position.delta += 1;
+                        }
+                    }
+                }
                 let custom_statuses = data
                     .generation
                     .custom_statuses
@@ -1699,6 +2002,25 @@ where
                     None,
                     None,
                     read.handle.descriptor.view_epoch(),
+                ),
+                Selection::FieldBytes {
+                    bytes,
+                    total,
+                    position,
+                    next,
+                    id,
+                    segment,
+                    source_range,
+                } => (
+                    position,
+                    next,
+                    id,
+                    total,
+                    RecordKind::FieldBytes,
+                    None,
+                    Some(bytes),
+                    Some(source_range),
+                    segment,
                 ),
                 Selection::Metadata {
                     bytes,
@@ -1788,7 +2110,7 @@ where
                 client,
                 &read.handle.target,
                 record,
-                if kind == RecordKind::OriginalRaw {
+                if matches!(kind, RecordKind::OriginalRaw | RecordKind::FieldBytes) {
                     position.offset as u64
                 } else {
                     0

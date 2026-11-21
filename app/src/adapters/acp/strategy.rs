@@ -21,6 +21,7 @@ pub enum RequestKind {
     Resume(SessionId),
     Replay(SessionId),
     ListSessions,
+    ChildHistory,
     Close(SessionId),
 }
 pub struct Request {
@@ -53,6 +54,7 @@ impl fmt::Debug for Request {
 pub struct Strategy {
     pub(super) scope: ConnectionScope,
     negotiated: Negotiated,
+    pub(super) child_history_enabled: Arc<std::sync::atomic::AtomicBool>,
 }
 pub(super) fn at<'a>(
     mut v: RawValueRef<'a>,
@@ -69,6 +71,17 @@ pub(super) fn at<'a>(
     }
     Ok(Some(v))
 }
+
+pub(super) fn update_message_id(
+    version: Version,
+    update: RawValueRef<'_>,
+) -> Result<Option<MessageId>, AcpError> {
+    at(update, &["messageId"])?
+        .filter(|v| version != Version::V1 || !v.is_null())
+        .map(MessageId::parse)
+        .transpose()
+}
+
 impl Strategy {
     pub(super) fn select(
         offer: Version,
@@ -153,6 +166,11 @@ impl Strategy {
         };
         Ok(Self {
             scope,
+            child_history_enabled: Arc::new(std::sync::atomic::AtomicBool::new(
+                at(caps, &["_meta", super::child_history::KEY, "version"])?
+                    .and_then(RawValueRef::unsigned)
+                    == Some(1),
+            )),
             negotiated: Negotiated {
                 offered: offer,
                 version,
@@ -169,7 +187,7 @@ impl Strategy {
     pub const fn version(&self) -> Version {
         self.negotiated.version
     }
-    fn request(
+    pub(super) fn request(
         &self,
         method: &'static str,
         kind: RequestKind,
@@ -513,10 +531,7 @@ impl Strategy {
             | "agent_thought"
             | "agent_thought_chunk" => Ok(SessionEvent::Message {
                 session,
-                message: at(update, &["messageId"])?
-                    .filter(|v| self.version() != Version::V1 || !v.is_null())
-                    .map(MessageId::parse)
-                    .transpose()?,
+                message: update_message_id(self.version(), update)?,
                 kind,
             }),
             _ => Ok(SessionEvent::Other { session, kind }),
@@ -668,7 +683,19 @@ pub(super) fn initialize(scope: ConnectionScope, offer: Version) -> Result<Reque
             } else {
                 "capabilities"
             },
-            raw::literal("{}")?,
+            raw::object(
+                [(
+                    "_meta",
+                    &raw::object(
+                        [(
+                            super::child_history::KEY,
+                            &raw::literal(r#"{"version":1}"#)?,
+                        )],
+                        None,
+                    )?,
+                )],
+                None,
+            )?,
         ),
         (
             if offer == Version::V1 {

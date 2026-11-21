@@ -165,3 +165,56 @@ async fn restore_worker_failure_seals_its_admitted_flag_and_exposes_route_failur
     assert_eq!(views.core.probe.route_failure(), Some(error));
     assert!(!send.current().unwrap());
 }
+
+#[tokio::test]
+async fn hn_030_publication_takes_send_fence_before_candidate_write() {
+    use std::sync::TryLockError;
+    use std::time::{Duration, Instant};
+
+    let Fixture {
+        owner: _owner,
+        producer: _producer,
+        mut pending,
+        key,
+    } = fixture();
+    let worker = &mut pending.worker;
+    let current = worker.generation(&key, None, None, None).unwrap();
+    worker.install_target(&key, current).unwrap();
+    let next = worker
+        .generation(&key, Some(ReadEpoch::fresh().unwrap()), None, None)
+        .unwrap();
+    let target = worker.targets.get(&key).unwrap();
+    let old = &target.current.published;
+    let replaced = old.replaced.subscribe();
+    let candidate_reader = target.published.candidate.read().unwrap();
+    std::thread::scope(|scope| {
+        let publisher = scope.spawn(|| Worker::<(), Raw>::replace_generation(target, &next));
+        // Only the publisher can own the send fence. Release the candidate lock
+        // even on timeout, so a lock-order regression cannot strand the worker.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let fenced = loop {
+            if matches!(
+                old.send.group.inner.try_lock(),
+                Err(TryLockError::WouldBlock)
+            ) {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        drop(candidate_reader);
+        publisher.join().unwrap().unwrap();
+        assert!(
+            fenced,
+            "publisher must own send fence while waiting for candidate"
+        );
+    });
+    assert!(*replaced.borrow());
+    assert!(!old.send.current().unwrap());
+    assert!(Arc::ptr_eq(
+        &target.published.current.read().unwrap(),
+        &next.published
+    ));
+}

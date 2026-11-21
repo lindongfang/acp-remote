@@ -317,6 +317,68 @@ describe("C50 authenticated request isolation", () => {
     },
   );
 
+  it("isolates a late result for a retired manual history refresh", async () => {
+    const { connection, fake, commands, answer } = await connectedErrorFixture();
+    try {
+      const first = connection.openSessionView(id(11), "explicit_refresh", { turns:"5" }, true);
+      const oldId = commands()[0]!.requestId;
+      fake.receive({ v:1, type:"result", requestId:oldId, ok:false, result:null, error:{code:"not_found"} });
+      await expect(first).rejects.toMatchObject({code:"not_found"});
+      const current = connection.nodeInfo().catch((error: unknown) => error);
+      const currentId = commands()[1]!.requestId;
+      const opened = (requestId: unknown, streamId: string) => ({
+        v:1, type:"view.opened", requestId, streamId, viewEpoch:id(19), snapshotRevision:"1",
+        capabilities:{opaqueChunks:1}, status:{mode:"current_only", freshness:"current_observation",
+          projection:"available", join:"proven_native_ids", historyIncomplete:false, cacheRecoverable:true},
+      });
+      const retry = connection.openSessionView(id(11), "explicit_refresh", {}, true);
+      const retryId = commands()[2]!.requestId;
+      const active = opened(retryId, id(21));
+      fake.receive(result(retryId, active));
+      await retry;
+      const other = connection.openSessionView(id(12), "first_open");
+      const otherId = commands()[3]!.requestId;
+      fake.receive(result(otherId, opened(otherId, id(22))));
+      await other;
+      for (const stream of [id(22), id(20)]) {
+        const mismatched = connection.openSessionView(id(11), "explicit_refresh", {}, true);
+        const waitingId = commands().at(-1)!.requestId;
+        const crossed = result(waitingId, opened(oldId, stream));
+        fake.receive(crossed);
+        await expect(mismatched).rejects.toMatchObject({code:"invalid_response"});
+        fake.receive(crossed);
+      }
+      const next = connection.openSessionView(id(11), "explicit_refresh", {}, true);
+      const nextId = commands().at(-1)!.requestId;
+      const repeated = result(nextId, opened(nextId, id(25)));
+      fake.receive(repeated);
+      fake.receive(repeated);
+      await next;
+      fake.receive(result(oldId, opened(oldId, id(22))));
+      fake.receive(result(retryId, active));
+      fake.receive(result(oldId, opened(otherId, id(23))));
+      fake.receive(result(oldId, opened(oldId, id(21))));
+      const abandoned = opened(oldId, id(20));
+      fake.receive(result(oldId, abandoned));
+      fake.receive(result(oldId, abandoned));
+      answer(currentId);
+      await expect(current).resolves.toMatchObject({status:"ready"});
+      const closes = commands().filter(frame => frame.action === "view.close");
+      expect(closes.map(frame => frame.payload)).toEqual([{streamId:id(20)}]);
+      fake.receive(result(closes[0]!.requestId, {streamId:id(20), alreadyClosed:false,
+        lastCommittedPacket:"0", startedPacket:"0", state:"closed"}));
+      answer(oldId);
+      const finalRead = connection.nodeInfo();
+      answer(commands().at(-1)!.requestId);
+      await finalRead;
+      expect(fake.closeCalls).toHaveLength(0);
+      const foreign = connection.nodeInfo();
+      fake.receive(result(id(90), opened(id(90), id(24))));
+      await expect(foreign).rejects.toBeInstanceOf(ManagementProtocolError);
+      expect(commands().filter(frame => frame.action === "view.close")).toEqual(closes);
+    } finally { connection.disconnect(); }
+  });
+
   it.each(["unknown", "duplicate"] as const)("keeps %s result request identity fatal", async (kind) => {
     const { connection, fake, commands } = await connectedErrorFixture();
     try {
@@ -366,6 +428,8 @@ describe("management frame parsing", () => {
         revision: 1,
         padding: "x".repeat(33 * 1024),
       }),
+      JSON.stringify({ v: 1, type: "history.invalidated", streamId: id(42), cursor: "extra" }),
+      '{"v":1,"type":"history.invalidated","streamId":"bad"}',
       '{"v":1,"type":"unknown"}',
     ];
     for (const value of cases) {
@@ -543,6 +607,7 @@ describe("management WebSocket client", () => {
       ["acpr.access.v1"],
     );
     const changes: number[] = [];
+    const invalidated: string[] = [];
     const connection = new ManagementConnection(
       expected,
       client.privateKey,
@@ -557,6 +622,7 @@ describe("management WebSocket client", () => {
         },
         callbacks: {
           onDevicesChanged: (revision) => changes.push(revision),
+          onHistoryInvalidated: stream => invalidated.push(stream),
         },
       },
     );
@@ -756,6 +822,8 @@ describe("management WebSocket client", () => {
     expect(page.items[0]?.clientId).toBe(clientId);
     await connection.subscribeDevices();
     await vi.waitFor(() => expect(changes).toContain(9));
+    fake.receive({ v: 1, type: "history.invalidated", streamId: id(42) });
+    await vi.waitFor(() => expect(invalidated).toEqual([id(42)]));
     const queue = await connection.inspectSessionQueue(id(15));
     expect(queue).toMatchObject({
       stopReason: "max_tokens",

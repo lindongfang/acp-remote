@@ -358,6 +358,7 @@ pub enum Response {
     Replayed { session: SessionId },
     Sessions(SessionListing),
     DeferredSessions(Strategy),
+    ChildHistory,
     Closed { session: SessionId },
     RemoteError { code: i64 },
 }
@@ -694,6 +695,15 @@ impl Connection {
     #[must_use]
     pub fn is_closed(&self) -> bool {
         self.core.lock().stopped
+    }
+    pub(crate) fn retire_child_history(&self, rpc: &RpcId) {
+        let mut state = self.core.lock();
+        if state.pending.get(rpc).is_some_and(|pending| {
+            matches!(pending.kind, RequestKind::ChildHistory)
+                && pending.cell.lock().progress == WriteProgress::Finished(WriteReport::Written)
+        }) {
+            state.pending.remove(rpc);
+        }
     }
     pub(crate) fn stop_owned(&self) {
         self.core.stop(None);

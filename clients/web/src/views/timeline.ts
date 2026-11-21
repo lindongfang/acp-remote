@@ -135,7 +135,9 @@ class Timeline {
   #cards: Map<bigint, Card>;
   #disposed = false;
 
-  constructor(owner: Document, store: ViewContentStore, segment: string) {
+  readonly #includes: (position: bigint) => boolean;
+  constructor(owner: Document, store: ViewContentStore, segment: string, includes: (position: bigint) => boolean) {
+    this.#includes = includes;
     this.#owner = owner;
     this.#store = store;
     this.#segment = segment;
@@ -294,8 +296,10 @@ class Timeline {
       const material = this.#store.field(item, field);
       for (const reference of [material.primary, ...material.evidence]) {
         if (reference?.value === null || reference === null) continue;
-        const key = reference.raw.rawRecordId.toString();
-        if (!documents.has(key)) documents.set(key, { document: reference.value.document, label: "相关内容记录" });
+        const { rawRecordId, byteStart, byteEnd } = reference.raw;
+        const key = reference.fieldSlice ? `${rawRecordId}:${byteStart}:${byteEnd}` : rawRecordId.toString();
+        const label = reference.fieldSlice ? `${field} · 记录 ${rawRecordId} 字节 [${byteStart}, ${byteEnd})` : "相关内容记录";
+        if (!documents.has(key)) documents.set(key, { document: reference.value.document, label });
       }
     }
     if (card.opened !== null && ![...documents.values()].some((value) => value.document === card.opened)) {
@@ -328,7 +332,7 @@ class Timeline {
     card.update.disabled = latest === null;
     card.rawNotice.hidden = card.inspector === null || card.opened === latest;
     card.rawNotice.textContent = latest === null
-      ? "当前原始记录尚未收到，正在查看先前缓存的记录。"
+      ? "正在查看选定的原始内容。当前完整记录尚未收到。"
       : "正在查看先前或所选的原始记录，可显式切换到当前记录。";
     card.error.hidden = true;
     return changed;
@@ -367,7 +371,7 @@ class Timeline {
   refresh(): void {
     if (this.#disposed || this.#store === null) return;
     try {
-      const items = this.#store.items(this.#segment);
+      const items = this.#store.items(this.#segment).filter(item => this.#includes(item.firstPosition));
       const notices: string[] = [];
       for (const item of items) {
         let card = this.#cards.get(item.anchorId);
@@ -402,7 +406,7 @@ class Timeline {
     this.#segment = segmentId;
     this.element.dataset.segmentId = segmentId;
     try {
-      const items = store.items(segmentId);
+      const items = store.items(segmentId).filter(item => this.#includes(item.firstPosition));
       const oldList = [...this.#cards.values()];
       const claimed = new Set<Card>();
       const matched: Array<Card | null> = new Array(items.length).fill(null);
@@ -511,10 +515,10 @@ class Timeline {
   }
 }
 
-export function createStructuredTimeline(owner: Document, store: ViewContentStore, segmentId: string): StructuredTimeline {
+export function createStructuredTimeline(owner: Document, store: ViewContentStore, segmentId: string, includes = (_position: bigint) => true): StructuredTimeline {
   let timeline: Timeline | null = null;
   try {
-    timeline = new Timeline(owner, store, segmentId);
+    timeline = new Timeline(owner, store, segmentId, includes);
     timeline.refresh();
     const instance = timeline;
     return Object.freeze({

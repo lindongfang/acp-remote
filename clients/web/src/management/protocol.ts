@@ -224,6 +224,7 @@ export interface CommandResultFrame {
 export type ManagementFrame =
   | ChallengeFrame
   | AuthenticatedFrame
+  | { readonly v: 1; readonly type: "history.invalidated"; readonly streamId: string }
   | DevicesChangedFrame
   | SessionControlChangedFrame
   | CommandResultFrame;
@@ -285,6 +286,9 @@ export function parseManagementFrame(input: string): ManagementFrame {
       return parseChallenge(object);
     case "authenticated":
       return parseAuthenticated(object);
+    case "history.invalidated":
+      assertExactKeys(object, ["v", "type", "streamId"], "invalid_frame");
+      return { v: 1, type: "history.invalidated", streamId: expectId128(object.streamId) };
     case "devices.changed":
       return parseDevicesChanged(object);
     case "session.control.changed":

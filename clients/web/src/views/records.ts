@@ -1,7 +1,7 @@
 import {
   VIEW_U64_MAX,
   type ViewDataFrame,
-  type ViewRecordKind,
+  type PagedViewRecordKind,
   validateViewData,
   viewStreamBytes,
 } from "./binary";
@@ -10,7 +10,7 @@ import { allocateViewBytes, copyViewBytes, ViewDecodeError } from "./errors";
 export interface CompletedViewRecord {
   readonly streamId: string;
   readonly recordId: bigint;
-  readonly kind: ViewRecordKind;
+  readonly kind: PagedViewRecordKind;
   readonly length: bigint;
   bytes(): Uint8Array;
 }
@@ -20,7 +20,7 @@ class OwnedViewRecord implements CompletedViewRecord {
   constructor(
     readonly streamId: string,
     readonly recordId: bigint,
-    readonly kind: ViewRecordKind,
+    readonly kind: PagedViewRecordKind,
     readonly length: bigint,
     chunks: readonly Uint8Array[],
   ) {
@@ -46,7 +46,7 @@ class OwnedViewRecord implements CompletedViewRecord {
 
 interface PartialRecord {
   readonly recordId: bigint;
-  readonly kind: ViewRecordKind;
+  readonly kind: PagedViewRecordKind;
   readonly total: bigint;
   offset: bigint;
   readonly chunks: Uint8Array[];
@@ -179,10 +179,10 @@ export interface ViewRecordBody {
 
 /** Validates the caller boundary and returns bytes owned by this invocation. */
 export function readViewRecordBody(
-  record: CompletedViewRecord, expectedKind: "original_raw" | "item_projection",
+  record: CompletedViewRecord, expectedKind: "original_raw" | "item_projection" | "field_bytes",
 ): ViewRecordBody {
   const header = callerRecord(record);
-  if ((expectedKind !== "original_raw" && expectedKind !== "item_projection") ||
+  if ((expectedKind !== "original_raw" && expectedKind !== "item_projection" && expectedKind !== "field_bytes") ||
       header.kind !== expectedKind ||
       typeof header.recordId !== "bigint" || header.recordId < 1n || header.recordId > VIEW_U64_MAX ||
       typeof header.length !== "bigint" || header.length < 1n || header.length > VIEW_U64_MAX) {

@@ -411,6 +411,9 @@ export class ManagementWorkbench {
               );
             }
           },
+          onHistoryInvalidated: id => {
+            if (authenticated && this.#isActiveConnection(generation, connection)) this.sharedView.historyInvalidated(id);
+          },
           onViewData: (frame) => {
             if (generation === this.#managementGeneration) {
               this.handleSessionViewData(record, generation, frame);

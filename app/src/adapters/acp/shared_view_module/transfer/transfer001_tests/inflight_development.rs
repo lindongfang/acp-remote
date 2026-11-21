@@ -223,3 +223,154 @@ async fn module_inflight_quiet_peer_two_raw_records_use_original_request_and_rea
         std::panic::resume_unwind(error);
     }
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CommitOrder {
+    RebindFirst,
+    PublishFirst,
+    CloseThenPublish,
+    RevokeClosedReader,
+}
+
+async fn replay_response(rig: &mut Rig) -> Vec<u8> {
+    let request = rig.peer.next_node_frame(deadline()).await.unwrap().unwrap();
+    let document = RawDocument::parse(request).unwrap();
+    let id = document
+        .root()
+        .object()
+        .unwrap()
+        .get("id")
+        .unwrap()
+        .unwrap();
+    let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();
+    response.extend_from_slice(id.fragment().as_bytes());
+    response.extend_from_slice(br#","result":{}}"#);
+    response
+}
+
+async fn check_competing_publication(rig: &mut Rig, order: CommitOrder) {
+    use super::{HookSelector, ViewHookPoint, send};
+    use crate::domain::shared_view::ViewError;
+    let signer = super::FixtureSigningClient::generate().unwrap();
+    let client = rig.auth.authenticate(&signer).await.unwrap();
+    let old = rig
+        .module
+        .reads
+        .open(&client, rig.target.key(), ReadReason::FirstOpen)
+        .await
+        .unwrap();
+    let mut replaced = rig.module.reads.history_replacement(&client, &old).unwrap();
+    let response = replay_response(rig).await;
+    rig.captured(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"transfer-window","update":{"sessionUpdate":"_history_record"}}}"#).await;
+    assert!(matches!(
+        timeout_at(
+            deadline(),
+            rig.module.reads.wait_original_progress(&client, &old)
+        )
+        .await
+        .unwrap()
+        .unwrap(),
+        OriginalReadProgress::CandidateReady { .. }
+    ));
+    assert!(matches!(
+        rig.module
+            .reads
+            .rebind_inflight_same_read(&rig.client, &old)
+            .await,
+        Err(ViewError::InvalidClient)
+    ));
+    let mut gate = rig
+        .module
+        .test_controller()
+        .arm_pause(
+            ViewHookPoint::AfterSnapshotH,
+            HookSelector::Target(rig.target.key().clone()),
+        )
+        .unwrap();
+    let follow = rig.module.reads.rebind_inflight_same_read(&client, &old);
+    tokio::pin!(follow);
+    tokio::select! {
+        result = &mut follow => panic!("rebind ended before snapshot: {:?}", result.err()),
+        arrived = timeout_at(deadline(), gate.arrived()) => { arrived.unwrap().unwrap(); }
+    }
+    let complete = async {
+        send(&mut rig.peer, br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"transfer-window","update":{"sessionUpdate":"replay_complete"}}}"#).await;
+        send(&mut rig.peer, STATE).await;
+        send(&mut rig.peer, &response).await;
+        timeout_at(deadline(), replaced.changed())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(*replaced.borrow());
+    };
+    if order == CommitOrder::RebindFirst {
+        gate.release();
+        let (new, metadata) = timeout_at(deadline(), follow)
+            .await
+            .unwrap()
+            .unwrap()
+            .into_parts();
+        assert_eq!(metadata.previous_stream, old.stream_id());
+        assert_eq!(new.descriptor().read_epoch(), Some(metadata.read));
+        complete.await;
+        assert_eq!(
+            rig.module
+                .views()
+                .core
+                .target(rig.target.key())
+                .unwrap()
+                .send
+                .epoch(),
+            metadata.epoch
+        );
+        let _ = rig.module.reads.release(new);
+    } else {
+        let expected = if order == CommitOrder::RevokeClosedReader {
+            old.stream().seal().unwrap();
+            rig.auth.revoke(&signer).await.unwrap();
+            ViewError::Revoked
+        } else if order == CommitOrder::CloseThenPublish {
+            old.stream().seal().unwrap();
+            ViewError::StreamSealed
+        } else {
+            ViewError::StaleCursor
+        };
+        complete.await;
+        gate.release();
+        assert_eq!(
+            timeout_at(deadline(), follow).await.unwrap().err(),
+            Some(expected)
+        );
+    }
+}
+
+async fn competing_publication(order: CommitOrder) {
+    let mut rig = Rig::start().await;
+    let outcome = AssertUnwindSafe(check_competing_publication(&mut rig, order))
+        .catch_unwind()
+        .await;
+    rig.close().await;
+    if let Err(panic) = outcome {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hn_030_rebind_commits_before_publication() {
+    competing_publication(CommitOrder::RebindFirst).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hn_030_publication_retires_candidate_before_rebind_commit() {
+    competing_publication(CommitOrder::PublishFirst).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hn_030_closed_reader_cannot_commit_rebind_after_publication() {
+    competing_publication(CommitOrder::CloseThenPublish).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hn_030_revocation_precedes_closed_reader_on_rebind_commit() {
+    competing_publication(CommitOrder::RevokeClosedReader).await;
+}

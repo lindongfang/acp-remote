@@ -132,6 +132,8 @@ async fn capacity_l6_drain_view(
                             RecordKind::Status => 2,
                             RecordKind::ItemProjection => 3,
                             RecordKind::SnapshotEnd => 4,
+                            RecordKind::TurnStart => 5,
+                            RecordKind::FieldBytes => 6,
                         }, std::sync::atomic::Ordering::Relaxed);
                     }
                     let record = assembly.receive(header, body)?;
@@ -162,6 +164,8 @@ async fn capacity_l6_drain_view(
                                 format!("P{}R{}Status({}-{})", header.packet(), header.record(), s["type"].as_str().unwrap_or("?"), s["phase"].as_str().unwrap_or("?"))
                             }
                             RecordKind::SnapshotEnd => format!("P{}R{}End", header.packet(), header.record()),
+                            RecordKind::TurnStart => format!("P{}R{}TurnStart", header.packet(), header.record()),
+                            RecordKind::FieldBytes => format!("P{}R{}FieldBytes({})", header.packet(), header.record(), body.len()),
                         };
                         trace_log_inner.lock().unwrap().push(desc);
                         records.push((kind, body));

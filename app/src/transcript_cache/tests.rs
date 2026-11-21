@@ -135,7 +135,7 @@ async fn stc_001_isolated_db_schema_version_projection_and_windows_handle_cleanu
             .expect("count node tables");
     assert_eq!(main_tables, 0);
 
-    // Check WAL, foreign_keys = ON, secure_delete = ON, and schema_version = 1 on transcript-cache.sqlite3.
+    // Check WAL, foreign_keys = ON, secure_delete = ON, and the current cache schema version on transcript-cache.sqlite3.
     let cache_pool = cache.pool_for_test().await.expect("cache pool open");
     let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
         .fetch_one(&cache_pool)
@@ -157,7 +157,7 @@ async fn stc_001_isolated_db_schema_version_projection_and_windows_handle_cleanu
             .fetch_one(&cache_pool)
             .await
             .expect("schema version");
-    assert_eq!(schema_ver, 1);
+    assert_eq!(schema_ver, 2);
 
     let key_v1 = sample_key(1, "sess-v1");
     let key_v2 = sample_key(2, "sess-v2");
@@ -590,4 +590,750 @@ async fn stc_013_purge_deleted_native_session_wipes_sqlite_wal_and_seals_writer(
             "deleted native transcript plaintext must not remain in transcript-cache.sqlite3-wal"
         );
     }
+}
+
+#[tokio::test]
+async fn history_page_read_indexes_pending_rows_without_renewing_content() {
+    use crate::domain::history_page::{Direction, PageSize, TurnRange};
+    let temp = TempDirGuard::new("history-index");
+    let clock = Arc::new(ManualRetentionClock::new(1_000_000));
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::new(30, 1_000_000).unwrap(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let key = sample_key(44, "s");
+    let mut frames = Vec::new();
+    for turn in 1..=25 {
+        let raw = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","messageId":turn.to_string(),"content":{"type":"text","text":"turn"}}}});
+        frames.push((raw_msg(&raw.to_string()), turn));
+    }
+    cache
+        .replace_with_replay(
+            &key,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            frames.clone(),
+        )
+        .await
+        .unwrap();
+    let pool = cache.pool_for_test().await.unwrap();
+    sqlx::query("DELETE FROM transcript_turns")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE transcript_sessions SET turn_state='pending', turn_count=0")
+        .execute(&pool)
+        .await
+        .unwrap();
+    clock.set_millis(1_001_000);
+    let latest = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::first(total, PageSize::default(), false).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.total, 25);
+    assert_eq!(
+        latest.boundaries,
+        (16..=25).map(|i| (i, i)).collect::<Vec<_>>()
+    );
+    assert_eq!(latest.snapshot.records.len(), 10);
+    assert_eq!(latest.snapshot.session.last_updated_at_ms, 1_000_000);
+    let previous = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::locate(total, PageSize::default(), Direction::Older, 15).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        previous.boundaries,
+        (6..=15).map(|i| (i, i)).collect::<Vec<_>>()
+    );
+    assert_eq!(previous.generation, latest.generation);
+    frames.pop();
+    cache
+        .replace_with_replay(&key, Version::V1, CapabilityProfile::ReplayCapable, frames)
+        .await
+        .unwrap();
+    let changed = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::first(total, PageSize::default(), true).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_ne!(changed.generation, latest.generation);
+    assert_eq!(changed.total, 24);
+    drop(pool);
+    cache.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn history_page_live_write_keeps_generation_and_old_tool_patch() {
+    use crate::domain::history_page::{Direction, PageSize, TurnRange};
+    let temp = TempDirGuard::new("history-live");
+    let clock = Arc::new(ManualRetentionClock::new(500));
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::new(30, 1_000_000).unwrap(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let key = sample_key(77, "s");
+    let writer = cache.writer();
+    let updates = [
+        serde_json::json!({"sessionUpdate":"user_message_chunk","messageId":"a","content":{"type":"text","text":"A"}}),
+        serde_json::json!({"sessionUpdate":"tool_call","toolCallId":"t","title":"test","status":"in_progress"}),
+        serde_json::json!({"sessionUpdate":"user_message_chunk","messageId":"b","content":{"type":"text","text":"B"}}),
+        serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"t","status":"completed"}),
+    ];
+    let mut first_generation = None;
+    for (i, update) in updates.into_iter().enumerate() {
+        let frame = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":update}});
+        assert!(writer.try_enqueue_frame(
+            &key,
+            Version::V1,
+            i as u64 + 1,
+            raw_msg(&frame.to_string())
+        ));
+        writer.flush().await.unwrap();
+        let page = cache
+            .read_turn_page(&key, |_, total| {
+                TurnRange::locate(total, PageSize::parse(Some("1"))?, Direction::Newer, 1).map(Some)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            *first_generation.get_or_insert(page.generation),
+            page.generation
+        );
+        if i == 3 {
+            assert_eq!(page.total, 2);
+            assert_eq!(page.boundaries, [(1, 1)]);
+            assert_eq!(
+                page.snapshot
+                    .records
+                    .iter()
+                    .map(|r| r.ordinal)
+                    .collect::<Vec<_>>(),
+                [1, 2]
+            );
+            assert_eq!(
+                page.tool_updates
+                    .iter()
+                    .map(|r| r.ordinal)
+                    .collect::<Vec<_>>(),
+                [4]
+            );
+        }
+    }
+    clock.set_millis(31 * 86_400_000);
+    assert_eq!(
+        cache
+            .enforce_retention_and_budget(None)
+            .await
+            .unwrap()
+            .expired_sessions,
+        1
+    );
+    let new_frame = raw_msg(
+        r#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"user_message_chunk","messageId":"fresh"}}}"#,
+    );
+    assert!(writer.try_enqueue_frame(&key, Version::V1, 1, new_frame));
+    writer.flush().await.unwrap();
+    let fresh = cache
+        .read_turn_page(&key, |_, total| {
+            TurnRange::first(total, PageSize::default(), false).map(Some)
+        })
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(fresh.total, 1);
+    assert_ne!(Some(fresh.generation), first_generation);
+    cache.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hn_009_hn_022_pinned_sqlite_read_during_patch_and_generation_change() {
+    use crate::domain::history_page::{PageSize, TurnRange};
+    let temp = TempDirGuard::new("hn-pinned");
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::new(30, 1_000_000).unwrap(),
+        Arc::new(ManualRetentionClock::new(500)),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let key = sample_key(77, "s");
+    let raw = |update: serde_json::Value| {
+        raw_msg(&serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":update}}).to_string())
+    };
+    let mut frames = Vec::new();
+    for i in 1..=25 {
+        frames.push((
+            raw(
+                serde_json::json!({"sessionUpdate":"user_message_chunk","messageId":i.to_string()}),
+            ),
+            frames.len() as u64 + 1,
+        ));
+        if i == 3 || i == 12 {
+            frames.push((raw(serde_json::json!({"sessionUpdate":"tool_call","toolCallId":format!("t{i}"),"title":"tool","status":"in_progress"})),frames.len() as u64+1));
+        }
+    }
+    for id in ["t12", "t3", "t12"] {
+        frames.push((raw(serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":id,"status":"completed"})),frames.len() as u64+1));
+    }
+    let upper = frames.len() as u64;
+    cache
+        .replace_with_replay(
+            &key,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            frames.clone(),
+        )
+        .await
+        .unwrap();
+    let pool = cache.pool_for_test().await.unwrap();
+    for replace in [false, true] {
+        if replace {
+            sqlx::query("DELETE FROM transcript_turns")
+                .execute(&pool)
+                .await
+                .unwrap();
+            sqlx::query("UPDATE transcript_sessions SET turn_state='pending',turn_count=0")
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let (pinned, entered) = tokio::sync::oneshot::channel();
+        let (release, resume) = std::sync::mpsc::sync_channel(1);
+        let reader = cache.clone();
+        let native = key.clone();
+        let read = tokio::spawn(async move {
+            reader
+                .read_turn_page(&native, move |generation, total| {
+                    pinned.send(generation).unwrap();
+                    resume
+                        .recv_timeout(std::time::Duration::from_secs(10))
+                        .unwrap();
+                    TurnRange::locate(
+                        total,
+                        PageSize::default(),
+                        crate::domain::history_page::Direction::Older,
+                        15,
+                    )
+                    .map(Some)
+                })
+                .await
+                .unwrap()
+                .unwrap()
+        });
+        let old = entered.await.unwrap();
+        if replace {
+            cache
+                .replace_with_replay(
+                    &key,
+                    Version::V1,
+                    CapabilityProfile::ReplayCapable,
+                    frames[..10].to_vec(),
+                )
+                .await
+                .unwrap();
+        } else {
+            let next = raw(
+                serde_json::json!({"sessionUpdate":"tool_call_update","toolCallId":"t12","rawOutput":"later"}),
+            );
+            assert!(
+                cache
+                    .writer()
+                    .try_enqueue_frame(&key, Version::V1, upper + 1, next)
+            );
+            cache.writer().flush().await.unwrap();
+        }
+        release.send(()).unwrap();
+        let seen = read.await.unwrap();
+        assert_eq!(seen.generation, old);
+        assert_eq!(seen.total, 25);
+        let ordinals: Vec<_> = seen.tool_updates.iter().map(|r| r.ordinal).collect();
+        if replace {
+            assert_eq!(ordinals, [upper - 2, upper, upper + 1]);
+        } else {
+            assert_eq!(ordinals, [upper - 2, upper]);
+        }
+        let latest = cache
+            .read_turn_page(&key, |_, total| {
+                TurnRange::first(total, PageSize::default(), false).map(Some)
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(latest.generation != old, replace);
+        if replace {
+            let old_rows:i64=sqlx::query_scalar("SELECT count(*) FROM transcript_turns WHERE generation != (SELECT active_generation FROM transcript_sessions)").fetch_one(&pool).await.unwrap();
+            assert_eq!(old_rows, 0);
+        }
+    }
+    drop(pool);
+    cache.shutdown().await.unwrap();
+    std::fs::remove_dir_all(temp.path()).expect("database handles released");
+}
+
+async fn all_pool_changes(pool: &sqlx::SqlitePool) -> i64 {
+    // Each physical SQLite connection maintains its own total_changes().
+    let mut held = Vec::new();
+    let mut changes = 0;
+    for _ in 0..pool.options().get_max_connections() {
+        held.push(pool.acquire().await.unwrap());
+    }
+    for mut connection in held {
+        changes += sqlx::query_scalar::<_, i64>("SELECT total_changes()")
+            .fetch_one(&mut *connection)
+            .await
+            .unwrap();
+    }
+    changes
+}
+
+#[tokio::test]
+async fn hn_009_lazy_index_restart_retention_and_cascades() {
+    use crate::domain::history_page::{PageSize, TurnRange};
+    const DAY: i64 = 86_400_000;
+    const STABLE: &str = "SELECT json_array(hex(source_id),native_session_id,active_generation,protocol_version,hex(content_digest),last_updated_at_ms,last_synced_at_ms,capability_profile,native_recovery_state,record_count,byte_size,hex(generation_token)) FROM transcript_sessions WHERE native_session_id='s'";
+    let temp = TempDirGuard::new("hn009");
+    let path = temp.path().join("transcript-cache.sqlite3");
+    let clock = Arc::new(ManualRetentionClock::new(1_700_000_000_000));
+    let open = || {
+        TranscriptCacheStore::open(
+            path.clone(),
+            TranscriptCacheConfig::new(30, 200_000).unwrap(),
+            clock.clone(),
+            Arc::new(NoProtectedSessions),
+        )
+    };
+    let cache = open().await.unwrap();
+    let key = sample_key(33, "s");
+    let frame = |i: u64, kind: &str| {
+        raw_msg(&serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":kind,"messageId":i.to_string(),"content":{"type":"text","text":format!("message {i}")}}}}).to_string())
+    };
+    let frames: Vec<_> = (1..=27)
+        .map(|i| {
+            (
+                frame(
+                    i,
+                    if i < 3 {
+                        "agent_message_chunk"
+                    } else {
+                        "user_message_chunk"
+                    },
+                ),
+                i,
+            )
+        })
+        .collect();
+    cache
+        .replace_with_replay(
+            &key,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            frames.clone(),
+        )
+        .await
+        .unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    sqlx::query("DELETE FROM transcript_turns")
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE transcript_sessions SET turn_state='pending',turn_count=0")
+        .execute(&db)
+        .await
+        .unwrap();
+    let before: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    let latest = |_: [u8; 16], total| TurnRange::first(total, PageSize::default(), false).map(Some);
+    let built = cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(built.total, 25);
+    let metadata: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    assert_eq!(before, metadata);
+    let ordinals: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT turn_index,first_ordinal FROM transcript_turns ORDER BY turn_index")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(ordinals, (1..=25).map(|i| (i, i + 2)).collect::<Vec<_>>());
+    let initial_write_count = all_pool_changes(&db).await;
+    cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(all_pool_changes(&db).await, initial_write_count);
+    for i in [28, 29] {
+        assert!(cache.writer().try_enqueue_frame(
+            &key,
+            Version::V1,
+            i,
+            frame(i, "user_message_chunk")
+        ));
+    }
+    cache.writer().flush().await.unwrap();
+    drop(db);
+    cache.shutdown().await.unwrap();
+    let cache = open().await.unwrap();
+    assert!(cache.writer().try_enqueue_frame(
+        &key,
+        Version::V1,
+        30,
+        frame(30, "user_message_chunk")
+    ));
+    cache.writer().flush().await.unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    let latest_page = cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(latest_page.generation, built.generation);
+    assert_eq!(latest_page.total, 28);
+    let ordinals: Vec<(i64, i64)> =
+        sqlx::query_as("SELECT turn_index,first_ordinal FROM transcript_turns ORDER BY turn_index")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+    assert_eq!(ordinals, (1..=28).map(|i| (i, i + 2)).collect::<Vec<_>>());
+    let previous = latest_page.snapshot.session.active_generation;
+    let new = vec![(frame(500, "user_message_chunk"), 1)];
+    assert_eq!(
+        cache
+            .replace_with_replay(
+                &key,
+                Version::V1,
+                CapabilityProfile::ReplayCapable,
+                new.clone()
+            )
+            .await
+            .unwrap(),
+        ReplaceOutcome::Updated
+    );
+    let changed = cache.read_turn_page(&key, latest).await.unwrap().unwrap();
+    assert_eq!(changed.total, 1);
+    assert_eq!(changed.snapshot.session.active_generation, previous + 1);
+    assert_ne!(changed.generation, built.generation);
+    let metadata: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    let updated = changed.snapshot.session.last_updated_at_ms;
+    clock.set_millis(updated + DAY);
+    assert_eq!(
+        cache
+            .replace_with_replay(
+                &key,
+                Version::V1,
+                CapabilityProfile::ReplayCapable,
+                new.clone()
+            )
+            .await
+            .unwrap(),
+        ReplaceOutcome::UnchangedDigest
+    );
+    let same: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    let mut expected: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+    expected[6] = serde_json::json!(updated + DAY);
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&same).unwrap() == expected,
+        "only the synchronization timestamp may advance after an identical replay"
+    );
+    for i in 0..100 {
+        clock.set_millis(updated + DAY + i * 29 * DAY / 100);
+        assert_eq!(
+            cache
+                .read_turn_page(&key, latest)
+                .await
+                .unwrap()
+                .unwrap()
+                .generation,
+            changed.generation
+        );
+    }
+    let end: String = sqlx::query_scalar(STABLE).fetch_one(&db).await.unwrap();
+    assert!(end == same, "pure reads must preserve session metadata");
+    clock.set_millis(updated + 31 * DAY);
+    assert_eq!(
+        cache
+            .enforce_retention_and_budget(None)
+            .await
+            .unwrap()
+            .expired_sessions,
+        1
+    );
+    assert_index_absent(&db, "s").await;
+    let purge = sample_key(33, "purge");
+    cache
+        .replace_with_replay(
+            &purge,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            new.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        cache
+            .read_turn_page(&purge, latest)
+            .await
+            .unwrap()
+            .unwrap()
+            .total,
+        1
+    );
+    cache.purge_deleted_native_session(&purge).await.unwrap();
+    assert_index_absent(&db, "purge").await;
+    let anonymous = sample_key(33, "no-users");
+    cache
+        .replace_with_replay(
+            &anonymous,
+            Version::V1,
+            CapabilityProfile::ReplayCapable,
+            vec![(frame(1, "agent_message_chunk"), 1)],
+        )
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE transcript_sessions SET turn_state='pending' WHERE native_session_id='no-users'",
+    )
+    .execute(&db)
+    .await
+    .unwrap();
+    let full = cache
+        .read_turn_page(&anonymous, |_, _| Ok(None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(full.total, 0);
+    let state: (String, i64) = sqlx::query_as(
+        "SELECT turn_state,turn_count FROM transcript_sessions WHERE native_session_id='no-users'",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert_eq!(state, ("unprovable".into(), 0));
+    assert_index_absent(&db, "no-users").await;
+    cache
+        .purge_deleted_native_session(&anonymous)
+        .await
+        .unwrap();
+    drop(db);
+    cache.shutdown().await.unwrap();
+    let cache = TranscriptCacheStore::open(
+        path,
+        TranscriptCacheConfig::new(30, new[0].0.bytes().len() as u64).unwrap(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    for (i, native) in ["old", "new"].into_iter().enumerate() {
+        clock.set_millis(updated + 32 * DAY + i64::try_from(i).unwrap());
+        let session = sample_key(33, native);
+        cache
+            .replace_with_replay(
+                &session,
+                Version::V1,
+                CapabilityProfile::ReplayCapable,
+                new.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            cache
+                .read_turn_page(&session, latest)
+                .await
+                .unwrap()
+                .unwrap()
+                .total,
+            1
+        );
+    }
+    assert_eq!(
+        cache
+            .enforce_retention_and_budget(None)
+            .await
+            .unwrap()
+            .lru_evicted_sessions,
+        1
+    );
+    assert_index_absent(&db, "old").await;
+    drop(db);
+    cache.shutdown().await.unwrap();
+}
+
+async fn assert_index_absent(pool: &sqlx::SqlitePool, native: &str) {
+    let n: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM transcript_turns WHERE native_session_id=?")
+            .bind(native)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 0);
+    assert!(
+        sqlx::query("PRAGMA foreign_key_check")
+            .fetch_all(pool)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn child_history_transaction_keeps_previous_generation_until_authorized_commit() {
+    let temp = TempDirGuard::new("child-history-publish");
+    let clock = Arc::new(ManualRetentionClock::new(1000));
+    let cache = TranscriptCacheStore::open(
+        temp.path().join("transcript-cache.sqlite3"),
+        TranscriptCacheConfig::default(),
+        clock.clone(),
+        Arc::new(NoProtectedSessions),
+    )
+    .await
+    .unwrap();
+    let child = sample_key(8, "child");
+    let frames = |turn| {
+        let frame = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"child","update":{"sessionUpdate":"user_message_chunk","messageId":turn,"content":{"type":"text","text":turn}}}});
+        vec![(raw_msg(&frame.to_string()), 1)]
+    };
+    let profile = CapabilityProfile::ReplayCapable;
+    cache
+        .replace_with_replay(&child, Version::V1, profile, frames("first"))
+        .await
+        .unwrap();
+    let original = cache.history_generation(&child).await.unwrap();
+    clock.advance_millis(2000);
+    let outcome = cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("first"),
+            Some(HistoryGeneration(original.0.clone())),
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+    assert_eq!(outcome, ReplaceOutcome::UnchangedDigest);
+    assert_eq!(
+        cache.history_generation(&child).await.unwrap().0,
+        original.0
+    );
+    assert_eq!(
+        cache
+            .load_snapshot(&child)
+            .await
+            .unwrap()
+            .unwrap()
+            .session
+            .last_updated_at_ms,
+        1000
+    );
+    let (ready, staged) = tokio::sync::oneshot::channel();
+    let (reject, decision) = tokio::sync::oneshot::channel();
+    let attempt = cache.replace_checked(
+        &child,
+        Version::V1,
+        profile,
+        frames("second"),
+        Some(HistoryGeneration(original.0.clone())),
+        async {
+            ready.send(()).unwrap();
+            decision.await.unwrap()
+        },
+    );
+    let inspect = async {
+        staged.await.unwrap();
+        let snapshot = cache.load_snapshot(&child).await.unwrap().unwrap();
+        assert_eq!(
+            snapshot.records[0].raw.bytes(),
+            frames("first")[0].0.bytes()
+        );
+        reject.send(Err::<(), _>(ViewError::Revoked)).unwrap();
+    };
+    let (outcome, ()) = tokio::join!(attempt, inspect);
+    assert!(matches!(
+        outcome,
+        Err(TranscriptCacheError::View(ViewError::Revoked))
+    ));
+    assert_eq!(
+        cache.history_generation(&child).await.unwrap().0,
+        original.0
+    );
+    cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("second"),
+            Some(HistoryGeneration(original.0.clone())),
+            async { Ok(()) },
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        cache.history_generation(&child).await.unwrap().0,
+        original.0
+    );
+    let stale = cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("late"),
+            Some(original),
+            async { Ok(()) },
+        )
+        .await;
+    assert!(matches!(
+        stale,
+        Err(TranscriptCacheError::View(ViewError::StaleCursor))
+    ));
+    let page = cache
+        .read_turn_page(&child, |_, _| Ok(None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(
+        page.snapshot.records[0].raw.bytes(),
+        frames("second")[0].0.bytes()
+    );
+    let before_fault = page.snapshot.session;
+    let new_token = cache.history_generation(&child).await.unwrap();
+    let db = cache.pool_for_test().await.unwrap();
+    let before_index:Vec<(i64,i64,i64)>=sqlx::query_as("SELECT generation,turn_index,first_ordinal FROM transcript_turns WHERE native_session_id='child' ORDER BY turn_index").fetch_all(&db).await.unwrap();
+    clock.advance_millis(5000);
+    sqlx::query("CREATE TRIGGER reject_new_child BEFORE INSERT ON transcript_records WHEN NEW.native_session_id='child' BEGIN SELECT RAISE(ABORT,'fixture storage failure'); END").execute(&db).await.unwrap();
+    let failed = cache
+        .replace_checked(
+            &child,
+            Version::V1,
+            profile,
+            frames("third"),
+            Some(new_token),
+            async { Ok(()) },
+        )
+        .await;
+    assert!(failed.is_err());
+    let preserved = cache
+        .read_turn_page(&child, |_, _| Ok(None))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(preserved.snapshot.session, before_fault);
+    assert_eq!(preserved.generation, page.generation);
+    assert_eq!(
+        preserved.snapshot.records[0].raw.bytes(),
+        frames("second")[0].0.bytes()
+    );
+    let after_index:Vec<(i64,i64,i64)>=sqlx::query_as("SELECT generation,turn_index,first_ordinal FROM transcript_turns WHERE native_session_id='child' ORDER BY turn_index").fetch_all(&db).await.unwrap();
+    assert_eq!(before_index, after_index);
+    drop(db);
+    cache.shutdown().await.unwrap();
 }

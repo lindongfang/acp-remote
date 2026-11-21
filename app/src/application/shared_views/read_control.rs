@@ -10,7 +10,7 @@ use super::{
 use crate::domain::{
     EntityId,
     native::NativeSessionKey,
-    shared_view::{ReadEpoch, ReadMode, ViewError},
+    shared_view::{ReadEpoch, ReadMode, ViewEpoch, ViewError},
 };
 use std::{
     collections::HashMap,
@@ -198,9 +198,10 @@ impl NativeReadMetadata {
         self.operation
     }
 }
-struct ReadJob {
+pub(super) struct ReadJob {
+    pub(super) confirmed: std::sync::OnceLock<ViewEpoch>,
     id: EntityId,
-    read: ReadEpoch,
+    pub(super) read: ReadEpoch,
     metadata: watch::Sender<NativeReadMetadata>,
     active: AtomicBool,
     desired: AtomicBool,
@@ -210,6 +211,9 @@ pub struct NativeReadRequest {
     job: Arc<ReadJob>,
 }
 impl NativeReadRequest {
+    pub(super) fn confirms_view(&self, epoch: ViewEpoch) -> bool {
+        self.job.confirmed.get() == Some(&epoch)
+    }
     #[must_use]
     pub const fn request_id(&self) -> EntityId {
         self.id
@@ -351,6 +355,7 @@ impl<H: NativeHistoryPort> CoordinatorCore<H> {
             bound: false,
         });
         let job = Arc::new(ReadJob {
+            confirmed: std::sync::OnceLock::new(),
             id: operation,
             read,
             metadata,
@@ -401,11 +406,33 @@ impl<H: NativeHistoryPort> CoordinatorCore<H> {
         drop(jobs);
         Ok(NativeReadRequest { id, job })
     }
+    fn register_replay_comparison(
+        &self,
+        target: &NativeSessionKey,
+        reason: ReadReason,
+        job: &Arc<ReadJob>,
+    ) -> Result<(), ViewError> {
+        if matches!(reason, ReadReason::Reopen | ReadReason::Reconnect) {
+            match self.views.core.target_publication(target) {
+                Ok(publication) => {
+                    if let Some(publication) = publication.upgrade() {
+                        *publication
+                            .comparison
+                            .lock()
+                            .map_err(|_| ViewError::ReadFailure)? = Arc::downgrade(job);
+                    }
+                }
+                Err(ViewError::InvalidTarget) => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
     async fn run_operation(
         &self,
         target: &NativeSessionKey,
         reason: ReadReason,
-        job: &ReadJob,
+        job: &Arc<ReadJob>,
         selected: Option<NativeReadOptions>,
     ) -> Result<(), ViewError> {
         let binding = match self.bridge.acquire_read_binding(target, reason).await? {
@@ -435,6 +462,7 @@ impl<H: NativeHistoryPort> CoordinatorCore<H> {
                 options,
             });
         });
+        self.register_replay_comparison(target, reason, job)?;
         let reservation = self.bridge.reserve_replay(&binding, job.read, options)?;
         let mut operation = match self.bridge.enqueue_replay(&binding, reservation).await {
             Ok(operation) => operation,

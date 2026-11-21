@@ -43,7 +43,7 @@ describe("opaque ACPV binary format", () => {
 
   it.each([
     [0, 0], [4, 2], [5, 0], [5, 4], [6, 1], [7, 2],
-    [56, 0], [56, 5], ...Array.from({ length: 7 }, (_, i) => [57 + i, 1]),
+    [56, 0], [56, 255], ...Array.from({ length: 7 }, (_, i) => [57 + i, 1]),
     ...Array.from({ length: 4 }, (_, i) => [68 + i, 1]),
   ])("rejects a malformed fixed field at %i", (offset, value) => {
     const wire = GOLDEN.slice();

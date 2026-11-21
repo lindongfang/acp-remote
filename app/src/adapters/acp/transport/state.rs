@@ -162,6 +162,7 @@ pub(super) struct State {
     pub held: Option<ReceiptCut>,
     pub expiry_waiting: HashSet<u64>,
     pub next_id: i64,
+    next_child_id: u64,
     pub next_cell: u64,
     pub receipt: u64,
     pub sequence: u64,
@@ -188,6 +189,7 @@ impl State {
             held: None,
             expiry_waiting: HashSet::new(),
             next_id: 0,
+            next_child_id: 0,
             next_cell: 0,
             receipt: 0,
             sequence: 0,
@@ -232,6 +234,14 @@ impl State {
         if self.pending.len() >= MAX_PENDING {
             return Err(AcpError::Capacity);
         }
+        if matches!(request.kind, RequestKind::ChildHistory)
+            && self.strategy.as_ref().is_none_or(|s| {
+                !s.child_history_enabled
+                    .load(std::sync::atomic::Ordering::Acquire)
+            })
+        {
+            return Err(AcpError::UnsupportedCapability);
+        }
         if let RequestKind::Resume(ref session) | RequestKind::Replay(ref session) = request.kind
             && self.pending.values().any(
                 |p| matches!(&p.kind,RequestKind::Resume(s)|RequestKind::Replay(s) if s==session),
@@ -239,12 +249,20 @@ impl State {
         {
             return Err(AcpError::SessionReadBusy);
         }
-        self.next_id = self
-            .next_id
-            .checked_add(1)
-            .filter(|n| *n <= 9_007_199_254_740_991)
-            .ok_or(AcpError::Capacity)?;
-        let id = RpcId::Integer(self.next_id);
+        let id = if matches!(request.kind, RequestKind::ChildHistory) {
+            self.next_child_id = self
+                .next_child_id
+                .checked_add(1)
+                .ok_or(AcpError::Capacity)?;
+            RpcId::String(format!("child-history/{}", self.next_child_id).into())
+        } else {
+            self.next_id = self
+                .next_id
+                .checked_add(1)
+                .filter(|n| *n <= 9_007_199_254_740_991)
+                .ok_or(AcpError::Capacity)?;
+            RpcId::Integer(self.next_id)
+        };
         let cell = self.cell(
             core,
             Some(id.clone()),
@@ -444,6 +462,14 @@ impl State {
                     self.finish_zero(&cell, ZeroReason::Deadline);
                 }
                 WriteProgress::Finished(WriteReport::Zero { .. }) => {}
+                WriteProgress::Finished(WriteReport::Written)
+                    if matches!(
+                        cell.identity.kind(),
+                        OutboundKind::Request(RequestKind::ChildHistory)
+                    ) =>
+                {
+                    self.pending.remove(&id);
+                }
                 WriteProgress::Finished(WriteReport::Written | WriteReport::Unknown { .. }) => {
                     self.stop(Some(AcpError::Deadline));
                 }
@@ -459,6 +485,18 @@ impl State {
                 }
             }
         }
+    }
+    pub fn issued_child_id(&self, id: &RpcId) -> bool {
+        let RpcId::String(value) = id else {
+            return false;
+        };
+        value.strip_prefix("child-history/").is_some_and(|serial| {
+            !serial.starts_with('0')
+                && serial.bytes().all(|b| b.is_ascii_digit())
+                && serial
+                    .parse::<u64>()
+                    .is_ok_and(|n| n > 0 && n <= self.next_child_id)
+        })
     }
     pub fn nearest_deadline(&self) -> Option<Instant> {
         self.pending

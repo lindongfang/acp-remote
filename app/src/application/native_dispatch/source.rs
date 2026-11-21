@@ -285,6 +285,7 @@ where
             self.ensure_child_read(
                 subject,
                 path,
+                false,
                 Arc::new(plan.into_source()),
                 read,
                 move || proof.require_current(),
@@ -300,6 +301,7 @@ where
     pub(super) async fn ensure_target_replay_read(
         self: &Arc<Self>,
         proof: crate::application::queue_owner::ReadTargetProof,
+        child: Option<super::NativeSessionKey>,
         read: Arc<super::read_source::ReadAcquisitionState<P>>,
     ) -> Result<(Arc<SourceSlot<P, L>>, Arc<super::SourceReadCapability<P>>), DispatchError>
     where
@@ -317,15 +319,22 @@ where
         }
         let path = self
             .repository
-            .resolve_session_tree(proof.native(), &self.deadline()?)
+            .resolve_session_tree(
+                child.as_ref().unwrap_or_else(|| proof.native()),
+                &self.deadline()?,
+            )
             .await?;
+        if child.is_some() && !path.ancestors.contains(proof.native()) {
+            return Err(DispatchError::SessionTreeUnverified);
+        }
         if !path.ancestors.is_empty() {
-            let subject = proof.native().clone();
+            let subject = child.unwrap_or_else(|| proof.native().clone());
             let queue = self.queue.clone();
             return self
                 .ensure_child_read(
                     subject,
                     path,
+                    true,
                     Arc::new(plan.into_source()),
                     read,
                     move || queue.verify_read_target(&proof),
@@ -369,6 +378,7 @@ where
     pub(super) async fn ensure_source_read(
         self: &Arc<Self>,
         proof: super::SourceReadSelectionProof,
+        history: bool,
         read: Arc<super::read_source::ReadAcquisitionState<P>>,
     ) -> Result<(Arc<SourceSlot<P, L>>, Arc<super::SourceReadCapability<P>>), DispatchError>
     where
@@ -398,7 +408,7 @@ where
         if let Some(path) = path.filter(|path| !path.ancestors.is_empty()) {
             let subject = proof.native().clone();
             return self
-                .ensure_child_read(subject, path, Arc::new(plan), read, move || {
+                .ensure_child_read(subject, path, history, Arc::new(plan), read, move || {
                     proof.require_current()
                 })
                 .await;

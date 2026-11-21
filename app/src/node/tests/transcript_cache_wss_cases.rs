@@ -75,11 +75,35 @@ function logEvent(entry) {
   }
 }
 
-function send(msg) {
+function send(msg, replayed = false) {
+  if (!replayed && msg.method === "session/update" && initCfg.originalUpdatesFile) {
+    fs.appendFileSync(initCfg.originalUpdatesFile, JSON.stringify(msg) + "\n");
+  }
   process.stdout.write(JSON.stringify({ jsonrpc: "2.0", ...msg }) + "\n");
 }
 
+function sendChildEvents(children) {
+  for (const child of children ?? []) {
+    for (let n=child.first??1;n<=child.last;n++) {
+      for (const role of child.agentOnly?["agent"]:["user","agent"]) {
+        send({method:"session/update",params:{sessionId:child.id,update:{
+          sessionUpdate:role+"_message_chunk",messageId:role+n,content:{type:"text",text:child.id+"-"+role+"-"+n}
+        }}});
+      }
+    }
+    logEvent({event:"autoDelivery",sessionId:child.id,first:child.first??1,last:child.last});
+  }
+}
+
 const initCfg = readCfg();
+if (initCfg.watchDisconnect) {
+  setInterval(() => {
+    if(fs.existsSync(cfgPath+".disconnect")) {
+      logEvent({event:"sourceDisconnected"});
+      process.exit(0);
+    }
+  },10).unref();
+}
 if (initCfg.failSpawn) {
   logEvent({ event: "failSpawn" });
   process.exit(1);
@@ -87,23 +111,36 @@ if (initCfg.failSpawn) {
 
 let pendingPermResolve = null;
 let reqSeq = 1000;
+const childSnapshots = new Map();
 let sessionSeq = Number(process.env.ACP_PEER_SESSION_START || "1");
 
 async function handleRequest(msg) {
   const cfg = readCfg();
   const { id, method, params } = msg;
-  logEvent({ method, params });
+  const key = "io.github.lindongfang.acp-remote/child-history";
+  const childBatch = method==="_"+key && params.cursor!==null ? Number(String(params.cursor).replace(/^hn029-native-cursor-/,"")) : 0;
+  logEvent(method === "_"+key ? {method, first: params.cursor===null,
+    rootMatches:!cfg.expectedChildRoot || params.rootSessionId===cfg.expectedChildRoot,
+    childMatches:params.sessionId==="child-history", batch:childBatch} : { method, params });
 
   if (method === "initialize") {
     const version = Number(cfg.protocolVersion ?? 1);
     const mode = cfg.capabilityMode ?? "replay_capable";
+    const clientCaps = params.clientCapabilities ?? params.capabilities;
+    const ext = cfg.childHistory && clientCaps?._meta?.[key]?.version === 1 ? {_meta:{[key]:{version:1}}} : {};
+    if(cfg.childDeclaration==="wrongVersion") ext._meta={[key]:{version:2}};
+    if(cfg.childDeclaration==="methodOnly") ext._meta={[key]:{method:"_"+key}};
+    if(cfg.childDeclaration==="cancelOnly") ext._meta={childCancel:true};
+    if(cfg.childDeclaration==="wrongLocation") delete ext._meta;
+    logEvent({event:"childDeclaration",selectedVersion:version,field:version===1?"agentCapabilities":"capabilities",matching:ext._meta?.[key]?.version===1});
     if (version === 2) {
       send({
         id,
         result: {
           protocolVersion: 2,
           info: { name: "controlled-acp", version: "2.0.0" },
-          capabilities: { session: {} },
+          capabilities: { session: {}, ...ext },
+          ...(cfg.childDeclaration==="wrongLocation"?{_meta:{[key]:{version:1}}}:{}),
         },
       });
       return;
@@ -118,15 +155,62 @@ async function handleRequest(msg) {
       result: {
         protocolVersion: 1,
         agentInfo: { name: "controlled-acp", version: "1.0.0" },
-        agentCapabilities: { loadSession, sessionCapabilities },
+        agentCapabilities: { loadSession, sessionCapabilities, ...ext },
+        ...(cfg.childDeclaration==="wrongLocation"?{_meta:{[key]:{version:1}}}:{}),
       },
     });
+    return;
+  }
+
+  if (method === "_"+key && cfg.childHistory) {
+    if(cfg.childEof) process.exit(0);
+    if(cfg.childError) {send({id,error:{code:-32000,message:'private history error'}});return;}
+    if(cfg.childRefused) {send({id,error:{code:-32601,message:"not implemented"}});return;}
+    const sessionId = cfg.wrongChild ? "sibling" : params.sessionId;
+    const updates = Array.from({length:12}, (_,i)=>({sessionUpdate:"user_message_chunk",messageId:String(i+1),content:{type:"text",text:i===0?"字".repeat(6000):"turn"+i},unknown:1}));
+    updates.splice(1,0,{sessionUpdate:"tool_call",toolCallId:"tool",title:"fixture",status:"completed",rawInput:{future:true}});
+    if(cfg.childTurns) {
+      updates.length=0;
+      for(let turn=1;turn<=cfg.childTurns;turn++){
+        updates.push({sessionUpdate:"user_message_chunk",content:{type:"text",text:"child-turn-"+turn}},{sessionUpdate:"agent_message_chunk",messageId:cfg.randomChildIds?crypto.randomUUID():"agent-"+turn,content:{type:"text",text:"reply"}});
+      }
+    }
+    const index = childBatch;
+    if(index===0) {
+      const bytes=cfg.childFramesFile?fs.readFileSync(cfg.childFramesFile):Buffer.from(updates.map(update=>JSON.stringify({jsonrpc:"2.0",method:"session/update",params:{sessionId,update}}).replace('"unknown":1','"unknown" : 1.00')+"\n").join(""));
+      childSnapshots.set(params.sessionId,bytes);
+    }
+    const bytes=childSnapshots.get(params.sessionId);
+    if(index===cfg.childBarrierIndex && cfg.childBarrierFile) {
+      while (!fs.existsSync(cfg.childBarrierFile)) {
+        // Keep the query pending while stdin is open. Let EOF end the peer at node shutdown.
+        await new Promise(resolve => setTimeout(resolve, 10).unref());
+      }
+    }
+    const end = Math.min(bytes.length,(index+1)*16384);
+    const next=end===bytes.length?null:(cfg.opaqueChildCursors?"hn029-native-cursor-":"")+String(index+1);
+    const result={rootSessionId:params.rootSessionId,sessionId:params.sessionId,sequence:String(index),snapshotId:"fixture-generation",chunk:bytes.subarray(index*16384,end).toString("base64url"),nextCursor:next};
+    if(index===(cfg.faultAtBatch??1) && cfg.childFault) Object.assign(result,cfg.childFault);
+    send({id:cfg.unmatchedChildReply?String(id)+"-unmatched":id,result});
+    logEvent({event:"childBatchSent",batch:index,last:result.nextCursor===null});
     return;
   }
 
   if (method === "session/new") {
     const sid = cfg.fixedSessionId || `peer-session-${sessionSeq++}-${process.pid}`;
     send({ id, result: { sessionId: sid } });
+    if (cfg.nativeTurnGate) {
+      while (!fs.existsSync(cfg.nativeTurnGate)) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      for (let turn = 1; turn <= 25; turn++) {
+        for (const [update, prefix] of [["user_message_chunk","U"],["agent_message_chunk","A"]]) {
+          send({method:"session/update",params:{sessionId:sid,update:{
+            sessionUpdate:update,messageId:prefix+turn,content:{type:"text",text:prefix+String(turn).padStart(4,"0")}
+          }}});
+        }
+      }
+    }
     return;
   }
 
@@ -140,6 +224,7 @@ async function handleRequest(msg) {
       }
     }
     const latest = readCfg();
+    sendChildEvents(latest.replayChildEvents);
     if (latest.failLoadMessage) {
       send({
         id,
@@ -148,6 +233,31 @@ async function handleRequest(msg) {
       return;
     }
     const sid = params.sessionId;
+    if (latest.originalUpdatesFile && fs.existsSync(latest.originalUpdatesFile)) {
+      const lines = fs.readFileSync(latest.originalUpdatesFile,"utf8").trim().split("\n");
+      for (const line of lines.filter(Boolean)) {
+        const update = JSON.parse(line);
+        if (update.params.sessionId === sid) send(update, true);
+      }
+    }
+    for (const update of latest.originalUpdatesFile ? [] : (latest.preludeFrames ?? [])) {
+      send({method:"session/update",params:{sessionId:sid,update}});
+    }
+    for (let i = 1; i <= Number(latest.replayTurns ?? 0); i++) {
+      const original = latest.externalRewrite && i > 2 ? i + 2 : i;
+      const suffix = String(original).padStart(4, "0");
+      const prefix = (latest.externalRewrite && original === 10 || latest.editTurn === i) ? "edited" : (latest.turnPrefix ?? "U");
+      const emit = update => send({method:"session/update",params:{sessionId:sid,update}});
+      emit({sessionUpdate:"user_message_chunk",...(latest.anonymousTurns ? {} : {messageId:String(original)}),
+            content:{type:"text",text:prefix + suffix}});
+      if (latest.anonymousTurns) {
+        emit({sessionUpdate:"agent_message_chunk",messageId:crypto.randomUUID(),content:{type:"text",text:"A"+suffix}});
+      }
+      if (latest.largeToolBytes && i === 12) {
+        emit({sessionUpdate:"tool_call",toolCallId:"big",title:"large",status:"in_progress"});
+        emit({sessionUpdate:"tool_call_update",toolCallId:"big",rawOutput:"x".repeat(latest.largeToolBytes),status:"completed"});
+      }
+    }
     const replayTexts = Array.isArray(latest.replayTexts) ? latest.replayTexts : [];
     for (let i = 0; i < replayTexts.length; i++) {
       send({
@@ -163,6 +273,18 @@ async function handleRequest(msg) {
       });
     }
     send({ id, result: { sessionId: sid } });
+    if (latest.historyTailGate) {
+      const timer = setInterval(() => {
+        if (!fs.existsSync(latest.historyTailGate)) return;
+        clearInterval(timer);
+        for(const messageId of ["next", null]){
+          send({method:"session/update",params:{sessionId:sid,update:{
+            sessionUpdate:"user_message_chunk",...(messageId ? {messageId} : {}),content:{type:"text",text:"tail"}
+          }}});
+        }
+      }, 20);
+      timer.unref();
+    }
     return;
   }
 
@@ -189,10 +311,31 @@ async function handleRequest(msg) {
   }
 
   if (method === "session/prompt") {
+    if(cfg.promptBarrierFile) while (!fs.existsSync(cfg.promptBarrierFile)) await new Promise(r=>setTimeout(r,10));
     const sid = params.sessionId;
     const version = Number(cfg.protocolVersion ?? 1);
     const promptItems = Array.isArray(params.prompt) ? params.prompt : [];
     const promptText = promptItems.map((b) => b.text ?? "").join("");
+    if (cfg.originalUpdatesFile && !fs.existsSync(cfg.originalUpdatesFile)) {
+      for (const update of cfg.preludeFrames ?? []) {
+        send({method:"session/update",params:{sessionId:sid,update}});
+      }
+    }
+    if (cfg.promptBarrierReleaseFile) {
+      while (!fs.existsSync(cfg.promptBarrierReleaseFile)) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+    if (cfg.echoUserChunk) {
+      send({method:"session/update",params:{sessionId:sid,update:{
+        sessionUpdate:"user_message_chunk",messageId:"user-"+id,content:{type:"text",text:promptText}
+      }}});
+    }
+    if (cfg.adjacentAnonymousUserChunk) {
+      send({method:"session/update",params:{sessionId:sid,update:{
+        sessionUpdate:"user_message_chunk",content:{type:"text",text:"anonymous continuation"}
+      }}});
+    }
     if (cfg.requestPermission) {
       const permId = `perm-${reqSeq++}`;
       const permWait = new Promise((resolve) => {
@@ -221,6 +364,16 @@ async function handleRequest(msg) {
       }
       await permWait;
     }
+    if (cfg.autoChildSession) {
+      for (let turn = 1; turn <= 25; turn++) {
+        for (const [type, marker] of [["user_message_chunk","U"],["agent_message_chunk","A"]]) {
+          send({method:"session/update",params:{sessionId:cfg.autoChildSession,update:{
+            sessionUpdate:type,messageId:marker+turn,content:{type:"text",text:marker+String(turn).padStart(4,"0")}
+          }}});
+        }
+      }
+    }
+    sendChildEvents(cfg.promptChildEvents);
     const suffix = cfg.replyPrefix ?? "reply:";
     const msgId = `reply-${Date.now()}-${reqSeq++}`;
     send({
@@ -275,6 +428,7 @@ rl.on("line", (line) => {
   } else if (msg.id && pendingPermResolve) {
     const r = pendingPermResolve;
     pendingPermResolve = null;
+    logEvent({event:"permissionReply", ok:!!msg.result});
     r(msg.result);
   }
 });
@@ -347,8 +501,12 @@ fn encode_acpi_upload(upload_id: Id128, payload: &[u8]) -> Vec<u8> {
 
 #[derive(Default)]
 struct DrainedStreamFrames {
+    raw: Vec<serde_json::Value>,
+    turns: Vec<serde_json::Value>,
     statuses: Vec<serde_json::Value>,
+    raw_bytes: std::collections::HashMap<u64, Vec<u8>>,
     projections: Vec<serde_json::Value>,
+    field_bytes: Vec<(u64, Vec<u8>)>,
     snapshot_ends: usize,
 }
 
@@ -451,14 +609,25 @@ async fn read_until_snapshot_end(
                                 RecordKind::ItemProjection => 2,
                                 RecordKind::Status => 3,
                                 RecordKind::SnapshotEnd => 4,
+                                RecordKind::TurnStart => 5,
+                                RecordKind::FieldBytes => 6,
                             };
                             let buf = buffers.entry((tag, hdr.record())).or_default();
                             buf.extend_from_slice(payload);
                             if hdr.is_last() {
                                 let full = buffers.remove(&(tag, hdr.record())).unwrap_or_default();
+                                if kind == RecordKind::FieldBytes {
+                                    drained.field_bytes.push((hdr.record(), full));
+                                    continue;
+                                }
                                 if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&full)
                                 {
-                                    if kind == RecordKind::Status {
+                                    if kind == RecordKind::TurnStart {
+                                        drained.turns.push(val);
+                                    } else if kind == RecordKind::OriginalRaw {
+                                        drained.raw_bytes.insert(hdr.record(), full);
+                                        drained.raw.push(val);
+                                    } else if kind == RecordKind::Status {
                                         let is_rebound = val.get("type").and_then(|t| t.as_str())
                                             == Some("stream_rebound");
                                         drained.statuses.push(val);
@@ -474,7 +643,7 @@ async fn read_until_snapshot_end(
                     }
                 }
                 Message::Text(txt) => {
-                    received_kinds.push(format!("Text({})", &txt[..txt.len().min(120)]));
+                    received_kinds.push(format!("Text({} bytes)", txt.len()));
                 }
                 Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => {}
                 Message::Close(frame) => {
@@ -919,12 +1088,7 @@ async fn wait_for_peer_method(fixture: &HarnessFixture, method: &str, min_count:
         }
     })
     .await
-    .unwrap_or_else(|_| {
-        panic!(
-            "timed out waiting for {min_count} calls to {method}; logs={:?}",
-            fixture.peer_logs()
-        )
-    });
+    .unwrap_or_else(|_| panic!("timed out waiting for {min_count} calls to {method}"));
     tokio::time::sleep(Duration::from_millis(60)).await;
 }
 
@@ -1218,15 +1382,493 @@ async fn stc_003_and_stc_005_live_capture_cold_revalidation_singleflight_and_nod
 }
 
 #[tokio::test]
-async fn stc_004_node_corrupt_cache_and_trigger_fault_preserve_live_run_and_approval() {
-    let fixture = HarnessFixture::new("stc004_node");
-    std::fs::create_dir_all(fixture.area.data_dir()).expect("create data dir");
-    std::fs::write(
-        fixture.area.data_dir().join("transcript-cache.sqlite3"),
-        b"CORRUPTED-CACHE-HEADER-FOR-STC004",
+async fn history_page_cold_socket_selects_raw_and_tool_anchors() {
+    use crate::{
+        adapters::acp::{RawMessage, Version},
+        transcript_cache::{CapabilityProfile, ProtectedSessionsPort},
+    };
+    use serde_json::json;
+    let fixture = HarnessFixture::new("history-wss");
+    let owner = NodeProcessOwner::begin(
+        &tokio::runtime::Handle::current(),
+        fixture.area.config(free_address()),
+        Arc::new(FakeProtector::default()),
+    );
+    let node = owner.ready().await.unwrap();
+    let (client_id, key, sel) = fixture.install_profile(&node, 1, 69).await;
+    let target = fixture
+        .register_and_bind_target(&node, &key, &client_id, &sel, "s")
+        .await;
+    let mut sock = authenticate_socket(
+        valid_management_socket(&fixture.area, node.listen_addr()).await,
+        &key,
+        &client_id,
+        node_public_key(&node),
     )
-    .expect("write corrupt db");
+    .await;
+    let cache = &node.session_services.as_ref().unwrap().transcript_cache;
+    let native = NativeSessionKey::from_config(Some(sel.source), "s").unwrap();
+    let mut frames = Vec::new();
+    let mut push = |update| {
+        let raw = json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":update}});
+        frames.push((
+            RawMessage::parse(raw.to_string().into_bytes()).unwrap(),
+            frames.len() as u64 + 1,
+        ));
+    };
+    let output = "精确字节".repeat(4000);
+    for turn in 1..=5 {
+        push(
+            json!({"sessionUpdate":"user_message_chunk","messageId":turn.to_string(),"content":{"type":"text","text":"msg"}}),
+        );
+        if turn == 1 || turn == 3 {
+            push(
+                json!({"sessionUpdate":"tool_call","toolCallId":format!("t{turn}"),"title":"call","status":"in_progress"}),
+            );
+        }
+        if turn == 3 || turn == 5 {
+            let mut update = json!({"sessionUpdate":"tool_call_update","toolCallId":format!("t{}",turn-2),"status":"completed"});
+            if turn == 5 {
+                update["rawOutput"] = json!(output);
+                update["privateSibling"] = json!("OUTSIDE_FIELD");
+            }
+            push(update);
+        }
+    }
+    cache
+        .store()
+        .replace_with_replay(&native, Version::V1, CapabilityProfile::ResumeOnly, frames)
+        .await
+        .unwrap();
+    let latest = send_command_wait(
+        &mut sock,
+        "view.open",
+        json!({"targetId":target.encode(),"reason":"first_open","page":{"turns":"2"}}),
+    )
+    .await;
+    assert_eq!(latest["ok"], true);
+    let page = &latest["result"]["page"];
+    assert_eq!(page["firstTurn"], "4");
+    let stream = Id128::parse_base64url(latest["result"]["streamId"].as_str().unwrap()).unwrap();
+    let last = read_until_snapshot_end(&mut sock, stream).await;
+    assert_eq!(last.raw.len(), 3);
+    assert_eq!(
+        page["turns"],
+        json!([{"turn":"4","firstPosition":"2"},{"turn":"5","firstPosition":"3"}])
+    );
+    assert!(last.turns.is_empty());
+    assert!(cache.is_protected(&native));
+    let _ = send_command_wait(&mut sock, "view.close", json!({"streamId":stream})).await;
+    let scope = json!({"kind":"target","targetId":target.encode()});
+    let older=send_command_wait(&mut sock,"history.page",json!({"target":scope,"turns":"2","mode":{"kind":"continue","cursor":page["olderCursor"],"direction":"older"}})).await;
+    assert_eq!(older["ok"], true);
+    assert_eq!(older["result"]["page"]["firstTurn"], "2");
+    let stream = Id128::parse_base64url(older["result"]["streamId"].as_str().unwrap()).unwrap();
+    let middle = read_until_snapshot_end(&mut sock, stream).await;
+    assert_eq!(middle.raw.len(), 4);
+    let fields = middle
+        .projections
+        .iter()
+        .filter_map(|p| p["fields"].as_array())
+        .flatten()
+        .filter(|f| f["field"] == "rawOutput" && !f["raw"].is_null())
+        .collect::<Vec<_>>();
+    assert_eq!(fields.len(), 1);
+    let reference = &fields[0]["raw"];
+    let id: u64 = reference["rawRecordId"].as_str().unwrap().parse().unwrap();
+    let start: u64 = reference["byteStart"].as_str().unwrap().parse().unwrap();
+    let end: u64 = reference["byteEnd"].as_str().unwrap().parse().unwrap();
+    let token = serde_json::to_vec(&output).unwrap();
+    assert_eq!(end - start, token.len() as u64);
+    assert_eq!(middle.field_bytes.len(), 2); // status and rawOutput
+    assert!(
+        middle
+            .field_bytes
+            .iter()
+            .any(|(record, bytes)| *record == id
+                && bytes[..8] == start.to_be_bytes()
+                && bytes[8..] == token)
+    );
+    assert!(
+        middle
+            .field_bytes
+            .iter()
+            .all(|(_, bytes)| !bytes.windows(13).any(|w| w == b"OUTSIDE_FIELD"))
+    );
+    assert!(
+        middle
+            .raw
+            .iter()
+            .all(|r| !r.to_string().contains("OUTSIDE_FIELD"))
+    );
+    assert!(
+        middle
+            .projections
+            .iter()
+            .any(|p| p["fields"].as_array().is_some_and(|fields| fields
+                .iter()
+                .any(|f| f["field"] == "status" && f["enumCode"] == 2)))
+    );
+    assert_eq!(
+        older["result"]["page"]["turns"],
+        json!([{"turn":"2","firstPosition":"2"},{"turn":"3","firstPosition":"3"}])
+    );
+    assert!(middle.turns.is_empty());
+    assert_eq!(
+        middle
+            .projections
+            .iter()
+            .filter(|p| p.get("firstPosition").is_some())
+            .count(),
+        3
+    );
+    let _ = send_command_wait(&mut sock, "view.close", json!({"streamId":stream})).await;
+    timeout(Duration::from_secs(5), async {
+        while cache.is_protected(&native) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert!(fixture.peer_logs().is_empty());
+    sock.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+    let tool = middle
+        .projections
+        .iter()
+        .find(|p| p["kind"] == "tool")
+        .unwrap();
+    // Resolve every field reference using only bytes the isolated WSS reader received.
+    for field in tool["fields"].as_array().unwrap() {
+        let raw = &field["raw"];
+        if raw.is_null() {
+            continue;
+        }
+        let number = |key: &str| raw[key].as_str().unwrap().parse::<usize>().unwrap();
+        let record = number("rawRecordId") as u64;
+        let start = number("byteStart");
+        let end = number("byteEnd");
+        let material = if let Some(bytes) = middle.raw_bytes.get(&record) {
+            bytes.get(start..end)
+        } else {
+            middle.field_bytes.iter().find_map(|(id, bytes)| {
+                if *id == record
+                    && bytes.get(..8) == Some(&(start as u64).to_be_bytes())
+                    && bytes.len() == 8 + end - start
+                {
+                    bytes.get(8..)
+                } else {
+                    None
+                }
+            })
+        }
+        .expect("projection field has its complete referenced byte range");
+        if field["field"] == "rawOutput" {
+            let actual: String = serde_json::from_slice(material).unwrap();
+            assert!(actual.eq(&output), "decoded tool output differs");
+        }
+    }
+}
+#[tokio::test]
+async fn history_page_replays_cold_target_and_reuses_signed_cursor() {
+    use serde_json::json;
+    let fixture = HarnessFixture::new("history-replay");
+    let mut cfg: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture.cfg_path).unwrap()).unwrap();
+    cfg["replayTurns"] = 5.into();
+    let gate = fixture.area.directory.join("release-history-tail");
+    cfg["historyTailGate"] = json!(gate);
+    std::fs::write(&fixture.cfg_path, cfg.to_string()).unwrap();
+    let owner = NodeProcessOwner::begin(
+        &tokio::runtime::Handle::current(),
+        fixture.area.config(free_address()),
+        Arc::new(FakeProtector::default()),
+    );
+    let node = owner.ready().await.unwrap();
+    let (id, key, sel) = fixture.install_profile(&node, 1, 71).await;
+    let target = fixture
+        .register_and_bind_target(&node, &key, &id, &sel, "s")
+        .await;
+    let mut sock = authenticate_socket(
+        valid_management_socket(&fixture.area, node.listen_addr()).await,
+        &key,
+        &id,
+        node_public_key(&node),
+    )
+    .await;
+    let denied = send_command_wait(
+        &mut sock,
+        "view.open",
+        json!({"targetId":target.encode(),"reason":"first_open","page":{"turns":"2"}}),
+    )
+    .await;
+    assert_eq!(denied["error"]["code"], "session_tree_unverified");
+    let (target, _) = fixture
+        .create_and_bind_target(&node, &mut sock, &key, &id, &sel)
+        .await;
+    sock.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+    drop(owner);
+    let owner = NodeProcessOwner::begin(
+        &tokio::runtime::Handle::current(),
+        fixture.area.config(free_address()),
+        Arc::new(FakeProtector::default()),
+    );
+    let node = owner.ready().await.unwrap();
+    let mut sock = authenticate_socket(
+        valid_management_socket(&fixture.area, node.listen_addr()).await,
+        &key,
+        &id,
+        node_public_key(&node),
+    )
+    .await;
+    let open = send_command_wait(
+        &mut sock,
+        "view.open",
+        json!({"targetId":target.encode(),"reason":"first_open","page":{"turns":"2"}}),
+    )
+    .await;
+    assert_eq!(open["ok"], true, "{:?}", open["error"]);
+    assert_eq!(open["result"]["page"]["source"], "replay");
+    assert_eq!(open["result"]["page"]["firstTurn"], "4");
+    let older=send_command_wait(&mut sock,"history.page",json!({"target":{"kind":"target","targetId":target.encode()},"turns":"2","mode":{"kind":"continue","direction":"older","cursor":open["result"]["page"]["olderCursor"]}})).await;
+    assert_eq!(older["ok"], true, "{:?}", older["error"]);
+    assert_eq!(older["result"]["page"]["firstTurn"], "2");
+    assert_eq!(older["result"]["page"]["source"], "transcript_cache");
+    assert_eq!(
+        fixture
+            .peer_logs()
+            .iter()
+            .filter(|e| e["method"] == "session/load")
+            .count(),
+        1
+    );
+    let stream = Id128::parse_base64url(open["result"]["streamId"].as_str().unwrap()).unwrap();
+    let _ = read_until_snapshot_end(&mut sock, stream).await;
+    std::fs::write(gate, b"release").unwrap();
+    check_live_turn_and_invalidation(&mut sock, stream).await;
+    sock.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}
 
+async fn check_live_turn_and_invalidation(sock: &mut ManagementSocket, stream: Id128) {
+    timeout(Duration::from_secs(10), async {
+        let mut turn_started = false;
+        loop {
+            let msg = sock.next().await.unwrap().unwrap();
+            let Message::Binary(bytes) = msg else {
+                continue;
+            };
+            let (h, bytes) = TransferHeader::decode(&bytes).unwrap();
+            if h.stream() != stream {
+                continue;
+            }
+            sock.send(Message::Binary(
+                TransferHeader::credit(stream, h.packet())
+                    .encode(&[])
+                    .unwrap()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+            match h.record_kind() {
+                Some(RecordKind::TurnStart) => {
+                    let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+                    assert_eq!(value["turn"], "6");
+                    turn_started = true;
+                }
+                Some(RecordKind::Status) => {
+                    let value: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+                    if value["type"] == "history_unprovable" {
+                        assert!(turn_started);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn history_page_child_scope_and_locate_over_socket() {
+    use crate::{
+        adapters::acp::{RawMessage, Version},
+        transcript_cache::CapabilityProfile,
+    };
+    use serde_json::json;
+    let fixture = HarnessFixture::new("history-child");
+    let owner = NodeProcessOwner::begin(
+        &tokio::runtime::Handle::current(),
+        fixture.area.config(free_address()),
+        Arc::new(FakeProtector::default()),
+    );
+    let node = owner.ready().await.unwrap();
+    let (id, key, selection) = fixture.install_profile(&node, 1, 72).await;
+    let mut sock = authenticate_socket(
+        valid_management_socket(&fixture.area, node.listen_addr()).await,
+        &key,
+        &id,
+        node_public_key(&node),
+    )
+    .await;
+    let (_root, native) = fixture
+        .create_and_bind_target(&node, &mut sock, &key, &id, &selection)
+        .await;
+    let pool = node.storage.as_ref().unwrap().pool_for_test();
+    let inserted=sqlx::query("INSERT INTO node_session_parents SELECT ?, 'child-history', ?,source_instance_id,runtime_epoch,connection_epoch,X'0000000000000001',X'0000000000000001',zeroblob(32),0 FROM node_source_session_operations WHERE native_session_id=?").bind(selection.source.encode()).bind(&native).bind(&native).execute(pool).await.unwrap();
+    assert_eq!(inserted.rows_affected(), 1);
+    let child = NativeSessionKey::from_config(Some(selection.source), "child-history").unwrap();
+    let frames=(1..=5).map(|turn|{
+        let frame=json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":child.native_id(),"update":{"sessionUpdate":"user_message_chunk","messageId":turn.to_string(),"content":{"type":"text","text":"child"}}}});
+        (RawMessage::parse(frame.to_string().into_bytes()).unwrap(),turn)
+    }).collect();
+    node.session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store()
+        .replace_with_replay(&child, Version::V1, CapabilityProfile::ResumeOnly, frames)
+        .await
+        .unwrap();
+    let target =
+        json!({"kind":"source","selection":selection_json(&selection),"nativeSessionId":native});
+    let mut payload =
+        json!({"target":target,"child":child.native_id(),"turns":"2","mode":{"kind":"first"}});
+    let first = send_command_wait(&mut sock, "history.page", payload.clone()).await;
+    assert_eq!(first["result"]["page"]["firstTurn"], "1");
+    payload["mode"] = json!({"kind":"locate","direction":"older","fromTurn":"4"});
+    let located = send_command_wait(&mut sock, "history.page", payload.clone()).await;
+    assert_eq!(located["result"]["page"]["firstTurn"], "3");
+    assert_eq!(located["result"]["page"]["continuity"], "unproven");
+    payload["mode"] = json!({"kind":"continue","direction":"older","cursor":first["result"]["page"]["newerCursor"]});
+    let wrong = send_command_wait(&mut sock, "history.page", payload.clone()).await;
+    assert_eq!(wrong["error"]["code"], "invalid_cursor");
+    payload["child"] = "unrelated".into();
+    let denied = send_command_wait(&mut sock, "history.page", payload).await;
+    assert_eq!(denied["error"]["code"], "invalid_target");
+    sock.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}
+
+#[tokio::test]
+async fn history_page_disconnect_during_locate_keeps_original_replay_owned() {
+    Box::pin(check_pending_locate(false)).await;
+}
+
+#[tokio::test]
+async fn hn_018_revoke_during_locate_keeps_original_replay_owned() {
+    Box::pin(check_pending_locate(true)).await;
+}
+
+async fn check_pending_locate(revoke: bool) {
+    use serde_json::json;
+    let fixture = HarnessFixture::new("history-disconnect");
+    let entered = fixture.area.directory.join("history-load-entered");
+    let release = fixture.area.directory.join("history-load-release");
+    let mut cfg: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture.cfg_path).unwrap()).unwrap();
+    cfg["replayTurns"] = 5.into();
+    cfg["loadBarrierEnteredFile"] = json!(entered);
+    cfg["loadBarrierReleaseFile"] = json!(release);
+    std::fs::write(&fixture.cfg_path, cfg.to_string()).unwrap();
+    let start = || {
+        NodeProcessOwner::begin(
+            &tokio::runtime::Handle::current(),
+            fixture.area.config(free_address()),
+            Arc::new(FakeProtector::default()),
+        )
+    };
+    let owner = start();
+    let node = owner.ready().await.unwrap();
+    let (id, key, sel) = fixture.install_profile(&node, 1, 73).await;
+    let mut sock = authenticate_socket(
+        valid_management_socket(&fixture.area, node.listen_addr()).await,
+        &key,
+        &id,
+        node_public_key(&node),
+    )
+    .await;
+    let (target, native) = fixture
+        .create_and_bind_target(&node, &mut sock, &key, &id, &sel)
+        .await;
+    sock.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+    drop(owner);
+    let owner = start();
+    let node = owner.ready().await.unwrap();
+    let mut sock = authenticate_socket(
+        valid_management_socket(&fixture.area, node.listen_addr()).await,
+        &key,
+        &id,
+        node_public_key(&node),
+    )
+    .await;
+    let scope = json!({"kind":"target","targetId":target.encode()});
+    let payload = json!({"target":scope,"turns":"2","mode":{"kind":"locate","fromTurn":"4","direction":"older"}});
+    let cmd = json!({"v":1,"type":"command","action":"history.page","requestId":Id128::new([179;16]),"payload":payload});
+    send_json(&mut sock, &cmd).await;
+    timeout(Duration::from_secs(10), async {
+        while !entered.exists() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let (reader_id, reader_key) = if revoke {
+        let other = SigningKey::from_slice(&[74; 32]).unwrap();
+        let other_id = pair_browser(&node, &other, "Independent history reader").await;
+        crate::ipc::device_revoke(node.ipc_address(), &id)
+            .await
+            .unwrap();
+        assert_eq!(next_close(&mut sock, Duration::from_secs(5)).await.0, 4410);
+        (other_id, other)
+    } else {
+        sock.close(None).await.unwrap();
+        (id, key)
+    };
+    drop(sock);
+    std::fs::write(release, b"release").unwrap();
+    let native = NativeSessionKey::from_config(Some(sel.source), &native).unwrap();
+    let store = node
+        .session_services
+        .as_ref()
+        .unwrap()
+        .transcript_cache
+        .store();
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if store.load_snapshot(&native).await.unwrap().is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut sock = authenticate_socket(
+        valid_management_socket(&fixture.area, node.listen_addr()).await,
+        &reader_key,
+        &reader_id,
+        node_public_key(&node),
+    )
+    .await;
+    let located = send_command_wait(&mut sock, "history.page", payload).await;
+    assert_eq!(located["result"]["page"]["firstTurn"], "3");
+    assert_eq!(located["result"]["page"]["source"], "transcript_cache");
+    assert!(
+        fixture
+            .peer_logs()
+            .iter()
+            .all(|e| e["method"] != "session/cancel")
+    );
+    sock.close(None).await.unwrap();
+    node.shutdown(None).await.unwrap();
+}
+
+async fn check_degraded_prompt_and_approval(fixture: &HarnessFixture) {
     let owner = NodeProcessOwner::begin(
         &tokio::runtime::Handle::current(),
         fixture.area.config(free_address()),
@@ -1304,6 +1946,34 @@ async fn stc_004_node_corrupt_cache_and_trigger_fault_preserve_live_run_and_appr
         "prompt consume failed: {consume_res}"
     );
 
+    timeout(Duration::from_secs(10), async {
+        loop {
+            if fixture
+                .peer_logs()
+                .iter()
+                .any(|e| e["event"] == "permissionReply" && e["ok"] == true)
+            {
+                let queue = send_command_wait(
+                    &mut sock_prompt,
+                    "input.queue",
+                    serde_json::json!({"targetId":target_id.encode()}),
+                )
+                .await;
+                assert_eq!(queue["ok"], true);
+                if queue["result"]["active"].is_null()
+                    && queue["result"]["processing"].is_null()
+                    && queue["result"]["waiting"]
+                        .as_array()
+                        .is_some_and(Vec::is_empty)
+                {
+                    break;
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("native approval reply and prompt settlement");
     let open = send_command_wait(
         &mut sock_prompt,
         "view.open",
@@ -1323,6 +1993,19 @@ async fn stc_004_node_corrupt_cache_and_trigger_fault_preserve_live_run_and_appr
     let _ = sock_approve.close(None).await;
     node.shutdown(None).await.expect("shutdown part A node");
     drop(owner);
+}
+
+#[tokio::test]
+async fn stc_004_node_corrupt_cache_and_trigger_fault_preserve_live_run_and_approval() {
+    let fixture = HarnessFixture::new("stc004_node");
+    std::fs::create_dir_all(fixture.area.data_dir()).expect("create data dir");
+    std::fs::write(
+        fixture.area.data_dir().join("transcript-cache.sqlite3"),
+        b"CORRUPTED-CACHE-HEADER-FOR-STC004",
+    )
+    .expect("write corrupt db");
+
+    Box::pin(check_degraded_prompt_and_approval(&fixture)).await;
 
     // Part B: Runtime SQLite write fault (`BEFORE INSERT` trigger) -> cacheWarning=true, live run unaffected.
     let trig_fix = HarnessFixture::new("stc004_trig");
@@ -2010,3 +2693,7 @@ async fn stc_010_revoke_during_cached_and_revalidating_stream_closes_4410() {
 
     node2.shutdown(None).await.expect("shutdown stc010 node2");
 }
+
+#[path = "child_history_wss_cases.rs"]
+mod child_history_wss_cases;
+mod history_acceptance;

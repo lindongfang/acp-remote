@@ -1,3 +1,4 @@
+import { historyShape, historyOpenPage } from "./history";
 import {
   parseStrictJsonObject,
   type JsonValue,
@@ -113,26 +114,33 @@ const SHAPES = {
   "source.session.result.open": { sourceOperationId: requireSessionId },
   "source.session.result.release": { sourceOperationId: requireSessionId },
   "view.open": {
-    targetId: requireSessionId,
-    reason: oneOf(
-      "first_open",
-      "explicit_refresh",
-      "reopen",
-      "reconnect",
-      "reacquire",
-    ),
+    required: {
+      targetId: requireSessionId,
+      reason: oneOf(
+        "first_open",
+        "explicit_refresh",
+        "reopen",
+        "reconnect",
+        "reacquire",
+      ),
+    },
+    optional: { page: historyOpenPage },
   },
   "view.open_source": {
-    selection: sourceSelection,
-    nativeSessionId: requireBoundedSourceText(true),
-    reason: oneOf(
-      "first_open",
-      "explicit_refresh",
-      "reopen",
-      "reconnect",
-      "reacquire",
-    ),
+    required: {
+      selection: sourceSelection,
+      nativeSessionId: requireBoundedSourceText(true),
+      reason: oneOf(
+        "first_open",
+        "explicit_refresh",
+        "reopen",
+        "reconnect",
+        "reacquire",
+      ),
+    },
+    optional: { page: historyOpenPage },
   },
+  "history.page": historyShape,
   "view.close": { streamId: requireSessionId },
   "view.original": { streamId: requireSessionId },
   "view.rebind": { streamId: requireSessionId },

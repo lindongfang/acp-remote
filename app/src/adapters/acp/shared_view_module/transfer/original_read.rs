@@ -88,7 +88,10 @@ impl ModuleViewTransfer {
                 Some(OriginalReadProgress::CandidateReady { .. }) => {
                     ModuleOriginalReadProgress::CandidateReady
                 }
-                Some(OriginalReadProgress::Complete { .. }) => ModuleOriginalReadProgress::Complete,
+                Some(
+                    OriginalReadProgress::Complete { .. }
+                    | OriginalReadProgress::ConfirmedCurrent { .. },
+                ) => ModuleOriginalReadProgress::Complete,
                 Some(OriginalReadProgress::Failed(error)) => {
                     ModuleOriginalReadProgress::Failed(error)
                 }

@@ -237,7 +237,7 @@ pub struct NodeManagementSessionServices {
     catalog_management: super::catalog_upload::NodeCatalogManagement,
     uploads: Arc<super::input_upload::NodeInputUploads>,
     documents: super::document_transfer::NodeDocumentService,
-    views: NodeNativeViewsService,
+    pub(crate) views: NodeNativeViewsService,
     socket_authority: Arc<SocketViewAuthority>,
     source_sessions: super::source_sessions::NodeSourceSessionManagement,
 }
