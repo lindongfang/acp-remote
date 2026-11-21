@@ -148,6 +148,8 @@ impl Rig {
     }
     async fn close(self) {
         let weak = Arc::downgrade(&self.module.core);
+        // Stop the owned transport before fixture shutdown releases its duplex endpoint.
+        self.module.core.connection.stop_owned();
         let module = self.module.shutdown(deadline()).await;
         let owner = self.owner.shutdown(deadline()).await;
         drop(self.module);
