@@ -417,6 +417,20 @@ describe("HN-030 manual history refresh", () => {
     expect(body.textContent).not.toMatch(/old twelve|请刷新|old late|invalid_sequence/);
     expect(open.mock.calls.slice(1)).toEqual(Array(2).fill(source ? [selection,"native-R","explicit_refresh",{turns:"5"},true] : [TARGET_ID,"explicit_refresh",{turns:"5"},true]));
   });
+  it.each([false, true])("retries degraded sync in the promoted five-turn window (source=%s)", async source => {
+    const {body, open, button, end, pageMessages} = await fixture(source);
+    const opened = paged(STREAM_B);
+    open.mockResolvedValueOnce({...opened, status: {...opened.status, syncState: "degraded_capacity_full"}});
+    button.click();
+    await Promise.resolve();
+    end(STREAM_B, pageMessages(STREAM_B, "degraded twelve"));
+    const retry = body.findAll(node => node.tagName === "BUTTON" && node.textContent === "重试同步" && !node.hidden);
+    expect(retry).toHaveLength(1);
+    retry[0]!.click();
+    expect(open.mock.calls.slice(2)).toEqual([source
+      ? [selection, "native-R", "explicit_refresh", {turns: "5"}]
+      : [TARGET_ID, "explicit_refresh", {turns: "5"}]]);
+  });
   it("renders the unchanged stream's next turn once without reopening", async () => {
     const {body,open,button,send} = await fixture(false,false);
     send(makeFrame(STREAM_A,12n,201n,"turn_start",new TextEncoder().encode(JSON.stringify({turn:"13",firstPosition:"6"}))));

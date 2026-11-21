@@ -13,6 +13,7 @@ interface Port {
 }
 interface HistoryRefresh {
   open(): Promise<SessionViewOpened>;
+  retrySync(): void;
   promote(opened: SessionViewOpened, display: SessionViewDisplay): void;
 }
 
@@ -122,6 +123,9 @@ export class HistoryPageController {
           ...this.transport,
           turnStarted: turn => this.turnStarted(turn),
           readFailed: failed,
+          retrySyncRequested: () => {
+            if (this.#display === display && this.#active && this.current() && !this.#invalid) refresh.retrySync();
+          },
           reopenRequested: full => {
             if (this.#display === display && this.#active && this.current()) this.transport.reopenRequested?.(full);
           },

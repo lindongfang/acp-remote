@@ -326,11 +326,42 @@ describe("C50 authenticated request isolation", () => {
       await expect(first).rejects.toMatchObject({code:"not_found"});
       const current = connection.nodeInfo();
       const currentId = commands()[1]!.requestId;
-      answer(oldId);
+      const opened = (requestId: unknown, streamId: string) => ({
+        v:1, type:"view.opened", requestId, streamId, viewEpoch:id(19), snapshotRevision:"1",
+        capabilities:{opaqueChunks:1}, status:{mode:"current_only", freshness:"current_observation",
+          projection:"available", join:"proven_native_ids", historyIncomplete:false, cacheRecoverable:true},
+      });
+      const retry = connection.openSessionView(id(11), "explicit_refresh", {}, true);
+      const retryId = commands()[2]!.requestId;
+      const active = opened(retryId, id(21));
+      fake.receive(result(retryId, active));
+      await retry;
+      const other = connection.openSessionView(id(12), "first_open");
+      const otherId = commands()[3]!.requestId;
+      fake.receive(result(otherId, opened(otherId, id(22))));
+      await other;
+      fake.receive(result(oldId, opened(oldId, id(22))));
+      fake.receive(result(retryId, active));
+      fake.receive(result(oldId, opened(otherId, id(23))));
+      fake.receive(result(oldId, opened(oldId, id(21))));
+      const abandoned = opened(oldId, id(20));
+      fake.receive(result(oldId, abandoned));
+      fake.receive(result(oldId, abandoned));
       answer(currentId);
       await expect(current).resolves.toMatchObject({status:"ready"});
+      const closes = commands().filter(frame => frame.action === "view.close");
+      expect(closes.map(frame => frame.payload)).toEqual([{streamId:id(20)}]);
+      fake.receive(result(closes[0]!.requestId, {streamId:id(20), alreadyClosed:false,
+        lastCommittedPacket:"0", startedPacket:"0", state:"closed"}));
       answer(oldId);
+      const finalRead = connection.nodeInfo();
+      answer(commands().at(-1)!.requestId);
+      await finalRead;
       expect(fake.closeCalls).toHaveLength(0);
+      const foreign = connection.nodeInfo();
+      fake.receive(result(id(90), opened(id(90), id(24))));
+      await expect(foreign).rejects.toBeInstanceOf(ManagementProtocolError);
+      expect(commands().filter(frame => frame.action === "view.close")).toEqual(closes);
     } finally { connection.disconnect(); }
   });
 

@@ -260,6 +260,11 @@ export class SharedViewController {
     if (!opened.page || !spec || !(display instanceof SessionViewDisplay)) return display;
     let root = display;
     let retired = false;
+    const reload = (windowTurns?: string) => {
+      const page = windowTurns ? { turns: windowTurns } : {};
+      if (spec.kind === "target") void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh", page);
+      else void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "explicit_refresh", page);
+    };
     const controller = new HistoryPageController(doc, spec, connection, {
       credit: (id, seq) => connection.sendSessionViewCredit(id, seq),
       detach: id => connection.detachSessionStream(id),
@@ -268,10 +273,7 @@ export class SharedViewController {
         if (spec.kind === "target") void this.openSharedSessionView(record, spec.targetId, null, "reopen", page);
         else void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "reopen", page);
       },
-    }, undefined, turns => {
-      if (spec.kind === "target") void this.openSharedSessionView(record, spec.targetId, null, "explicit_refresh", turns ? { turns } : {});
-      else void this.openSharedSourceView(record, spec.selection, spec.nativeSessionId, null, "explicit_refresh", turns ? { turns } : {});
-    }, () => this.#sharedSessionDisplay === display && this.#port.getManagement() === connection && this.#sharedViewSpec === spec, () => {
+    }, undefined, reload, () => this.#sharedSessionDisplay === display && this.#port.getManagement() === connection && this.#sharedViewSpec === spec, () => {
       retired = true;
       releaseSharedDisplay(root, connection);
       root.dispose();
@@ -279,6 +281,7 @@ export class SharedViewController {
       open: () => spec.kind === "target"
         ? connection.openSessionView(spec.targetId, "explicit_refresh", { turns }, true)
         : connection.openSourceSessionView(spec.selection, spec.nativeSessionId, "explicit_refresh", { turns }, true),
+      retrySync: () => reload(turns),
       promote: (latest, latestDisplay) => {
         root = latestDisplay;
         retired = false;
