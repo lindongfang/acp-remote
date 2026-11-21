@@ -344,6 +344,8 @@ async fn competing_publication(order: CommitOrder) {
     let outcome = AssertUnwindSafe(check_competing_publication(&mut rig, order))
         .catch_unwind()
         .await;
+    // Stop the owned transport before fixture shutdown drops its duplex peer.
+    rig.module.core.connection.stop_owned();
     rig.close().await;
     if let Err(panic) = outcome {
         std::panic::resume_unwind(panic);
