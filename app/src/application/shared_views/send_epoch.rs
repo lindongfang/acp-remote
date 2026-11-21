@@ -222,16 +222,12 @@ impl OwnedDisplaySendView {
     /// # Errors
     /// Rejects a poisoned short generation fence.
     pub fn seal(&self) -> Result<(), ViewError> {
-        self.seal_with(|| {})
-    }
-    pub(super) fn seal_with(&self, publish: impl FnOnce()) -> Result<(), ViewError> {
         let _fence = self
             .group
             .inner
             .lock()
             .map_err(|_| ViewError::ReadFailure)?;
         self.sealed.store(true, Ordering::Release);
-        publish();
         Ok(())
     }
     #[must_use]

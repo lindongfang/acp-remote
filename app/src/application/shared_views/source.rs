@@ -1457,6 +1457,14 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
         target: &TargetWorker<R>,
         candidate: &GenerationWorker<R>,
     ) -> Result<(), ViewError> {
+        let old = &target.current.published;
+        // Same order as final same-read rebind: send fence before publication locks.
+        let _fence = old
+            .send
+            .group
+            .inner
+            .lock()
+            .map_err(|_| ViewError::ReadFailure)?;
         let mut current = target
             .published
             .current
@@ -1467,13 +1475,13 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
             .candidate
             .write()
             .map_err(|_| ViewError::ReadFailure)?;
-        let old = &target.current.published;
-        // Publish and mark the old subscription before any sender can observe the sealed fence.
-        old.send.seal_with(|| {
-            *current = Arc::clone(&candidate.published);
-            *pending = std::sync::Weak::new();
-            old.replaced.send_replace(true);
-        })
+        old.send
+            .sealed
+            .store(true, std::sync::atomic::Ordering::Release);
+        *current = Arc::clone(&candidate.published);
+        *pending = std::sync::Weak::new();
+        old.replaced.send_replace(true);
+        Ok(())
     }
     fn confirm_current_replay(
         target: &TargetWorker<R>,
