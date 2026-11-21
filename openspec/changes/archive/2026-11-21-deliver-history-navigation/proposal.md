@@ -17,7 +17,7 @@
 
 ### 硬约束与非目标
 
-- 以[重设计 §5.1–§6.3](../../../docs/architecture/overview.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
+- 以[重设计 §5.1–§6.3](../../../../docs/architecture/overview.md)与 `openspec/specs/` 长期规格为依据；采用新架构、不兼容旧系统。
 - 不建立无期限永久聊天档案或全量内存常驻索引，不开发厂商私有文件读取器，不因只读翻页刷新展示快照 30 天有效期或 30 分钟空闲计时。
 - 首期限定 Windows 节点 + Web，App 后续；2026-11-20 用户确认正式开工，`tests/plan/tasks` 基于分支 `v2` 提交 `4dd96797` 的真实代码树生成。
 
@@ -45,7 +45,7 @@
 
 ## Impact
 
-- 依赖：[已归档通用会话闭环](../archive/2026-11-16-deliver-codex-session-loop/proposal.md) 与 [deliver-session-transcript-cache](../archive/2026-11-20-deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../docs/architecture/capability-map.md)。
+- 依赖：[已归档通用会话闭环](../2026-11-16-deliver-codex-session-loop/proposal.md) 与 [deliver-session-transcript-cache](../2026-11-20-deliver-session-transcript-cache/proposal.md)，跨 change 依赖见[能力地图](../../../../docs/architecture/capability-map.md)。
 - 影响范围：展示快照轮次切片读取、重放流式选页、WSS 历史分页命令与 Web 会话时间线组件；具体写范围在开工阶段 `plan.md` 定义。
 
 ## Exploration
@@ -58,4 +58,4 @@
 - **子分页与父步骤挂载的边界（用户确认缩小本次交付范围）**：能力地图规定原生父子关系展示归属 `agent-session-tree`。本变更交付子目标分页协议、节点关系校验、可嵌入子分页容器与历史面板中的最小手动入口；委派步骤卡片内的挂载由 `agent-session-tree` 复用该组件。
 - **原生加载准入（用户确认）**：发现及注册未证明主树身份时，首次加载须拒绝；已有可靠主树归属且满足容量条件时，可标准重放并继续翻页。HN-011 分别验证两条路径。
 - **独立子历史查询（2026-11-21 用户确认）**：本次交付明确协商的只读子历史查询；未声明相应能力的 Harness 保留已有读取路径。增量设计与用例须完成独立编码前复审。
-- **术语与 ADR 复核**：复用 [领域术语表](../../GLOSSARY.md) 中展示快照库、重放读取代际、重放兼容与游标定义；“可证明轮次”的判定规则写入 [design.md](design.md) 决策 1，无新增独立 ADR。
+- **术语与 ADR 复核**：复用 [领域术语表](../../../GLOSSARY.md) 中展示快照库、重放读取代际、重放兼容与游标定义；“可证明轮次”的判定规则写入 [design.md](design.md) 决策 1，无新增独立 ADR。

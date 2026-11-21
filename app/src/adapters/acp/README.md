@@ -18,4 +18,4 @@ SessionSetup 要求有版本和来源的完整 cwd/MCP/additionalDirectories 快
 
 独立子历史使用当前连接初始化时双方声明的 `io.github.lindongfang.acp-remote/child-history` 版本 1。策略在 v1 的 `clientCapabilities._meta` 或 v2 的 `capabilities._meta` 发出声明，并分别从响应的 `agentCapabilities._meta` 或 `capabilities._meta` 读取确认。固定只读方法为 `_io.github.lindongfang.acp-remote/child-history`。当前连接返回 JSON-RPC method-not-found 后，后续查询直接报告能力限制。未实现扩展的来源仍可使用已保存的子快照及原生自动投递的子事件。
 
-原连接按 RPC ID 接收每批结果。解码器验证根、子、快照、序号与游标，跨块拼接完整 ACP 通知并保留原始字节。根资源持有查询任务，获准的管理读者共享任务，各自复核权限。完整子快照与轮次索引在同一事务发布，续页通过平台快照令牌读取。受控 ACP v1/v2 的正向测试使用节点的管理 WSS 入口。扩展合同见[历史导航设计第 8 节](../../../../openspec/changes/deliver-history-navigation/design.md)。
+原连接按 RPC ID 接收每批结果。解码器验证根、子、快照、序号与游标，跨块拼接完整 ACP 通知并保留原始字节。根资源持有查询任务，获准的管理读者共享任务，各自复核权限。完整子快照与轮次索引在同一事务发布，续页通过平台快照令牌读取。受控 ACP v1/v2 的正向测试使用节点的管理 WSS 入口。扩展合同见[历史导航设计第 8 节](../../../../openspec/changes/archive/2026-11-21-deliver-history-navigation/design.md)。
