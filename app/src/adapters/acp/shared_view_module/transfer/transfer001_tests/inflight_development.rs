@@ -232,18 +232,7 @@ enum CommitOrder {
     RevokeClosedReader,
 }
 
-async fn check_competing_publication(rig: &mut Rig, order: CommitOrder) {
-    use super::{HookSelector, ViewHookPoint, send};
-    use crate::domain::shared_view::ViewError;
-    let signer = super::FixtureSigningClient::generate().unwrap();
-    let client = rig.auth.authenticate(&signer).await.unwrap();
-    let old = rig
-        .module
-        .reads
-        .open(&client, rig.target.key(), ReadReason::FirstOpen)
-        .await
-        .unwrap();
-    let mut replaced = rig.module.reads.history_replacement(&client, &old).unwrap();
+async fn replay_response(rig: &mut Rig) -> Vec<u8> {
     let request = rig.peer.next_node_frame(deadline()).await.unwrap().unwrap();
     let document = RawDocument::parse(request).unwrap();
     let id = document
@@ -256,6 +245,22 @@ async fn check_competing_publication(rig: &mut Rig, order: CommitOrder) {
     let mut response = br#"{"jsonrpc":"2.0","id":"#.to_vec();
     response.extend_from_slice(id.fragment().as_bytes());
     response.extend_from_slice(br#","result":{}}"#);
+    response
+}
+
+async fn check_competing_publication(rig: &mut Rig, order: CommitOrder) {
+    use super::{HookSelector, ViewHookPoint, send};
+    use crate::domain::shared_view::ViewError;
+    let signer = super::FixtureSigningClient::generate().unwrap();
+    let client = rig.auth.authenticate(&signer).await.unwrap();
+    let old = rig
+        .module
+        .reads
+        .open(&client, rig.target.key(), ReadReason::FirstOpen)
+        .await
+        .unwrap();
+    let mut replaced = rig.module.reads.history_replacement(&client, &old).unwrap();
+    let response = replay_response(rig).await;
     rig.captured(br#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"transfer-window","update":{"sessionUpdate":"_history_record"}}}"#).await;
     assert!(matches!(
         timeout_at(
@@ -298,24 +303,7 @@ async fn check_competing_publication(rig: &mut Rig, order: CommitOrder) {
             .unwrap();
         assert!(*replaced.borrow());
     };
-    if order != CommitOrder::RebindFirst {
-        let expected = if order == CommitOrder::RevokeClosedReader {
-            old.stream().seal().unwrap();
-            rig.auth.revoke(&signer).await.unwrap();
-            ViewError::Revoked
-        } else if order == CommitOrder::CloseThenPublish {
-            old.stream().seal().unwrap();
-            ViewError::StreamSealed
-        } else {
-            ViewError::StaleCursor
-        };
-        complete.await;
-        gate.release();
-        assert_eq!(
-            timeout_at(deadline(), follow).await.unwrap().err(),
-            Some(expected)
-        );
-    } else {
+    if order == CommitOrder::RebindFirst {
         gate.release();
         let (new, metadata) = timeout_at(deadline(), follow)
             .await
@@ -336,6 +324,23 @@ async fn check_competing_publication(rig: &mut Rig, order: CommitOrder) {
             metadata.epoch
         );
         let _ = rig.module.reads.release(new);
+    } else {
+        let expected = if order == CommitOrder::RevokeClosedReader {
+            old.stream().seal().unwrap();
+            rig.auth.revoke(&signer).await.unwrap();
+            ViewError::Revoked
+        } else if order == CommitOrder::CloseThenPublish {
+            old.stream().seal().unwrap();
+            ViewError::StreamSealed
+        } else {
+            ViewError::StaleCursor
+        };
+        complete.await;
+        gate.release();
+        assert_eq!(
+            timeout_at(deadline(), follow).await.unwrap().err(),
+            Some(expected)
+        );
     }
 }
 
