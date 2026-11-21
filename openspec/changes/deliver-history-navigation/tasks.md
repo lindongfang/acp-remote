@@ -13,7 +13,7 @@
 
 ## 2. 集成交付
 
-- [ ] 2.1 WP5 固定集成提交，独立 tester 执行 HN-001 至 HN-030，独立 reviewer 检视交付，必需用例通过、阻断闭环、结果回填 plan.md 后勾选。
+- [x] 2.1 WP5 固定集成提交，独立 tester 执行 HN-001 至 HN-030，独立 reviewer 检视交付，必需用例通过、阻断闭环、结果回填 plan.md 后勾选。
 
 ## Workflow follow-up
 
