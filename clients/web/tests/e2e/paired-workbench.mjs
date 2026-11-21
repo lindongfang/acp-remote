@@ -31,7 +31,14 @@ export async function openNewTarget(pageA, cfg) {
   await pageA.locator('button:has-text("填入 Harness/Profile")').first().waitFor({ state: "visible", timeout: 20_000 });
   await pageA.locator('button:has-text("填入 Harness/Profile")').first().click();
 
+  return createBoundTarget(pageA,cfg);
+}
+
+export async function createBoundTarget(pageA,cfg) {
+  const operation = pageA.locator('.detail-block:has(.detail-label:text-is("来源操作")) code');
+  const previous = await operation.count() ? await operation.textContent() : null;
   await pageA.locator('section[data-panel="source-session"] button:has-text("登记新建")').click();
+  if (previous !== null) await operation.filter({hasNotText:previous}).waitFor();
   await pageA.locator('section[data-panel="source-session"] button:has-text("执行操作")').waitFor({ state: "visible", timeout: 20_000 });
   await pageA.locator('section[data-panel="source-session"] button:has-text("执行操作")').click();
   await pageA.locator('section[data-panel="source-session"] button:has-text("读取结果")').waitFor({ state: "visible", timeout: 35_000 });
@@ -52,7 +59,10 @@ export async function openNewTarget(pageA, cfg) {
   await targetCard.waitFor({ state: "visible", timeout: 20_000 });
   const targetId = (await targetCard.locator('.detail-block:has(.detail-label:text-is("Target ID")) code').textContent())?.trim() ?? "";
   assert(targetId.length === 22, `unexpected targetId: ${targetId}`);
+  const priorOpen = await pageA.getByRole("button",{name:"打开共享视图",exact:true}).first().elementHandles();
   await targetCard.locator('button:has-text("载入队列")').click();
+  if (priorOpen.length) await pageA.waitForFunction(el=>!el.isConnected,priorOpen[0]);
+  await pageA.waitForFunction(id=>document.querySelector("#session-target-id").value === id,targetId);
   await pageA.locator('button:has-text("打开共享视图")').first().click();
 
   return { targetId, nativeSessionId };

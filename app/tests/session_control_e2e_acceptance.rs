@@ -409,6 +409,22 @@ async fn sct_016_real_codex_harness_dual_browser_takeover_and_restart_e2e() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "HN-027: requires embedded production Web, Edge and Playwright"]
 async fn hn_027_controlled_history_navigation() {
+    run_controlled_history("navigation").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-030: requires embedded production Web, Edge and Playwright"]
+async fn hn_030_identical_live_turn_in_edge() {
+    run_controlled_history("identical").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "HN-030: requires embedded production Web, Edge and Playwright"]
+async fn hn_030_revoke_before_notice_in_edge() {
+    run_controlled_history("revoke-before-notice").await;
+}
+
+async fn run_controlled_history(scenario: &str) {
     let repo = repo_root();
     let area = setup_temp_e2e_area();
     let bin = Path::new(env!("CARGO_BIN_EXE_acp-remote"));
@@ -421,7 +437,13 @@ async fn hn_027_controlled_history_navigation() {
     let job = HistoryProcessJob::attach(guard.node_child.as_ref().unwrap());
     wait_node_ready(&area.ipc_addr).await;
     let scripts = repo.join("clients/web/tests/e2e");
-    let evidence = repo.join("testing/runs/deliver-history-navigation/hn-027.json");
+    let evidence = repo
+        .join("testing/runs/deliver-history-navigation")
+        .join(match scenario {
+            "identical" => "hn-030-identical.json",
+            "revoke-before-notice" => "hn-030-revoke-before-notice.json",
+            _ => "hn-027.json",
+        });
     fs::create_dir_all(evidence.parent().unwrap()).unwrap();
     fs::write(area.peer_state_dir.join("history-navigation"), b"").unwrap();
     let config = area.temp_root.join("browser.json");
@@ -429,6 +451,7 @@ async fn hn_027_controlled_history_navigation() {
         "origin": area.origin, "workspaceDir": area.workspace_dir, "workDir": area.work_dir,
         "peerStateDir": area.peer_state_dir, "peerScript": scripts.join("controlled-acp-v2-peer.mjs"),
         "database": area.temp_root.join("node-data/node.sqlite3"), "evidenceOut": evidence,
+        "scenario": scenario,
     })).unwrap()).unwrap();
     guard.driver_child = Some(
         Command::new("node")
