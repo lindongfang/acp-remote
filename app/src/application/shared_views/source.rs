@@ -1481,6 +1481,9 @@ impl<S: Clone + Eq + Send + Sync + 'static, R: RetainedRaw> Worker<S, R> {
         *current = Arc::clone(&candidate.published);
         *pending = std::sync::Weak::new();
         old.replaced.send_replace(true);
+        // Keep both publication guards until the old subscribers are marked.
+        drop(pending);
+        drop(current);
         Ok(())
     }
     fn confirm_current_replay(
